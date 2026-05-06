@@ -15,6 +15,12 @@ The working course fork and setup/debug history are preserved separately in:
 
 This codebase is intentionally separate from that fork and focuses on a local-first JSON pipeline rather than the original AWS/LandingAI lab structure.
 
+The split is deliberate:
+
+- the fork captures the baseline course reproduction and AWS-side learning path
+- this repo moves toward a local-first implementation
+- it also makes the project JSON-first rather than markdown-first, with more direct control over chunking, retrieval, and evaluation
+
 ## Current Status
 
 This repo is currently at:
