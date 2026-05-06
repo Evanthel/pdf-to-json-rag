@@ -1,0 +1,52 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets / local config
+.env
+.env.*
+!.env.example
+
+# Model / runtime caches
+.cache/
+.huggingface/
+
+# Local data inputs and generated artifacts
+data/input/*
+!data/input/.gitkeep
+
+data/documents/*
+!data/documents/.gitkeep
+
+data/chunks/*
+!data/chunks/.gitkeep
+
+data/index/*
+!data/index/.gitkeep
+
+data/eval/mvp_eval_report.json
+
+# Logs and temporary files
+*.log
+tmp/
+temp/

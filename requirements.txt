@@ -1,0 +1,7 @@
+PyMuPDF
+pytesseract
+Pillow
+pydantic
+chromadb
+sentence-transformers
+numpy

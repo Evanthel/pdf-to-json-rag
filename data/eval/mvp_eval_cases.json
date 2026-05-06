@@ -1,0 +1,60 @@
+[
+  {
+    "case_id": "symptoms",
+    "query": "What are common cold symptoms?",
+    "relevant_chunk_ids": [
+      "common-cold-clinincal-evidence-chunk-0007",
+      "common-cold-clinincal-evidence-chunk-0010"
+    ],
+    "expected_keywords": [
+      "sneezing",
+      "runny nose",
+      "headache",
+      "sore throat",
+      "cough"
+    ],
+    "notes": "Symptoms and symptom course should come from definition/prognosis chunks."
+  },
+  {
+    "case_id": "duration",
+    "query": "How long do common cold symptoms last?",
+    "relevant_chunk_ids": [
+      "common-cold-clinincal-evidence-chunk-0010",
+      "common-cold-clinincal-evidence-chunk-0005"
+    ],
+    "expected_keywords": [
+      "few days",
+      "1 week",
+      "cough"
+    ],
+    "notes": "The answer should mention typical duration and lingering cough."
+  },
+  {
+    "case_id": "transmission",
+    "query": "How are common cold infections transmitted?",
+    "relevant_chunk_ids": [
+      "common-cold-clinincal-evidence-chunk-0009",
+      "common-cold-clinincal-evidence-chunk-0005"
+    ],
+    "expected_keywords": [
+      "hand-to-hand contact",
+      "droplet",
+      "nostrils",
+      "eyes"
+    ],
+    "notes": "The answer should capture hand contact as the main route."
+  },
+  {
+    "case_id": "definition",
+    "query": "What is the common cold?",
+    "relevant_chunk_ids": [
+      "common-cold-clinincal-evidence-chunk-0007"
+    ],
+    "expected_keywords": [
+      "upper respiratory tract",
+      "nasal",
+      "mucosa"
+    ],
+    "notes": "The answer should return the definition, not treatments."
+  }
+]
