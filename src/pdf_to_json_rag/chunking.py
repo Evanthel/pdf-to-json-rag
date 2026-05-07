@@ -10,6 +10,19 @@ from .schemas import ChunkRecord, DocumentRecord
 INLINE_SECTION_RE = re.compile(
     r"^(?P<label>[A-Z][A-Z/\-\s]{2,50})\s+(?P<body>.*[a-z].*)$"
 )
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+BOILERPLATE_PATTERNS = (
+    "© bmj publishing group ltd",
+    "all rights reserved",
+    "clinical evidence 2011",
+    "respiratory disorders (acute)",
+    "common cold search date",
+    "the information contained in this publication is intended for medical professionals",
+    "what are the effects of treatments for common cold",
+    "favours effect size results and statistical analysis outcome",
+    "no data from the following reference",
+)
+REFERENCE_LIKE_RE = re.compile(r"^\d+\.\s+[A-Z][^[]+\[PubMed\]", re.MULTILINE)
 
 
 def normalize_reading_order(blocks: list[ExtractedBlock]) -> list[ExtractedBlock]:
@@ -35,12 +48,110 @@ def build_document_record(
 
 
 def _clean_text(text: str) -> str:
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+    return re.sub(r"[ \t]+", " ", text).strip()
 
 
 def _normalize_for_match(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def _split_paragraphs(text: str) -> list[str]:
+    parts = re.split(r"\n\s*\n|\n(?=[A-Z0-9•-])", text)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _is_noise_paragraph(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    if not normalized:
+        return True
+    if any(pattern in normalized for pattern in BOILERPLATE_PATTERNS):
+        return True
+    if REFERENCE_LIKE_RE.search(text):
+        return True
+    if normalized in {"common cold", "respiratory disorders (acute)", "-", "benefits and harms"}:
+        return True
+    if normalized.startswith("question ") and "common cold" in normalized:
+        return True
+    if normalized.startswith("methods clinical evidence search and appraisal"):
+        return True
+    if normalized.startswith("grade evaluation of interventions for common cold"):
+        return True
+    if normalized.startswith("search date january"):
+        return True
+    if "clinical evidence search and appraisal" in normalized:
+        return True
+    if "to be covered in future updates" in normalized:
+        return True
+    if "covered elsewhere in clinical evidence" in normalized:
+        return True
+    if "likely to be beneficial" in normalized or "unlikely to be beneficial" in normalized:
+        return True
+    if "unknown effectiveness" in normalized:
+        return True
+    if text.count(". .") >= 3 and (
+        "antihistamines" in normalized
+        or "decongestants" in normalized
+        or "vitamin c" in normalized
+        or "steam inhalation" in normalized
+    ):
+        return True
+    if text.count(". .") >= 6:
+        return True
+    if normalized.count("[pubmed]") >= 2:
+        return True
+    if normalized.count("search date") >= 2:
+        return True
+    if normalized.count("95% ci") >= 2:
+        return True
+    return False
+
+
+def _sentence_aware_split(text: str, max_chars: int) -> list[str]:
+    sentences = [item.strip() for item in SENTENCE_SPLIT_RE.split(text) if item.strip()]
+    if not sentences or len(text) <= max_chars:
+        return [text]
+
+    chunks: list[str] = []
+    buffer: list[str] = []
+    buffer_chars = 0
+
+    for sentence in sentences:
+        sentence_len = len(sentence)
+        if buffer and buffer_chars + sentence_len > max_chars:
+            chunks.append(" ".join(buffer).strip())
+            buffer = [sentence]
+            buffer_chars = sentence_len
+            continue
+        buffer.append(sentence)
+        buffer_chars += sentence_len + 1
+
+    if buffer:
+        chunks.append(" ".join(buffer).strip())
+
+    return [chunk for chunk in chunks if chunk]
+
+
+def _normalize_block_segments(text: str, max_segment_chars: int = 650) -> list[str]:
+    lower_text = text.lower()
+    if "key points" in lower_text:
+        text = text[lower_text.index("key points") + len("key points") :]
+    paragraphs = _split_paragraphs(text)
+    cleaned: list[str] = []
+    for paragraph in paragraphs:
+        paragraph = _clean_text(paragraph)
+        if not paragraph or _is_noise_paragraph(paragraph):
+            continue
+        if len(paragraph) > max_segment_chars:
+            cleaned.extend(_sentence_aware_split(paragraph, max_segment_chars))
+        else:
+            cleaned.append(paragraph)
+    first_bullet_index = next(
+        (index for index, paragraph in enumerate(cleaned) if paragraph.lstrip().startswith("•")),
+        None,
+    )
+    if first_bullet_index is not None:
+        cleaned = cleaned[first_bullet_index:]
+    return cleaned
 
 
 def _looks_like_title_case(text: str) -> bool:
@@ -92,6 +203,15 @@ def _extract_inline_section_label(text: str) -> str | None:
     return label
 
 
+def _infer_extraction_method(blocks: list[ExtractedBlock]) -> tuple[str, bool]:
+    methods = {block.extraction_method for block in blocks}
+    if methods == {"ocr"}:
+        return "ocr", True
+    if "ocr" in methods:
+        return "mixed", True
+    return "native", False
+
+
 def _make_chunk_record(
     document: DocumentRecord,
     chunk_number: int,
@@ -101,6 +221,7 @@ def _make_chunk_record(
 ) -> ChunkRecord:
     text = "\n\n".join(block.text for block in blocks)
     inferred_title = _extract_inline_section_label(blocks[0].text)
+    extraction_method, ocr_used = _infer_extraction_method(blocks)
     return ChunkRecord(
         doc_id=document.doc_id,
         chunk_id=f"{document.doc_id}-chunk-{chunk_number:04d}",
@@ -114,8 +235,8 @@ def _make_chunk_record(
         chunk_type="text",
         reading_order_index=blocks[0].reading_order_index,
         language=document.detected_language,
-        extraction_method="native",
-        ocr_used=False,
+        extraction_method=extraction_method,
+        ocr_used=ocr_used,
         confidence=None,
     )
 
@@ -164,36 +285,42 @@ def chunk_document(
         buffer_chars = 0
 
     for block in ordered_blocks:
-        clean_text = _clean_text(block.text)
-        if not clean_text:
+        normalized_segments = _normalize_block_segments(block.text)
+        if not normalized_segments:
             continue
 
-        inline_section_title = _extract_inline_section_label(clean_text)
-        if inline_section_title:
-            flush_buffer()
-            current_section_title = inline_section_title
-            current_section_level = None
+        for segment in normalized_segments:
+            inline_section_title = _extract_inline_section_label(segment)
+            if inline_section_title:
+                flush_buffer()
+                current_section_title = inline_section_title
+                current_section_level = None
 
-        if _is_probable_header(clean_text, toc_entries):
-            flush_buffer()
-            current_section_title = clean_text
-            current_section_level = 1 if _normalize_for_match(clean_text) in toc_entries else None
-            continue
+            if _is_probable_header(segment, toc_entries):
+                flush_buffer()
+                current_section_title = segment
+                current_section_level = (
+                    1 if _normalize_for_match(segment) in toc_entries else None
+                )
+                continue
 
-        prospective_chars = buffer_chars + len(clean_text)
-        should_split = buffer and prospective_chars > target_chars and buffer_chars >= min_chunk_chars
-        if should_split:
-            flush_buffer()
-
-        buffer.append(
-            ExtractedBlock(
-                page_num=block.page_num,
-                text=clean_text,
-                bbox=block.bbox,
-                reading_order_index=block.reading_order_index,
+            prospective_chars = buffer_chars + len(segment)
+            should_split = (
+                buffer and prospective_chars > target_chars and buffer_chars >= min_chunk_chars
             )
-        )
-        buffer_chars += len(clean_text)
+            if should_split:
+                flush_buffer()
+
+            buffer.append(
+                ExtractedBlock(
+                    page_num=block.page_num,
+                    text=segment,
+                    bbox=block.bbox,
+                    reading_order_index=block.reading_order_index,
+                    extraction_method=block.extraction_method,
+                )
+            )
+            buffer_chars += len(segment)
 
     flush_buffer()
     return _link_adjacent_chunks(chunks)
@@ -214,6 +341,7 @@ def load_blocks_from_native_json(native_path: Path) -> list[ExtractedBlock]:
             text=block["text"],
             bbox=block.get("bbox"),
             reading_order_index=block["reading_order_index"],
+            extraction_method=block.get("extraction_method", "native"),
         )
         for block in data.get("blocks", [])
     ]
@@ -227,6 +355,8 @@ def save_chunk_records(
     """Write chunk JSON files to a per-document output folder."""
     doc_dir = output_dir / doc_id
     doc_dir.mkdir(parents=True, exist_ok=True)
+    for existing_chunk_path in doc_dir.glob("*.json"):
+        existing_chunk_path.unlink()
     saved_paths = []
     for chunk in chunks:
         output_path = doc_dir / f"{chunk.chunk_id}.json"

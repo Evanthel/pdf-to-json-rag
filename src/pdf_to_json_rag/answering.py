@@ -75,6 +75,18 @@ DEFINITION_HINTS = {
     "mucosa",
 }
 
+CAUSE_HINTS = {
+    "cause",
+    "causes",
+    "caused",
+    "virus",
+    "viruses",
+    "rhinovirus",
+    "coronavirus",
+    "syncytial",
+    "metapneumovirus",
+}
+
 TRANSMISSION_HINTS = {
     "transmission",
     "transmitted",
@@ -85,6 +97,15 @@ TRANSMISSION_HINTS = {
     "eyes",
     "virus",
     "viruses",
+}
+
+INCIDENCE_HINTS = {
+    "incidence",
+    "prevalence",
+    "year",
+    "children",
+    "adults",
+    "infections",
 }
 
 BIBLIOGRAPHIC_NOISE = {
@@ -143,8 +164,12 @@ def _detect_query_intent(query: str, query_terms: set[str]) -> str:
     query_lower = query.lower()
     if query_lower.startswith("what is") or "definition" in query_terms or "define" in query_terms:
         return "definition"
+    if "cause" in query_terms or "causes" in query_terms:
+        return "causes"
     if "transmitted" in query_terms or "transmission" in query_terms:
         return "transmission"
+    if "year" in query_terms or ("children" in query_terms and "adults" in query_terms):
+        return "incidence"
     if "symptom" in query_terms or "symptoms" in query_terms:
         return "symptoms"
     return "generic"
@@ -187,6 +212,20 @@ def _score_sentence(
             score -= 3.0
         if any(noise in sentence_lower for noise in BIBLIOGRAPHIC_NOISE):
             score -= 3.5
+    if query_intent == "causes":
+        score += len(sentence_terms & CAUSE_HINTS) * 1.0
+        if "mainly caused by viruses" in sentence_lower:
+            score += 4.0
+        if "rhinovirus" in sentence_lower or "coronavirus" in sentence_lower:
+            score += 2.5
+        if "AETIOLOGY" in section_upper or "RISK FACTORS" in section_upper:
+            score += 3.0
+        if "PROGNOSIS" in section_upper or "TREATMENTS" in section_upper:
+            score -= 3.0
+        if sentence_terms & TREATMENT_NOISE:
+            score -= 3.0
+        if any(noise in sentence_lower for noise in BIBLIOGRAPHIC_NOISE):
+            score -= 3.5
     if query_intent == "transmission":
         score += len(sentence_terms & TRANSMISSION_HINTS) * 1.0
         if "hand-to-hand contact" in sentence_lower:
@@ -199,6 +238,18 @@ def _score_sentence(
             score -= 2.0
         if sentence_terms & TREATMENT_NOISE:
             score -= 3.0
+        if any(noise in sentence_lower for noise in BIBLIOGRAPHIC_NOISE):
+            score -= 3.0
+    if query_intent == "incidence":
+        score += len(sentence_terms & INCIDENCE_HINTS) * 0.9
+        if "each year" in sentence_lower:
+            score += 2.5
+        if "children suffer" in sentence_lower or "adults" in sentence_lower:
+            score += 2.0
+        if "INCIDENCE" in section_upper or "PREVALENCE" in section_upper:
+            score += 3.0
+        if "adverse effects" in sentence_lower:
+            score -= 4.0
         if any(noise in sentence_lower for noise in BIBLIOGRAPHIC_NOISE):
             score -= 3.0
     if len(sentence) > 320:
@@ -243,6 +294,9 @@ def select_evidence_sentences(
                 continue
             if query_intent == "definition" and "defined as" not in normalized and chunk.section_title:
                 if chunk.section_title.upper().startswith("DEFINITION"):
+                    score += 1.0
+            if query_intent == "causes" and chunk.section_title:
+                if "AETIOLOGY" in chunk.section_title.upper():
                     score += 1.0
             if query_intent == "transmission" and "transmission" in normalized:
                 score += 1.0

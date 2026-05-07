@@ -102,10 +102,30 @@ The document-level JSON should include:
 7. Write a minimal grounded-answer function that answers only from retrieved chunks.
 8. Create a tiny evaluation set and measure retrieval quality on it.
 
+## 6.1. v1.1 Milestones
+
+The first post-MVP iteration should improve robustness without changing the project direction.
+
+1. Implement real OCR fallback for pages flagged by the native-text quality heuristic.
+2. Expand the local evaluation set beyond the initial four benchmark queries.
+3. Use the expanded benchmark to tighten retrieval and answer heuristics against observed failure modes.
+4. Improve section-aware chunking where noisy headings or boilerplate still leak into retrieval, including paragraph-aware cleanup and sentence-aware overflow splitting.
+5. Keep the pipeline local-first and inspectable before adding any heavier LLM synthesis layer.
+
+## 6.2. v1.2 Plan
+
+The next iteration should improve recall and structure quality without changing the overall local-first architecture.
+
+1. Split mixed summary blocks more cleanly, especially `Key points`-style chunks that currently mix transmission, incidence, and treatment signals.
+2. Make OCR fallback more structure-aware by recovering multiple OCR paragraphs or line groups instead of a single full-page text block.
+3. Add chunk-level noise labels or quality flags and use them directly in retrieval filtering and reranking.
+4. Improve recall for multi-evidence queries, especially `incidence`, by tuning neighbor expansion depth and intent-aware retrieval behavior.
+5. Expand evaluation beyond the current single-document benchmark with at least one second document and a few harder negative or low-evidence queries.
+
 
 ## 7. Explicitly Deferred
 
-The following are useful, but should not block MVP:
+The following are useful, but should not block MVP or any early version:
 
 - `pdfplumber` for difficult table extraction
 - cross-encoder reranking

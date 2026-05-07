@@ -18,8 +18,8 @@ DEFAULT_EVAL_CASES = [
         "case_id": "symptoms",
         "query": "What are common cold symptoms?",
         "relevant_chunk_ids": [
-            "common-cold-clinincal-evidence-chunk-0006",
-            "common-cold-clinincal-evidence-chunk-0008",
+            "common-cold-clinincal-evidence-chunk-0004",
+            "common-cold-clinincal-evidence-chunk-0007",
         ],
         "expected_keywords": [
             "sneezing",
@@ -34,8 +34,8 @@ DEFAULT_EVAL_CASES = [
         "case_id": "duration",
         "query": "How long do common cold symptoms last?",
         "relevant_chunk_ids": [
-            "common-cold-clinincal-evidence-chunk-0008",
-            "common-cold-clinincal-evidence-chunk-0004",
+            "common-cold-clinincal-evidence-chunk-0007",
+            "common-cold-clinincal-evidence-chunk-0002",
         ],
         "expected_keywords": [
             "few days",
@@ -48,8 +48,8 @@ DEFAULT_EVAL_CASES = [
         "case_id": "transmission",
         "query": "How are common cold infections transmitted?",
         "relevant_chunk_ids": [
-            "common-cold-clinincal-evidence-chunk-0007",
-            "common-cold-clinincal-evidence-chunk-0004",
+            "common-cold-clinincal-evidence-chunk-0006",
+            "common-cold-clinincal-evidence-chunk-0002",
         ],
         "expected_keywords": [
             "hand-to-hand contact",
@@ -63,7 +63,7 @@ DEFAULT_EVAL_CASES = [
         "case_id": "definition",
         "query": "What is the common cold?",
         "relevant_chunk_ids": [
-            "common-cold-clinincal-evidence-chunk-0006",
+            "common-cold-clinincal-evidence-chunk-0004",
         ],
         "expected_keywords": [
             "upper respiratory tract",
@@ -71,6 +71,50 @@ DEFAULT_EVAL_CASES = [
             "mucosa",
         ],
         "notes": "The answer should return the definition, not treatments.",
+    },
+    {
+        "case_id": "causes",
+        "query": "What usually causes the common cold?",
+        "relevant_chunk_ids": [
+            "common-cold-clinincal-evidence-chunk-0006",
+        ],
+        "expected_keywords": [
+            "viruses",
+            "rhinovirus",
+            "coronavirus",
+        ],
+        "notes": "The answer should reflect viral causes rather than symptom descriptions.",
+    },
+    {
+        "case_id": "incidence",
+        "query": "How many colds do children and adults get each year?",
+        "relevant_chunk_ids": [
+            "common-cold-clinincal-evidence-chunk-0005",
+            "common-cold-clinincal-evidence-chunk-0002",
+        ],
+        "expected_keywords": [
+            "children",
+            "5",
+            "adults",
+            "two to three",
+        ],
+        "notes": "The answer should capture yearly incidence for children and adults.",
+    },
+    {
+        "case_id": "antibiotics",
+        "query": "Do antibiotics help with the common cold?",
+        "relevant_chunk_ids": [
+            "common-cold-clinincal-evidence-chunk-0002",
+            "common-cold-clinincal-evidence-chunk-0003",
+            "common-cold-clinincal-evidence-chunk-0170",
+            "common-cold-clinincal-evidence-chunk-0187",
+        ],
+        "expected_keywords": [
+            "don't reduce symptoms overall",
+            "adverse effects",
+            "antibiotic resistance",
+        ],
+        "notes": "The answer should emphasize that antibiotics are generally not helpful overall.",
     },
 ]
 

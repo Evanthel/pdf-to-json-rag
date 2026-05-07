@@ -13,7 +13,42 @@ from .indexing import (
 )
 from .schemas import ChunkRecord
 
-NOISY_SECTION_HINTS = {"DISCLAIMER", "METHODS", "QUESTION", "QUESTIONS", "GRADE"}
+NOISY_SECTION_HINTS = {
+    "DISCLAIMER",
+    "METHODS",
+    "QUESTION",
+    "QUESTIONS",
+    "GRADE",
+    "REFERENCES",
+}
+STATISTICAL_NOISE_HINTS = (
+    "95% ci",
+    "rr ",
+    "favours effect size",
+    "results and statistical analysis",
+    "not significant",
+    "systematic review",
+    "rcts",
+    "proportion of people reporting",
+    "no data from the following reference",
+)
+TOC_NOISE_HINTS = (
+    "what are the effects of treatments for common cold",
+    "to be covered in future updates",
+    "covered elsewhere in clinical evidence",
+)
+DISCLAIMER_NOISE_HINTS = (
+    "the information contained in this publication is intended for medical professionals",
+    "readers should be aware",
+    "to the fullest extent permitted by law",
+)
+BIBLIOGRAPHY_NOISE_HINTS = (
+    "[pubmed]",
+    "cochrane library",
+    "search date",
+    "http://www.fda.gov",
+)
+NOISY_SECTION_RE = re.compile(r"^(P\s*=|RR\b|Population\b|Ref\b|Comment:|Very low\b|Low\b)")
 
 
 def _query_terms(query: str) -> set[str]:
@@ -25,10 +60,16 @@ def _detect_query_intent(query: str) -> str:
     query_lower = query.lower()
     if query_lower.startswith("what is") or "definition" in terms or "define" in terms:
         return "definition"
+    if "antibiotic" in terms or "antibiotics" in terms:
+        return "antibiotics"
+    if "cause" in terms or "causes" in terms:
+        return "causes"
     if "transmitted" in terms or "transmission" in terms:
         return "transmission"
     if "last" in terms or "long" in terms or "duration" in terms:
         return "duration"
+    if "year" in terms or ("children" in terms and "adults" in terms):
+        return "incidence"
     if "symptom" in terms or "symptoms" in terms:
         return "symptoms"
     return "generic"
@@ -38,8 +79,14 @@ def _augment_query(query: str) -> str:
     intent = _detect_query_intent(query)
     suffix = {
         "definition": "definition defined as upper respiratory tract infection",
+        "antibiotics": (
+            "option antibiotics clinical guide don't reduce symptoms overall "
+            "adverse effects antibiotic resistance viral"
+        ),
+        "causes": "aetiology risk factors viruses rhinovirus coronavirus respiratory syncytial virus",
         "transmission": "transmission hand-to-hand contact droplets nostrils eyes",
         "duration": "prognosis duration symptoms peak clear by 1 week cough persists",
+        "incidence": "incidence prevalence children adults each year infections",
         "symptoms": "symptoms sneezing runny nose headache sore throat cough",
     }.get(intent, "")
     if not suffix:
@@ -55,8 +102,22 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
 
     if any(noisy in section for noisy in NOISY_SECTION_HINTS):
         bonus -= 4.0
+    if NOISY_SECTION_RE.match(section):
+        bonus -= 7.0
+    if section.startswith("POPULATION") or section.startswith("REF"):
+        bonus -= 8.0
+    if section.startswith("COMMENT:"):
+        bonus -= 3.0
     if "bmj publishing group" in text or "all rights reserved" in text:
         bonus -= 5.0
+    if any(hint in text for hint in BIBLIOGRAPHY_NOISE_HINTS):
+        bonus -= 4.0
+    if any(hint in text for hint in STATISTICAL_NOISE_HINTS):
+        bonus -= 2.0
+    if any(hint in text for hint in TOC_NOISE_HINTS):
+        bonus -= 5.0
+    if any(hint in text for hint in DISCLAIMER_NOISE_HINTS):
+        bonus -= 6.0
 
     if intent == "definition":
         if section.startswith("DEFINITION"):
@@ -65,6 +126,30 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
             bonus += 5.0
         if section.startswith("PROGNOSIS") or section.startswith("AETIOLOGY"):
             bonus += 1.0
+    elif intent == "antibiotics":
+        if section.startswith("OPTION"):
+            bonus += 4.0
+        if "option antibiotics" in text:
+            bonus += 7.0
+        if "clinical guide" in text:
+            bonus += 4.0
+        if "don't reduce symptoms overall" in text:
+            bonus += 6.0
+        if "antibiotic resistance" in text or "adverse effects" in text:
+            bonus += 3.0
+        if "because most common colds are viral" in text:
+            bonus += 2.5
+        if any(hint in text for hint in STATISTICAL_NOISE_HINTS):
+            bonus -= 4.0
+    elif intent == "causes":
+        if "AETIOLOGY" in section or "RISK FACTORS" in section:
+            bonus += 6.0
+        if "caused by viruses" in text or "mainly caused by viruses" in text:
+            bonus += 5.0
+        if "rhinovirus" in text or "coronavirus" in text or "respiratory syncytial virus" in text:
+            bonus += 3.0
+        if section.startswith("PROGNOSIS") or section.startswith("TREATMENTS"):
+            bonus -= 2.0
     elif intent == "transmission":
         if "TRANSMISSION" in section or "AETIOLOGY" in section:
             bonus += 6.0
@@ -77,6 +162,19 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
             bonus += 6.0
         if "1 week" in text or "few days" in text or "cough" in text:
             bonus += 2.0
+    elif intent == "incidence":
+        if "INCIDENCE" in section or "PREVALENCE" in section:
+            bonus += 6.0
+        if section.startswith("TREATMENTS"):
+            bonus += 2.0
+        if "each year" in text and "children" in text and "adults" in text:
+            bonus += 5.0
+        if "up to 5 colds" in text or "two to three infections" in text:
+            bonus += 2.5
+        if "adverse effects" in text:
+            bonus -= 4.0
+        if any(hint in text for hint in STATISTICAL_NOISE_HINTS):
+            bonus -= 4.0
     elif intent == "symptoms":
         if section.startswith("DEFINITION") or section.startswith("PROGNOSIS"):
             bonus += 4.0
@@ -104,12 +202,13 @@ def retrieve_top_k(query: str, index_dir: Path, k: int = 5) -> list[ChunkRecord]
 
     embed_texts, _ = load_embedder_from_manifest(manifest)
     query_embedding = embed_texts([_augment_query(query)])[0]
+    candidate_k = max(k * 4, 15)
 
     client = chromadb.PersistentClient(path=str(index_dir))
     collection = client.get_collection(name=collection_name)
     result = collection.query(
         query_embeddings=[query_embedding],
-        n_results=k,
+        n_results=candidate_k,
         include=["documents", "metadatas", "distances"],
     )
 

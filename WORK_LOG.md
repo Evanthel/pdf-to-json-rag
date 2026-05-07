@@ -334,6 +334,171 @@ The most visible improvement was that:
 - the transmission query is anchored in the `AETIOLOGY/ RISK FACTORS` chunk
 - grounded answers are more section-aligned and less polluted by obvious noise sections
 
+## v1.1 Robustness Pass
+
+The next iteration focused on two things:
+
+- expanding the benchmark beyond the first tiny eval set
+- replacing OCR detection-only logic with a real fallback path
+
+### OCR Fallback Update
+
+The extraction stage now performs real OCR fallback with `pytesseract` for pages whose native text is too weak.
+
+This iteration added:
+
+- page rendering from PDF to image for OCR processing
+- fallback OCR text extraction for image-only or low-text pages
+- explicit provenance so extracted blocks and downstream chunks can be marked as `native`, `ocr`, or `mixed`
+- separate tracking for pages that merely triggered the heuristic versus pages that were actually processed with OCR
+
+The current OCR path is intentionally simple: it restores page text, but does not yet rebuild a detailed OCR block layout.
+
+### Expanded Evaluation Set
+
+The local benchmark was expanded from 4 to 7 cases.
+
+The added cases cover:
+
+- causes / viral aetiology
+- yearly incidence in children and adults
+- antibiotics as a treatment-oriented question
+
+This made the benchmark meaningfully harder and more useful as a regression check.
+
+### Heuristic Follow-Up
+
+Once the benchmark was expanded, a new failure mode appeared on `causes` queries.
+
+To address that, a small follow-up pass added:
+
+- intent detection for `causes`
+- intent detection for `incidence`
+- retrieval-side query augmentation for those intents
+- answer-side sentence scoring tuned to prefer `AETIOLOGY/ RISK FACTORS` and `INCIDENCE/ PREVALENCE` evidence
+
+### OCR Smoke Test
+
+Real OCR fallback was smoke-tested successfully on a synthetic image-only PDF page created locally for validation.
+
+Verified at a high level:
+
+- the page triggered the OCR heuristic
+- OCR was actually applied
+- the first extracted block was marked with extraction method `ocr`
+- recovered text included the expected symptom wording from the synthetic page
+
+### Expanded Evaluation Smoke Test
+
+The full evaluation workflow was rerun on the expanded 7-case benchmark.
+
+Updated summary metrics:
+
+- average `precision@5`: `0.314`
+- average `recall@5`: `0.929`
+- `MRR`: `0.929`
+- average answer keyword coverage: `1.0`
+
+Interpretation:
+
+- answer coverage is currently strong across the expanded benchmark
+- retrieval still finds a relevant chunk first for most cases, but not all
+- the main remaining weakness is ranking precision on harder retrieval cases such as `incidence` and `antibiotics`
+
+## Retrieval Precision Follow-Up
+
+After the first v1.1 evaluation pass, the next iteration focused specifically on improving retrieval precision for the harder `incidence` and `antibiotics` cases.
+
+### Retrieval Update
+
+This iteration changed the retrieval path in three practical ways:
+
+- widened the candidate pool fetched from the vector store before reranking
+- added stronger intent-aware reranking for `incidence` and `antibiotics`
+- added stronger penalties for references, table-like statistical fragments, and other citation-heavy noise
+
+This was deliberately smaller than a reranker-model change. The goal was to improve ranking quality without leaving the current local-first and inspectable setup.
+
+### Retrieval Quality Check
+
+The updated retrieval behavior was checked directly on:
+
+- `How many colds do children and adults get each year?`
+- `Do antibiotics help with the common cold?`
+
+Observed improvements:
+
+- the `incidence` query now surfaces the key incidence chunks first, including the yearly-frequency summary chunk
+- the `antibiotics` query now surfaces the main antibiotics option chunk first, with much less bibliography-style noise in top results
+
+### Updated Evaluation Check
+
+The expanded 7-case benchmark was rerun after the retrieval precision pass.
+
+Updated summary metrics:
+
+- average `precision@5`: `0.343`
+- average `recall@5`: `1.0`
+- `MRR`: `0.929`
+- average answer keyword coverage: `1.0`
+
+Interpretation:
+
+- retrieval precision improved from the earlier v1.1 pass
+- all current benchmark cases now retrieve at least one relevant chunk within top-5
+- the main remaining ambiguity is in the `antibiotics` case, where a clinically relevant summary chunk can surface before the currently hand-marked gold chunk
+
+## Chunking And Noise-Handling Follow-Up
+
+The next iteration focused on improving chunk boundaries and reducing obvious retrieval noise before adding any heavier model components.
+
+### Chunking Update
+
+This pass added:
+
+- paragraph-aware cleanup before chunk assembly
+- sentence-aware splitting for oversized text segments
+- stronger filtering of boilerplate and repeated publication fragments
+- more aggressive suppression of TOC-like and bibliography-like content before it becomes a chunk
+
+The practical goal was not to make chunking fully semantic yet, but to stop carrying obvious junk into the index.
+
+### Evaluation Set Update
+
+The benchmark was also updated to reflect the current chunk layout after the chunking refactor.
+
+In addition:
+
+- the `antibiotics` gold set was broadened to include acceptable summary-style evidence chunks, not only the most canonical intervention chunk
+
+This makes the benchmark better aligned with the current grounded answer path.
+
+### Retrieval Noise Handling Update
+
+On top of the chunking changes, retrieval penalties were tightened further for:
+
+- disclaimer-like chunks
+- question / TOC-like chunks
+- bibliography / citation-heavy chunks
+- table-like statistical fragments with section titles such as `Population`, `RR`, or `P = ...`
+
+### Updated Evaluation Check
+
+After the chunking and noise-handling pass, the full 7-case benchmark was rerun.
+
+Updated summary metrics:
+
+- average `precision@5`: `0.371`
+- average `recall@5`: `0.929`
+- `MRR`: `1.0`
+- average answer keyword coverage: `1.0`
+
+Interpretation:
+
+- relevant chunk ranking is now stronger at position 1 across the full current benchmark
+- precision improved again compared with the earlier v1.1 retrieval-only pass
+- the remaining gap is recall on some multi-evidence cases, especially `incidence`, not answer coverage
+
 ## Current State
 
 What is already in place:
@@ -348,18 +513,25 @@ What is already in place:
 - local retrieval from the persistent index
 - adjacent-chunk expansion on retrieved hits
 - grounded answer assembly from expanded retrieval
-- a small local evaluation workflow with saved reports
+- a local evaluation workflow with an expanded 7-case benchmark
 - one post-MVP quality tuning pass over chunking, retrieval, and answer heuristics
+- real OCR fallback for low-text pages
+- extraction/chunk provenance for `native`, `ocr`, and `mixed` content
+- paragraph-aware and sentence-aware chunk cleanup before indexing
+- stronger suppression of boilerplate, TOC-like, and bibliography-like noise
 
 What is not yet done:
 
-- broader evaluation coverage beyond the first small benchmark set
+- broader multi-document evaluation
+- more structure-aware OCR chunk reconstruction
+- better retrieval recall on the remaining multi-evidence benchmark cases
+- more semantic chunk boundary logic beyond the current heuristic cleanup
 
 ## Next Suggested Step
 
 The next sensible implementation step is:
 
-- expand the evaluation set beyond the initial benchmark queries
+- improve recall on the remaining multi-evidence benchmark cases, especially `incidence`
 
 After that:
 

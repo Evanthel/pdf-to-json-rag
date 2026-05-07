@@ -4,8 +4,12 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import shutil
+import tempfile
 
 import fitz
+from PIL import Image
+import pytesseract
 
 from .schemas import DocumentRecord
 
@@ -16,6 +20,7 @@ class ExtractedBlock:
     text: str
     bbox: list[float] | None
     reading_order_index: int
+    extraction_method: str = "native"
 
 
 @dataclass
@@ -25,6 +30,7 @@ class ExtractedPage:
     char_count: int
     block_count: int
     needs_ocr: bool
+    ocr_used: bool
 
 
 @dataclass
@@ -114,10 +120,11 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
             # Keep a deterministic order even before dedicated multi-column logic lands.
             page_blocks.sort(key=lambda item: (item[1], item[0]))
 
+            candidate_blocks: list[ExtractedBlock] = []
             page_text_parts: list[str] = []
             for x0, y0, x1, y1, clean_text in page_blocks:
                 page_text_parts.append(clean_text)
-                blocks.append(
+                candidate_blocks.append(
                     ExtractedBlock(
                         page_num=page_num,
                         text=clean_text,
@@ -129,19 +136,42 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
                             page_width,
                             page_height,
                         ),
+                        reading_order_index=0,
+                        extraction_method="native",
+                    )
+                )
+
+            page_text = "\n\n".join(page_text_parts)
+            needs_ocr = page_needs_ocr(page_text)
+            final_page_blocks = candidate_blocks
+            ocr_used = False
+            if needs_ocr:
+                ocr_blocks = extract_page_with_ocr(pdf_path=pdf_path, page_num=page_num)
+                if ocr_blocks:
+                    final_page_blocks = ocr_blocks
+                    page_text = "\n\n".join(block.text for block in ocr_blocks)
+                    ocr_used = True
+
+            for final_block in final_page_blocks:
+                blocks.append(
+                    ExtractedBlock(
+                        page_num=final_block.page_num,
+                        text=final_block.text,
+                        bbox=final_block.bbox,
                         reading_order_index=reading_order_index,
+                        extraction_method=final_block.extraction_method,
                     )
                 )
                 reading_order_index += 1
 
-            page_text = "\n\n".join(page_text_parts)
             pages.append(
                 ExtractedPage(
                     page_num=page_num,
                     text=page_text,
                     char_count=len(page_text),
-                    block_count=len(page_blocks),
-                    needs_ocr=page_needs_ocr(page_text),
+                    block_count=len(final_page_blocks),
+                    needs_ocr=needs_ocr,
+                    ocr_used=ocr_used,
                 )
             )
 
@@ -164,6 +194,7 @@ def build_document_record_from_native_extraction(
 ) -> DocumentRecord:
     """Create the initial document-level JSON record from native extraction."""
     pages_requiring_ocr = sum(1 for page in extraction.pages if page.needs_ocr)
+    pages_processed_with_ocr = sum(1 for page in extraction.pages if page.ocr_used)
     return DocumentRecord(
         doc_id=extraction.doc_id,
         source_pdf=extraction.source_pdf,
@@ -173,7 +204,8 @@ def build_document_record_from_native_extraction(
         extraction_summary={
             "native_blocks": len(extraction.blocks),
             "pages_requiring_ocr": pages_requiring_ocr,
-            "ocr_used": pages_requiring_ocr > 0,
+            "pages_processed_with_ocr": pages_processed_with_ocr,
+            "ocr_used": pages_processed_with_ocr > 0,
         },
     )
 
@@ -194,6 +226,7 @@ def native_extraction_to_dict(extraction: NativePdfExtraction) -> dict:
                 "char_count": page.char_count,
                 "block_count": page.block_count,
                 "needs_ocr": page.needs_ocr,
+                "ocr_used": page.ocr_used,
             }
             for page in extraction.pages
         ],
@@ -203,6 +236,7 @@ def native_extraction_to_dict(extraction: NativePdfExtraction) -> dict:
                 "text": block.text,
                 "bbox": block.bbox,
                 "reading_order_index": block.reading_order_index,
+                "extraction_method": block.extraction_method,
             }
             for block in extraction.blocks
         ],
@@ -256,4 +290,38 @@ def page_needs_ocr(page_text: str, min_chars: int = 40) -> bool:
 
 def extract_page_with_ocr(pdf_path: Path, page_num: int) -> list[ExtractedBlock]:
     """OCR fallback for pages with poor native text extraction."""
-    raise NotImplementedError("OCR fallback extraction is not implemented yet.")
+    tesseract_path = shutil.which("tesseract")
+    if not tesseract_path:
+        return []
+
+    pytesseract.pytesseract.tesseract_cmd = tesseract_path
+
+    pdf_path = pdf_path.expanduser().resolve()
+    with fitz.open(pdf_path) as pdf_doc:
+        page = pdf_doc[page_num]
+        page_width = float(page.rect.width) or 1.0
+        page_height = float(page.rect.height) or 1.0
+        matrix = fitz.Matrix(2, 2)
+        pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmpdir_path = Path(tmpdir)
+            image_path = tmpdir_path / f"page-{page_num + 1}.png"
+            pixmap.save(str(image_path))
+            try:
+                image = Image.open(image_path)
+                ocr_text = pytesseract.image_to_string(image)
+            except Exception:
+                return []
+            ocr_text = re.sub(r"\s+", " ", ocr_text).strip()
+            if not ocr_text:
+                return []
+            return [
+                ExtractedBlock(
+                    page_num=page_num,
+                    text=ocr_text,
+                    bbox=_normalize_bbox(0.0, 0.0, page_width, page_height, page_width, page_height),
+                    reading_order_index=0,
+                    extraction_method="ocr",
+                )
+            ]
