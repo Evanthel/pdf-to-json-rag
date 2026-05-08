@@ -1,6 +1,6 @@
 # PDF-to-JSON RAG
 
-Local-first PDF-to-JSON RAG pipeline for turning PDFs into structured JSON, indexing the resulting chunks locally, and answering questions with explicit grounding.
+Local-first pipeline for extracting structured JSON from PDFs, indexing the resulting chunks locally, and answering questions with grounded evidence.
 
 ## Lineage
 
@@ -27,23 +27,25 @@ This repo is currently at:
 
 - completed end-to-end MVP
 - completed `v1.1` robustness and quality pass
-- current focus has shifted from missing features to retrieval recall and chunk quality
+- completed `v1.2` structure, evaluation-expansion, and multi-document retrieval milestones
+- completed a first post-`v1.2` treatment-specific retrieval / answer-quality pass for the vitamin-C document cases
+- current focus has shifted from pipeline structure to generalization on harder documents and broader evaluation coverage
 - still intentionally local-first and heuristic-heavy
 
-The pipeline already works on a real sample medical PDF and includes an expanded local evaluation workflow.
+The pipeline now works across multiple local sample PDFs and includes a mixed benchmark with grounded multi-document cases plus negative abstention checks.
 
 ## What Works
 
 - Native PDF extraction with `PyMuPDF`
-- OCR fallback for pages with weak or missing native text
+- OCR fallback for pages with weak or missing native text, with paragraph-like OCR block recovery instead of a single full-page text blob
 - OCR provenance carried through extraction and chunk metadata
 - Document-level JSON output in `data/documents/`
-- Chunk generation with reading-order preservation, section detection, paragraph-aware cleanup, and sentence-aware overflow splitting
+- Chunk generation with reading-order preservation, section detection, paragraph-aware cleanup, sentence-aware overflow splitting, cleaner `Key points`-style summary splitting, and chunk-level noise labels / quality scores
 - Local vector indexing with `ChromaDB`
-- Retrieval from the local index with intent-aware reranking and noise suppression
+- Retrieval from the local index with intent-aware reranking, noise-label-aware filtering, heuristic noise suppression, intent-aware neighbor expansion, and treatment-specific vitamin-C retrieval behavior
 - Adjacent-chunk expansion for context reconstruction
-- Grounded answer assembly with explicit evidence citations
-- 7-case benchmark-style evaluation workflow with saved JSON reports
+- Grounded answer assembly with explicit evidence citations and targeted answer-selection heuristics for vitamin-C prevention, cold-stress, and duration queries
+- multi-document evaluation workflow with grounded cases and negative abstention checks
 
 ## Workflow
 
@@ -53,7 +55,7 @@ The pipeline already works on a real sample medical PDF and includes an expanded
 4. Retrieve top-k chunks for a query
 5. Expand with adjacent chunks
 6. Assemble a grounded answer from the expanded context
-7. Evaluate retrieval and answer quality on a 7-case hand-built benchmark
+7. Evaluate retrieval and answer quality on a hand-built multi-document benchmark with negative queries
 
 ## How to Run
 
@@ -71,6 +73,12 @@ To inspect retrieval directly:
 
 ```bash
 PYTHONPATH=src python -m pdf_to_json_rag.cli retrieve --query "How are common cold infections transmitted?" --k 5
+```
+
+To build one local index across multiple extracted documents:
+
+```bash
+PYTHONPATH=src python -m pdf_to_json_rag.cli build-index --doc-id doc-a,doc-b
 ```
 
 To run the local benchmark:
@@ -96,22 +104,25 @@ PYTHONPATH=src python -m pdf_to_json_rag.cli evaluate-mvp --k 5
 
 Current local benchmark snapshot:
 
-- `precision@5`: `0.371`
-- `recall@5`: `0.929`
+- `precision@5`: `0.400`
+- `recall@5`: `1.0`
 - `MRR`: `1.0`
-- average answer keyword coverage: `1.0`
+- average answer keyword coverage: `0.926`
+- negative case success rate: `1.0`
 
-This reflects the current 7-case benchmark after a chunking/noise-handling pass. The answer layer covers the expected keywords for all benchmark cases, and retrieval now ranks a relevant chunk first for every case in the current set.
+This reflects the current 11-case benchmark after adding a second document, two negative abstention checks, and a treatment-specific tuning pass for the vitamin-C cases. The benchmark now measures whether the pipeline can separate narrower treatment evidence from the broader common-cold review and decline unsupported questions instead of fabricating a grounded answer.
 
 ## Limitations
 
-- OCR fallback is currently page-level rather than layout-aware, so OCR pages lose finer block structure
+- OCR fallback is more structured than before, but still heuristic and not fully layout-aware
+- OCR grouping currently rebuilds coarse paragraph-like blocks rather than true document layout regions
 - Chunking is still heuristic rather than fully semantic
 - Section detection is improved, but still rule-based and fragile on other document layouts
-- Retrieval quality still depends on lightweight reranking heuristics
-- Retrieval recall is still weaker on some multi-evidence cases, especially `incidence`
+- Retrieval quality still depends on lightweight heuristics, including rule-based chunk quality labeling
+- Multi-evidence answer assembly is improved, but some queries can still pull in secondary epidemiology, prognosis, or treatment-summary details that are relevant-but-not-ideal
+- Treatment-specific retrieval and answer behavior now works better for the current vitamin-C document, but the logic is still partly query-family-specific and not yet validated on a broader treatment corpus
 - Grounded answers are extractive, not LLM-synthesized
-- The evaluation set is still small and currently centered on one sample document
+- The evaluation set is still small and currently covers only two sample documents
 - Table extraction and harder layout handling are still deferred
 - Multi-document and multilingual robustness are not validated yet
 
@@ -133,10 +144,9 @@ Those reference notebooks were not kept as part of the final repo structure. The
 
 ## Near-Term Next Steps
 
-- make OCR fallback more structure-aware than a single full-page text block
-- split mixed summary chunks more cleanly, especially `Key points`-style evidence
-- improve retrieval recall on the remaining multi-evidence cases, especially `incidence`
-- decide whether to keep the extractive answer path or replace it with LLM synthesis over grounded context
+- add a harder third benchmark document, ideally a noisier scanned PDF or another treatment-heavy review
+- test whether chunk quality labels should also gate neighbor expansion, not just top-k reranking
+- generalize the current vitamin-C-specific treatment heuristics into more document-agnostic evidence categories
 
 ## Version Log
 
@@ -183,3 +193,27 @@ By the end of the day, the benchmark had moved to:
 - `avg_keyword_coverage = 1.0`
 
 At this point the main remaining weakness is retrieval recall on some multi-evidence cases, especially `incidence`, rather than missing core pipeline pieces.
+
+### 2026-05-08
+
+`v1.2` was completed and then followed by a first treatment-specific quality pass on the expanded multi-document benchmark.
+
+This day included:
+
+- cleaner splitting of `Key points`-style summary blocks so transmission, incidence, antibiotics, and symptom bullets stop collapsing into the same chunk
+- upgrading OCR fallback from a single page-level text blob to coarse paragraph-like OCR blocks
+- adding chunk-level noise labels and quality scores
+- wiring those labels into retrieval filtering and reranking
+- adding intent-aware candidate-pool sizing and neighbor expansion for multi-evidence queries
+- expanding evaluation to a second document and adding negative abstention checks
+- tuning retrieval and answer selection for vitamin-C prevention, cold-stress, and duration queries
+
+By the end of the pass, the benchmark had moved to:
+
+- `precision@5 = 0.400`
+- `recall@5 = 1.0`
+- `MRR = 1.0`
+- `avg_keyword_coverage = 0.926`
+- `negative_success_rate = 1.0`
+
+At this point the main remaining work is not the basic local pipeline anymore, but broader robustness testing on additional treatment-heavy or noisier documents.

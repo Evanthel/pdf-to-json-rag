@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+from collections import defaultdict
 
 import fitz
 from PIL import Image
@@ -288,6 +289,165 @@ def page_needs_ocr(page_text: str, min_chars: int = 40) -> bool:
     return len(page_text.strip()) < min_chars
 
 
+def _normalize_pixel_bbox(
+    left: int,
+    top: int,
+    width: int,
+    height: int,
+    image_width: int,
+    image_height: int,
+) -> list[float]:
+    return _normalize_bbox(
+        float(left),
+        float(top),
+        float(left + width),
+        float(top + height),
+        float(image_width),
+        float(image_height),
+    )
+
+
+def _build_ocr_blocks_from_image(image: Image.Image, page_num: int) -> list[ExtractedBlock]:
+    try:
+        ocr_data = pytesseract.image_to_data(
+            image,
+            output_type=pytesseract.Output.DICT,
+        )
+    except Exception:
+        return []
+
+    grouped_words: dict[tuple[int, int], list[dict]] = defaultdict(list)
+    item_count = len(ocr_data.get("text", []))
+
+    for index in range(item_count):
+        raw_text = (ocr_data["text"][index] or "").strip()
+        if not raw_text:
+            continue
+
+        confidence_raw = ocr_data.get("conf", ["-1"] * item_count)[index]
+        try:
+            confidence = float(confidence_raw)
+        except (TypeError, ValueError):
+            confidence = -1.0
+        if confidence < 0:
+            continue
+
+        block_num = int(ocr_data.get("block_num", [0] * item_count)[index])
+        par_num = int(ocr_data.get("par_num", [0] * item_count)[index])
+        line_num = int(ocr_data.get("line_num", [0] * item_count)[index])
+        group_key = (block_num, par_num)
+
+        grouped_words[group_key].append(
+            {
+                "text": raw_text,
+                "left": int(ocr_data["left"][index]),
+                "top": int(ocr_data["top"][index]),
+                "width": int(ocr_data["width"][index]),
+                "height": int(ocr_data["height"][index]),
+                "line_num": line_num,
+            }
+        )
+
+    if not grouped_words:
+        return []
+
+    blocks: list[ExtractedBlock] = []
+    image_width, image_height = image.size
+    page_lines: list[dict] = []
+
+    for words in grouped_words.values():
+        lines: dict[int, list[dict]] = defaultdict(list)
+        for word in words:
+            lines[word["line_num"]].append(word)
+
+        ordered_lines = []
+        for line_num in sorted(lines):
+            line_words = sorted(lines[line_num], key=lambda item: (item["left"], item["top"]))
+            line_text = " ".join(word["text"] for word in line_words).strip()
+            if not line_text:
+                continue
+            line_left = min(word["left"] for word in line_words)
+            line_top = min(word["top"] for word in line_words)
+            line_right = max(word["left"] + word["width"] for word in line_words)
+            line_bottom = max(word["top"] + word["height"] for word in line_words)
+            ordered_lines.append(
+                {
+                    "line_num": line_num,
+                    "words": line_words,
+                    "text": line_text,
+                    "left": line_left,
+                    "top": line_top,
+                    "right": line_right,
+                    "bottom": line_bottom,
+                    "height": max(1, line_bottom - line_top),
+                }
+            )
+
+        if not ordered_lines:
+            continue
+
+        page_lines.extend(ordered_lines)
+
+    if not page_lines:
+        return []
+
+    page_lines.sort(key=lambda line: (line["top"], line["left"]))
+
+    paragraph_groups: list[list[dict]] = []
+    current_group: list[dict] = []
+    prev_line: dict | None = None
+
+    for line in page_lines:
+        if not current_group:
+            current_group = [line]
+            prev_line = line
+            continue
+
+        gap = line["top"] - prev_line["bottom"]
+        gap_threshold = max(max(prev_line["height"], line["height"]) * 4.5, 40)
+        left_delta = abs(line["left"] - prev_line["left"])
+        same_column = left_delta <= max(prev_line["height"], line["height"]) * 6
+
+        if gap > gap_threshold or not same_column:
+            paragraph_groups.append(current_group)
+            current_group = [line]
+        else:
+            current_group.append(line)
+        prev_line = line
+
+    if current_group:
+        paragraph_groups.append(current_group)
+
+    for paragraph in paragraph_groups:
+        block_text = "\n".join(line["text"] for line in paragraph).strip()
+        if not block_text:
+            continue
+
+        left = min(line["left"] for line in paragraph)
+        top = min(line["top"] for line in paragraph)
+        right = max(line["right"] for line in paragraph)
+        bottom = max(line["bottom"] for line in paragraph)
+
+        blocks.append(
+            ExtractedBlock(
+                page_num=page_num,
+                text=block_text,
+                bbox=_normalize_pixel_bbox(
+                    left=left,
+                    top=top,
+                    width=right - left,
+                    height=bottom - top,
+                    image_width=image_width,
+                    image_height=image_height,
+                ),
+                reading_order_index=0,
+                extraction_method="ocr",
+            )
+        )
+
+    return sorted(blocks, key=lambda block: (block.bbox[1], block.bbox[0]) if block.bbox else (0, 0))
+
+
 def extract_page_with_ocr(pdf_path: Path, page_num: int) -> list[ExtractedBlock]:
     """OCR fallback for pages with poor native text extraction."""
     tesseract_path = shutil.which("tesseract")
@@ -299,8 +459,6 @@ def extract_page_with_ocr(pdf_path: Path, page_num: int) -> list[ExtractedBlock]
     pdf_path = pdf_path.expanduser().resolve()
     with fitz.open(pdf_path) as pdf_doc:
         page = pdf_doc[page_num]
-        page_width = float(page.rect.width) or 1.0
-        page_height = float(page.rect.height) or 1.0
         matrix = fitz.Matrix(2, 2)
         pixmap = page.get_pixmap(matrix=matrix, alpha=False)
 
@@ -310,17 +468,34 @@ def extract_page_with_ocr(pdf_path: Path, page_num: int) -> list[ExtractedBlock]
             pixmap.save(str(image_path))
             try:
                 image = Image.open(image_path)
+                ocr_blocks = _build_ocr_blocks_from_image(image=image, page_num=page_num)
+            except Exception:
+                return []
+            if ocr_blocks:
+                return ocr_blocks
+
+            try:
                 ocr_text = pytesseract.image_to_string(image)
             except Exception:
                 return []
+
             ocr_text = re.sub(r"\s+", " ", ocr_text).strip()
             if not ocr_text:
                 return []
+
+            image_width, image_height = image.size
             return [
                 ExtractedBlock(
                     page_num=page_num,
                     text=ocr_text,
-                    bbox=_normalize_bbox(0.0, 0.0, page_width, page_height, page_width, page_height),
+                    bbox=_normalize_bbox(
+                        0.0,
+                        0.0,
+                        float(image_width),
+                        float(image_height),
+                        float(image_width),
+                        float(image_height),
+                    ),
                     reading_order_index=0,
                     extraction_method="ocr",
                 )

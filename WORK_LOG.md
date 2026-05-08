@@ -518,20 +518,324 @@ What is already in place:
 - real OCR fallback for low-text pages
 - extraction/chunk provenance for `native`, `ocr`, and `mixed` content
 - paragraph-aware and sentence-aware chunk cleanup before indexing
-- stronger suppression of boilerplate, TOC-like, and bibliography-like noise
+
+## Early v1.2 Chunk-Boundary Pass
+
+The next iteration moved from general robustness into cleaner structure handling for mixed summary evidence.
+
+This pass focused on the first `v1.2` task:
+
+- splitting `Key points`-style summary material into cleaner single-topic chunks
+- reducing the amount of TOC-like summary debris that could still leak into early treatment chunks
+- re-aligning the local benchmark with the new chunk boundaries after the split
+
+### Chunking Update
+
+The summary cleanup pass added:
+
+- a dedicated `Key points` summary mode in chunking
+- bullet-aware boundaries so adjacent bullets no longer collapse into one mixed summary chunk
+- better suppression of dotted TOC-leader fragments
+- filtering of short TOC-like headings and standalone page-number fragments before chunk assembly
+
+The practical effect is that early-page summary evidence is now separated more cleanly across:
+
+- transmission / incidence
+- decongestants
+- antibiotics
+- vitamin C / duration-related treatment notes
+- antihistamines
+
+instead of mixing several of those signals into the same chunk.
+
+### Benchmark Realignment
+
+Because the summary split changed the early chunk boundaries, the 7-case local benchmark was also updated to match the current chunk IDs.
+
+This was a structural remap, not a benchmark expansion. The goal was to keep regression checks meaningful after the re-chunking pass.
+
+### Updated Evaluation Check
+
+After rebuilding the chunks and local index, the full 7-case benchmark was rerun.
+
+Updated summary metrics:
+
+- average `precision@5`: `0.400`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `1.0`
+
+Interpretation:
+
+- the current benchmark now reflects the post-split chunk layout correctly
+- top-1 retrieval remains strong across the current eval set
+- the `Key points` cleanup improved structural separation without hurting answer coverage
+- the next meaningful gains will likely come from structure-aware OCR, chunk-level noise labels, and better multi-evidence recall rather than another broad heuristic pass
+
+## Early v1.2 OCR Structure Pass
+
+The next iteration focused on the second `v1.2` task:
+
+- making OCR fallback more structure-aware than a single full-page text block
+
+### OCR Update
+
+The OCR fallback path in extraction now:
+
+- uses `pytesseract.image_to_data(...)` rather than only `image_to_string(...)`
+- rebuilds OCR output into multiple coarse blocks with per-block bounding boxes
+- groups OCR lines globally on the page using vertical-gap and column-alignment heuristics
+- falls back to a single OCR text blob only if structured OCR extraction fails
+
+The practical effect is that low-text or image-only pages no longer lose all internal structure at the extraction stage.
+
+### OCR Smoke Tests
+
+The updated OCR path was smoke-tested on a synthetic image-only PDF page created locally.
+
+Verified at a high level:
+
+- the page triggered OCR fallback
+- OCR was actually applied
+- the fallback returned multiple OCR blocks rather than a single page blob
+- the resulting OCR blocks preserved paragraph-like separation
+- downstream chunking still marked the content with extraction method `ocr`
+
+Observed synthetic smoke-test result:
+
+- `pages_requiring_ocr = 1`
+- `pages_processed_with_ocr = 1`
+- `ocr_blocks = 2`
+- downstream `chunk_method = ocr`
+
+### Interpretation
+
+This does not make OCR fully layout-aware yet, but it moves the pipeline to a better intermediate state:
+
+- OCR pages now preserve coarse local structure
+- chunking can operate on multiple OCR-derived segments instead of one giant fallback block
+- the next structural gains are more likely to come from noise labels and retrieval filtering than from another immediate OCR rewrite
+
+## Early v1.2 Chunk-Quality Label Pass
+
+The next iteration focused on the third `v1.2` task:
+
+- adding chunk-level noise labels / quality flags and using them directly in retrieval filtering and reranking
+
+### Quality Label Update
+
+This pass added explicit chunk quality metadata:
+
+- `noise_labels`
+- `quality_score`
+
+The labels are now assigned during chunk creation and persisted in:
+
+- chunk JSON files
+- document-level embedded chunk metadata
+- vector index metadata
+
+The current labeling is still heuristic, but it gives the retrieval layer a stable quality signal instead of forcing every path to rediscover the same chunk problems from raw text each time.
+
+### Retrieval Update
+
+Retrieval now uses these labels in two ways:
+
+- hard filtering for the most obviously bad chunk classes, such as disclaimer-like and table/statistical section artifacts
+- softer reranking penalties for bibliography, TOC-like, boilerplate, and other lower-signal chunk classes
+
+This does not remove all retrieval noise, but it makes the retrieval path more inspectable and more modular than the earlier regex-only heuristics.
+
+### Verification
+
+The pass was checked at a high level by:
+
+- rebuilding chunk JSON outputs for `common-cold-clinincal-evidence`
+- rebuilding the local vector index
+- inspecting saved noise labels on representative chunks
+- rerunning the 7-case benchmark
+
+Representative examples after relabeling:
+
+- early treatment-summary chunk `0003` stayed clean with no noise labels
+- abstract-like chunk `0001` was marked with bibliography/statistical-style noise
+- GRADE/statistical tail chunks were penalized or filtered more explicitly through labels
+
+### Updated Evaluation Check
+
+After the chunk-quality label pass, the 7-case benchmark was rerun.
+
+Summary metrics stayed at:
+
+- average `precision@5`: `0.400`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `1.0`
+
+Interpretation:
+
+- the main value of this pass is not a large metric jump
+- instead, the retrieval pipeline now has a cleaner and more explicit internal quality signal
+- that should make the next recall-focused iteration easier to control, especially for multi-evidence cases and harder future documents
+
+## Early v1.2 Multi-Evidence Retrieval Pass
+
+The next iteration focused on the fourth `v1.2` task:
+
+- improving recall behavior for multi-evidence queries through intent-aware retrieval and neighbor expansion
+
+### Retrieval Update
+
+This pass changed retrieval in two practical ways:
+
+- candidate-pool size is now chosen per query intent instead of using one fixed multiplier for every query
+- neighbor expansion is now intent-aware, with different expansion depth and neighbor acceptance rules for different query types
+
+The main target was `incidence`, where multi-evidence queries benefit from recovering both prevalence-style and summary-style chunks without opening the same amount of surrounding context for every other query type.
+
+### Answering Follow-Up
+
+Because broader retrieval context can also surface more adjacent noise, the answer layer got a small matching cleanup for `incidence`:
+
+- additional penalties for cohort-history and cross-sectional-statistic sentences that are related but not central to the annual-frequency question
+
+This was deliberately small and local. The goal was not to redesign answer synthesis, only to make the wider context more usable.
+
+### Verification
+
+The pass was checked with:
+
+- direct `answer-query` inspection for `How many colds do children and adults get each year?`
+- direct `retrieve-expanded` inspection for the same query
+- a rerun of the full 7-case benchmark
+
+Observed effects:
+
+- expanded context for `incidence` became smaller and more targeted than the earlier one-size-fits-all expansion path
+- the retrieval/answer pipeline now uses a more explicit query-type policy for multi-evidence questions
+- benchmark metrics remained stable while the internal retrieval behavior became easier to control
+
+### Updated Evaluation Check
+
+After the multi-evidence retrieval pass, the 7-case benchmark was rerun.
+
+Summary metrics stayed at:
+
+- average `precision@5`: `0.400`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `1.0`
+
+Interpretation:
+
+- this pass did not aim for a headline metric jump on the current small benchmark
+- its main value is architectural: multi-evidence retrieval is no longer driven by a single generic expansion policy
+- that should matter more when evaluation broadens to new documents and harder low-signal queries
+
+## Early v1.2 Multi-Document Evaluation Pass
+
+The next iteration focused on the fifth `v1.2` task:
+
+- expanding evaluation beyond the first single-document benchmark
+
+### Evaluation Expansion Update
+
+This pass added a second local sample PDF to the working evaluation setup:
+
+- `Vitamin_C_for_Preventing_and_Treating_the_Common_Cold.pdf`
+
+The local workflow now supports building one combined index across multiple chunk directories, rather than assuming a single-document benchmark.
+
+The benchmark itself was expanded in two directions:
+
+- grounded cross-document cases that should retrieve the narrower vitamin-C paper rather than only the broad common-cold review
+- negative / unsupported queries that should trigger abstention rather than a fabricated grounded answer
+
+### Evaluation Structure Update
+
+The evaluation set now distinguishes between:
+
+- `grounded` cases
+- `negative` cases
+
+Negative cases are excluded from classical `precision@k` / `recall@k` / `MRR` averaging and instead tracked through a separate abstention success rate.
+
+### Answering Follow-Up
+
+To make the negative cases meaningful, the answer layer got a lightweight abstention path.
+
+It now returns:
+
+- `No grounded answer could be assembled from the retrieved context.`
+
+when the retrieved evidence does not cover any sufficiently specific query terms beyond generic common-cold boilerplate.
+
+This also exposed one false-abstention regression on the `causes` query, which was then corrected with intent-aware support terms.
+
+### Verification
+
+The evaluation expansion pass was checked by:
+
+- processing a second PDF into document JSON and chunks
+- rebuilding one combined local index across both sample documents
+- testing vitamin-C-specific retrieval queries directly
+- testing negative questions such as vaccine / insulin queries
+- rerunning the full evaluation benchmark
+
+Observed behavior:
+
+- negative queries now abstain instead of returning fabricated grounded answers
+- the benchmark is materially harder than the earlier single-document setup
+- the second document exposes real retrieval and answer-selection weaknesses that the first benchmark did not show
+
+### Updated Evaluation Check
+
+After the multi-document evaluation pass, the benchmark grew from 7 to 11 cases.
+
+Updated summary metrics:
+
+- average `precision@5`: `0.400`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `0.926`
+- negative-case success rate: `1.0`
+
+Interpretation:
+
+- the broader benchmark is doing what it should: it keeps the system from looking artificially complete while still exposing real cross-document weaknesses
+- retrieval still recovers all currently marked gold evidence within top-5 on grounded cases
+- negative abstention behavior is stable on the current two unsupported test questions
+- treatment-specific retrieval / answer quality on the vitamin-C document improved enough to restore a clean top-1 benchmark picture
+- stronger suppression of boilerplate, TOC-like, and bibliography-like noise is now part of the retrieval path rather than only an ad hoc benchmark fix
+
+### Treatment-Specific Follow-Up
+
+After the second document exposed weaker treatment evidence handling, a targeted follow-up pass was added for vitamin-C questions.
+
+That pass included:
+
+- treatment-specific retrieval intent detection for vitamin-C prevention, cold-stress, and duration queries
+- query augmentation tuned to the actual language used in the vitamin-C review
+- tighter answer-sentence selection so generic paper-title or citation-like lines stop winning over treatment findings
+
+Verified at a high level:
+
+- the `normal populations` case now surfaces the correct prevention evidence first
+- the `cold stress` case now surfaces the subgroup reduction evidence much more cleanly
+- the duration/prophylaxis case now favors the duration finding instead of broader surrounding treatment context
+- negative abstention behavior stayed intact after the treatment-specific tuning
 
 What is not yet done:
 
-- broader multi-document evaluation
-- more structure-aware OCR chunk reconstruction
-- better retrieval recall on the remaining multi-evidence benchmark cases
+- a harder third document or noisier scanned PDF in the benchmark
+- validation that current treatment-specific heuristics generalize beyond the vitamin-C review
 - more semantic chunk boundary logic beyond the current heuristic cleanup
 
 ## Next Suggested Step
 
 The next sensible implementation step is:
 
-- improve recall on the remaining multi-evidence benchmark cases, especially `incidence`
+- expand the benchmark again with a harder third document or a noisier scanned PDF and use that to test whether the current treatment-specific heuristics generalize
 
 After that:
 

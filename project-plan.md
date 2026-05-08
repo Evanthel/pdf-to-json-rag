@@ -112,15 +112,27 @@ The first post-MVP iteration should improve robustness without changing the proj
 4. Improve section-aware chunking where noisy headings or boilerplate still leak into retrieval, including paragraph-aware cleanup and sentence-aware overflow splitting.
 5. Keep the pipeline local-first and inspectable before adding any heavier LLM synthesis layer.
 
-## 6.2. v1.2 Plan
+## 6.2. v1.2 Milestones
 
-The next iteration should improve recall and structure quality without changing the overall local-first architecture.
+The second post-MVP iteration improved recall, structure quality, and evaluation breadth without changing the overall local-first architecture.
 
 1. Split mixed summary blocks more cleanly, especially `Key points`-style chunks that currently mix transmission, incidence, and treatment signals.
 2. Make OCR fallback more structure-aware by recovering multiple OCR paragraphs or line groups instead of a single full-page text block.
 3. Add chunk-level noise labels or quality flags and use them directly in retrieval filtering and reranking.
 4. Improve recall for multi-evidence queries, especially `incidence`, by tuning neighbor expansion depth and intent-aware retrieval behavior.
 5. Expand evaluation beyond the current single-document benchmark with at least one second document and a few harder negative or low-evidence queries.
+
+All five milestones are now complete in the current local implementation. A short follow-up pass also improved treatment-specific retrieval and answer selection for the new vitamin-C document cases without changing the core local-first design.
+
+## 6.3. v1.3 Plan
+
+The next iteration should focus on generalization rather than adding heavier model complexity.
+
+1. Add a harder third benchmark document, ideally a noisier scanned PDF or another treatment-heavy review, and expand the evaluation set with new grounded and negative cases.
+2. Extend chunk quality labels so they can also gate neighbor expansion and suppress low-signal context before answer assembly, not only during top-k reranking.
+3. Refactor the current vitamin-C-specific retrieval heuristics toward more document-agnostic treatment evidence categories such as prevention, duration, subgroup benefit, and null-effect findings.
+4. Improve the OCR-to-chunk handoff on scanned or low-text PDFs by reducing footer/header carryover and producing cleaner paragraph boundaries before chunk assembly.
+5. Add a richer evaluation/debug report that stores top-k retrieval snapshots and answer snippets per case so regression analysis is faster after each quality pass.
 
 
 ## 7. Explicitly Deferred

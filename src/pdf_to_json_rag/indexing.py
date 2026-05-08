@@ -112,6 +112,8 @@ def _chunk_metadata(chunk: ChunkRecord) -> dict[str, str | int | bool | None]:
         "language": chunk.language,
         "extraction_method": chunk.extraction_method,
         "ocr_used": chunk.ocr_used,
+        "noise_labels": "|".join(chunk.noise_labels) if chunk.noise_labels else None,
+        "quality_score": chunk.quality_score,
     }
     return {key: value for key, value in metadata.items() if value is not None}
 

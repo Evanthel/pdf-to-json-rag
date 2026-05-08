@@ -16,10 +16,11 @@ DEFAULT_REPORT_FILENAME = "mvp_eval_report.json"
 DEFAULT_EVAL_CASES = [
     {
         "case_id": "symptoms",
+        "case_type": "grounded",
         "query": "What are common cold symptoms?",
         "relevant_chunk_ids": [
-            "common-cold-clinincal-evidence-chunk-0004",
-            "common-cold-clinincal-evidence-chunk-0007",
+            "common-cold-clinincal-evidence-chunk-0009",
+            "common-cold-clinincal-evidence-chunk-0012",
         ],
         "expected_keywords": [
             "sneezing",
@@ -32,10 +33,11 @@ DEFAULT_EVAL_CASES = [
     },
     {
         "case_id": "duration",
+        "case_type": "grounded",
         "query": "How long do common cold symptoms last?",
         "relevant_chunk_ids": [
-            "common-cold-clinincal-evidence-chunk-0007",
-            "common-cold-clinincal-evidence-chunk-0002",
+            "common-cold-clinincal-evidence-chunk-0012",
+            "common-cold-clinincal-evidence-chunk-0003",
         ],
         "expected_keywords": [
             "few days",
@@ -46,10 +48,11 @@ DEFAULT_EVAL_CASES = [
     },
     {
         "case_id": "transmission",
+        "case_type": "grounded",
         "query": "How are common cold infections transmitted?",
         "relevant_chunk_ids": [
-            "common-cold-clinincal-evidence-chunk-0006",
-            "common-cold-clinincal-evidence-chunk-0002",
+            "common-cold-clinincal-evidence-chunk-0011",
+            "common-cold-clinincal-evidence-chunk-0003",
         ],
         "expected_keywords": [
             "hand-to-hand contact",
@@ -61,9 +64,10 @@ DEFAULT_EVAL_CASES = [
     },
     {
         "case_id": "definition",
+        "case_type": "grounded",
         "query": "What is the common cold?",
         "relevant_chunk_ids": [
-            "common-cold-clinincal-evidence-chunk-0004",
+            "common-cold-clinincal-evidence-chunk-0009",
         ],
         "expected_keywords": [
             "upper respiratory tract",
@@ -74,9 +78,10 @@ DEFAULT_EVAL_CASES = [
     },
     {
         "case_id": "causes",
+        "case_type": "grounded",
         "query": "What usually causes the common cold?",
         "relevant_chunk_ids": [
-            "common-cold-clinincal-evidence-chunk-0006",
+            "common-cold-clinincal-evidence-chunk-0011",
         ],
         "expected_keywords": [
             "viruses",
@@ -87,10 +92,11 @@ DEFAULT_EVAL_CASES = [
     },
     {
         "case_id": "incidence",
+        "case_type": "grounded",
         "query": "How many colds do children and adults get each year?",
         "relevant_chunk_ids": [
-            "common-cold-clinincal-evidence-chunk-0005",
-            "common-cold-clinincal-evidence-chunk-0002",
+            "common-cold-clinincal-evidence-chunk-0010",
+            "common-cold-clinincal-evidence-chunk-0003",
         ],
         "expected_keywords": [
             "children",
@@ -102,12 +108,13 @@ DEFAULT_EVAL_CASES = [
     },
     {
         "case_id": "antibiotics",
+        "case_type": "grounded",
         "query": "Do antibiotics help with the common cold?",
         "relevant_chunk_ids": [
-            "common-cold-clinincal-evidence-chunk-0002",
-            "common-cold-clinincal-evidence-chunk-0003",
-            "common-cold-clinincal-evidence-chunk-0170",
-            "common-cold-clinincal-evidence-chunk-0187",
+            "common-cold-clinincal-evidence-chunk-0005",
+            "common-cold-clinincal-evidence-chunk-0175",
+            "common-cold-clinincal-evidence-chunk-0176",
+            "common-cold-clinincal-evidence-chunk-0192",
         ],
         "expected_keywords": [
             "don't reduce symptoms overall",
@@ -115,6 +122,52 @@ DEFAULT_EVAL_CASES = [
             "antibiotic resistance",
         ],
         "notes": "The answer should emphasize that antibiotics are generally not helpful overall.",
+    },
+    {
+        "case_id": "vitamin_c_normal_populations",
+        "case_type": "grounded",
+        "query": "Does vitamin C prevent the common cold in normal populations?",
+        "relevant_chunk_ids": [
+            "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0004",
+            "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0005",
+        ],
+        "expected_keywords": [
+            "incidence",
+            "not altered",
+            "normal populations",
+        ],
+        "notes": "The answer should capture the lack of prophylactic incidence benefit in normal populations.",
+    },
+    {
+        "case_id": "vitamin_c_cold_stress",
+        "case_type": "grounded",
+        "query": "Does vitamin C help people under cold stress?",
+        "relevant_chunk_ids": [
+            "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0004",
+            "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0005",
+        ],
+        "expected_keywords": [
+            "cold stress",
+            "physical",
+            "beneficial",
+        ],
+        "notes": "The answer should capture the special-case benefit under substantial cold or physical stress.",
+    },
+    {
+        "case_id": "negative_vaccine",
+        "case_type": "negative",
+        "query": "What vaccine prevents the common cold?",
+        "relevant_chunk_ids": [],
+        "expected_keywords": [],
+        "notes": "The current benchmark documents that no grounded vaccine answer should be produced.",
+    },
+    {
+        "case_id": "negative_insulin",
+        "case_type": "negative",
+        "query": "Does insulin treat the common cold?",
+        "relevant_chunk_ids": [],
+        "expected_keywords": [],
+        "notes": "The current benchmark documents that unrelated treatment questions should trigger abstention.",
     },
 ]
 
@@ -181,8 +234,20 @@ def evaluate_retrieval_case(case: dict, index_dir: Path, k: int) -> dict:
     hits = retrieve_top_k(query=case["query"], index_dir=index_dir, k=k)
     retrieved_ids = [chunk.chunk_id for chunk in hits]
     relevant = set(case["relevant_chunk_ids"])
+    case_type = case.get("case_type", "grounded")
+    if case_type == "negative":
+        return {
+            "case_id": case["case_id"],
+            "case_type": case_type,
+            "query": case["query"],
+            "retrieved_ids": retrieved_ids,
+            "precision_at_k": None,
+            "recall_at_k": None,
+            "reciprocal_rank": None,
+        }
     return {
         "case_id": case["case_id"],
+        "case_type": case_type,
         "query": case["query"],
         "retrieved_ids": retrieved_ids,
         "precision_at_k": precision_at_k(retrieved_ids, relevant, k),
@@ -200,14 +265,19 @@ def evaluate_answer_case(case: dict, index_dir: Path, chunk_root: Path, k: int) 
         k=k,
     )
     keyword_eval = _keyword_matches(result.answer, case.get("expected_keywords", []))
+    case_type = case.get("case_type", "grounded")
+    abstained = result.answer.startswith("No grounded answer")
     return {
         "case_id": case["case_id"],
+        "case_type": case_type,
         "query": case["query"],
         "answer": result.answer,
         "top_k_hit_ids": [chunk.chunk_id for chunk in result.top_k_hits],
         "expanded_hit_ids": [chunk.chunk_id for chunk in result.expanded_hits],
         "evidence_chunk_ids": [item.chunk_id for item in result.evidence],
         "evidence_sentences": [item.sentence for item in result.evidence],
+        "abstained": abstained,
+        "negative_success": abstained if case_type == "negative" else None,
         **keyword_eval,
     }
 
@@ -237,6 +307,8 @@ def run_mvp_evaluation(
         evaluate_answer_case(case, index_dir=index_dir, chunk_root=chunk_root, k=k)
         for case in cases
     ]
+    grounded_retrieval = [item for item in retrieval_results if item.get("case_type") != "negative"]
+    negative_answers = [item for item in answer_results if item.get("case_type") == "negative"]
 
     report = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -244,11 +316,19 @@ def run_mvp_evaluation(
         "eval_file": str(eval_path),
         "case_count": len(cases),
         "summary": {
-            "avg_precision_at_k": _average([item["precision_at_k"] for item in retrieval_results]),
-            "avg_recall_at_k": _average([item["recall_at_k"] for item in retrieval_results]),
-            "mrr": _average([item["reciprocal_rank"] for item in retrieval_results]),
+            "avg_precision_at_k": _average([item["precision_at_k"] for item in grounded_retrieval]),
+            "avg_recall_at_k": _average([item["recall_at_k"] for item in grounded_retrieval]),
+            "mrr": _average([item["reciprocal_rank"] for item in grounded_retrieval]),
             "avg_keyword_coverage": _average(
-                [item["keyword_coverage"] for item in answer_results]
+                [
+                    item["keyword_coverage"]
+                    for item in answer_results
+                    if item.get("case_type") != "negative"
+                ]
+            ),
+            "negative_case_count": len(negative_answers),
+            "negative_success_rate": _average(
+                [1.0 if item["negative_success"] else 0.0 for item in negative_answers]
             ),
         },
         "retrieval_results": retrieval_results,

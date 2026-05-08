@@ -1,10 +1,11 @@
 [
   {
     "case_id": "symptoms",
+    "case_type": "grounded",
     "query": "What are common cold symptoms?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0004",
-      "common-cold-clinincal-evidence-chunk-0007"
+      "common-cold-clinincal-evidence-chunk-0009",
+      "common-cold-clinincal-evidence-chunk-0012"
     ],
     "expected_keywords": [
       "sneezing",
@@ -17,10 +18,11 @@
   },
   {
     "case_id": "duration",
+    "case_type": "grounded",
     "query": "How long do common cold symptoms last?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0007",
-      "common-cold-clinincal-evidence-chunk-0002"
+      "common-cold-clinincal-evidence-chunk-0012",
+      "common-cold-clinincal-evidence-chunk-0003"
     ],
     "expected_keywords": [
       "few days",
@@ -31,10 +33,11 @@
   },
   {
     "case_id": "transmission",
+    "case_type": "grounded",
     "query": "How are common cold infections transmitted?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0006",
-      "common-cold-clinincal-evidence-chunk-0002"
+      "common-cold-clinincal-evidence-chunk-0011",
+      "common-cold-clinincal-evidence-chunk-0003"
     ],
     "expected_keywords": [
       "hand-to-hand contact",
@@ -46,9 +49,10 @@
   },
   {
     "case_id": "definition",
+    "case_type": "grounded",
     "query": "What is the common cold?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0004"
+      "common-cold-clinincal-evidence-chunk-0009"
     ],
     "expected_keywords": [
       "upper respiratory tract",
@@ -59,9 +63,10 @@
   },
   {
     "case_id": "causes",
+    "case_type": "grounded",
     "query": "What usually causes the common cold?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0006"
+      "common-cold-clinincal-evidence-chunk-0011"
     ],
     "expected_keywords": [
       "viruses",
@@ -72,10 +77,11 @@
   },
   {
     "case_id": "incidence",
+    "case_type": "grounded",
     "query": "How many colds do children and adults get each year?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0005",
-      "common-cold-clinincal-evidence-chunk-0002"
+      "common-cold-clinincal-evidence-chunk-0010",
+      "common-cold-clinincal-evidence-chunk-0003"
     ],
     "expected_keywords": [
       "children",
@@ -87,12 +93,13 @@
   },
   {
     "case_id": "antibiotics",
+    "case_type": "grounded",
     "query": "Do antibiotics help with the common cold?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0002",
-      "common-cold-clinincal-evidence-chunk-0003",
-      "common-cold-clinincal-evidence-chunk-0170",
-      "common-cold-clinincal-evidence-chunk-0187"
+      "common-cold-clinincal-evidence-chunk-0005",
+      "common-cold-clinincal-evidence-chunk-0175",
+      "common-cold-clinincal-evidence-chunk-0176",
+      "common-cold-clinincal-evidence-chunk-0192"
     ],
     "expected_keywords": [
       "don't reduce symptoms overall",
@@ -100,5 +107,51 @@
       "antibiotic resistance"
     ],
     "notes": "The answer should emphasize that antibiotics are generally not helpful overall."
+  },
+  {
+    "case_id": "vitamin_c_normal_populations",
+    "case_type": "grounded",
+    "query": "Does vitamin C prevent the common cold in normal populations?",
+    "relevant_chunk_ids": [
+      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0004",
+      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0005"
+    ],
+    "expected_keywords": [
+      "incidence",
+      "not altered",
+      "normal populations"
+    ],
+    "notes": "The answer should capture the lack of prophylactic incidence benefit in normal populations."
+  },
+  {
+    "case_id": "vitamin_c_cold_stress",
+    "case_type": "grounded",
+    "query": "Does vitamin C help people under cold stress?",
+    "relevant_chunk_ids": [
+      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0004",
+      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0005"
+    ],
+    "expected_keywords": [
+      "cold stress",
+      "physical",
+      "beneficial"
+    ],
+    "notes": "The answer should capture the special-case benefit under substantial cold or physical stress."
+  },
+  {
+    "case_id": "negative_vaccine",
+    "case_type": "negative",
+    "query": "What vaccine prevents the common cold?",
+    "relevant_chunk_ids": [],
+    "expected_keywords": [],
+    "notes": "The current benchmark documents that no grounded vaccine answer should be produced."
+  },
+  {
+    "case_id": "negative_insulin",
+    "case_type": "negative",
+    "query": "Does insulin treat the common cold?",
+    "relevant_chunk_ids": [],
+    "expected_keywords": [],
+    "notes": "The current benchmark documents that unrelated treatment questions should trigger abstention."
   }
 ]

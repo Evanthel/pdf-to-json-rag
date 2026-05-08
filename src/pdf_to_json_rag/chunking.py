@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from .extraction import ExtractedBlock
+from .quality import TOC_LEADER_RE, PAGE_NUMBER_ONLY_RE, classify_chunk_quality
 from .schemas import ChunkRecord, DocumentRecord
 
 INLINE_SECTION_RE = re.compile(
@@ -23,6 +24,13 @@ BOILERPLATE_PATTERNS = (
     "no data from the following reference",
 )
 REFERENCE_LIKE_RE = re.compile(r"^\d+\.\s+[A-Z][^[]+\[PubMed\]", re.MULTILINE)
+SHORT_TOC_NOISE = {
+    "likely to be ineffective or harmful",
+    "acute sinusitis",
+    "acute bronchitis",
+    "sore throat",
+    "interventions to prevent common cold",
+}
 
 
 def normalize_reading_order(blocks: list[ExtractedBlock]) -> list[ExtractedBlock]:
@@ -64,9 +72,15 @@ def _is_noise_paragraph(text: str) -> bool:
     normalized = _normalize_for_match(text)
     if not normalized:
         return True
+    if PAGE_NUMBER_ONLY_RE.match(normalized):
+        return True
+    if TOC_LEADER_RE.search(text):
+        return True
     if any(pattern in normalized for pattern in BOILERPLATE_PATTERNS):
         return True
     if REFERENCE_LIKE_RE.search(text):
+        return True
+    if normalized in SHORT_TOC_NOISE:
         return True
     if normalized in {"common cold", "respiratory disorders (acute)", "-", "benefits and harms"}:
         return True
@@ -222,6 +236,12 @@ def _make_chunk_record(
     text = "\n\n".join(block.text for block in blocks)
     inferred_title = _extract_inline_section_label(blocks[0].text)
     extraction_method, ocr_used = _infer_extraction_method(blocks)
+    resolved_section_title = inferred_title or section_title
+    noise_labels, quality_score = classify_chunk_quality(
+        text=text,
+        section_title=resolved_section_title,
+        extraction_method=extraction_method,
+    )
     return ChunkRecord(
         doc_id=document.doc_id,
         chunk_id=f"{document.doc_id}-chunk-{chunk_number:04d}",
@@ -230,13 +250,15 @@ def _make_chunk_record(
         page_start=blocks[0].page_num + 1,
         page_end=blocks[-1].page_num + 1,
         bbox=_merge_bboxes(blocks),
-        section_title=inferred_title or section_title,
+        section_title=resolved_section_title,
         section_level=section_level,
         chunk_type="text",
         reading_order_index=blocks[0].reading_order_index,
         language=document.detected_language,
         extraction_method=extraction_method,
         ocr_used=ocr_used,
+        noise_labels=noise_labels,
+        quality_score=quality_score,
         confidence=None,
     )
 
@@ -266,9 +288,11 @@ def chunk_document(
     chunk_number = 1
     current_section_title: str | None = document.title
     current_section_level: int | None = 1 if document.title else None
+    in_key_points_summary = False
+    last_buffer_page_num: int | None = None
 
     def flush_buffer() -> None:
-        nonlocal buffer, buffer_chars, chunk_number
+        nonlocal buffer, buffer_chars, chunk_number, last_buffer_page_num
         if not buffer:
             return
         chunks.append(
@@ -283,8 +307,19 @@ def chunk_document(
         chunk_number += 1
         buffer = []
         buffer_chars = 0
+        last_buffer_page_num = None
 
     for block in ordered_blocks:
+        raw_block_text = _clean_text(block.text)
+        if _normalize_for_match(raw_block_text) == "key points":
+            flush_buffer()
+            in_key_points_summary = True
+            continue
+
+        if in_key_points_summary and last_buffer_page_num is not None and block.page_num != last_buffer_page_num:
+            flush_buffer()
+            in_key_points_summary = False
+
         normalized_segments = _normalize_block_segments(block.text)
         if not normalized_segments:
             continue
@@ -302,7 +337,12 @@ def chunk_document(
                 current_section_level = (
                     1 if _normalize_for_match(segment) in toc_entries else None
                 )
+                in_key_points_summary = False
                 continue
+
+            is_bullet_summary = in_key_points_summary and segment.lstrip().startswith("•")
+            if is_bullet_summary and buffer:
+                flush_buffer()
 
             prospective_chars = buffer_chars + len(segment)
             should_split = (
@@ -321,6 +361,7 @@ def chunk_document(
                 )
             )
             buffer_chars += len(segment)
+            last_buffer_page_num = block.page_num
 
     flush_buffer()
     return _link_adjacent_chunks(chunks)

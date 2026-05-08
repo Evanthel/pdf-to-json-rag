@@ -96,13 +96,22 @@ def main() -> None:
         return
 
     if args.command == "build-index":
-        if not args.doc_id:
-            raise SystemExit("--doc-id is required for build-index")
         PATHS.ensure_dirs()
-        chunk_dir = PATHS.data_chunks / args.doc_id
-        chunks = load_chunk_records(chunk_dir)
+        doc_ids = []
+        if args.doc_id:
+            doc_ids = [item.strip() for item in args.doc_id.split(",") if item.strip()]
+        else:
+            doc_ids = sorted(path.name for path in PATHS.data_chunks.iterdir() if path.is_dir())
+
+        if not doc_ids:
+            raise SystemExit("No chunk directories found for build-index")
+
+        chunks = []
+        for doc_id in doc_ids:
+            chunk_dir = PATHS.data_chunks / doc_id
+            chunks.extend(load_chunk_records(chunk_dir))
         manifest = build_local_index(chunks=chunks, index_dir=PATHS.data_index)
-        print(f"Indexed document ID: {args.doc_id}")
+        print(f"Indexed doc IDs: {', '.join(doc_ids)}")
         print(f"chunks_indexed: {manifest['chunk_count']}")
         print(f"collection_name: {manifest['collection_name']}")
         print(f"embedding_backend: {manifest['embedding_backend']}")
@@ -189,6 +198,8 @@ def main() -> None:
         print(f"avg_recall@{args.k}: {report['summary']['avg_recall_at_k']:.3f}")
         print(f"MRR: {report['summary']['mrr']:.3f}")
         print(f"avg_keyword_coverage: {report['summary']['avg_keyword_coverage']:.3f}")
+        print(f"negative_case_count: {report['summary']['negative_case_count']}")
+        print(f"negative_success_rate: {report['summary']['negative_success_rate']:.3f}")
 
 
 if __name__ == "__main__":
