@@ -124,15 +124,43 @@ The second post-MVP iteration improved recall, structure quality, and evaluation
 
 All five milestones are now complete in the current local implementation. A short follow-up pass also improved treatment-specific retrieval and answer selection for the new vitamin-C document cases without changing the core local-first design.
 
-## 6.3. v1.3 Plan
+## 6.3. v1.3 Milestones
 
-The next iteration should focus on generalization rather than adding heavier model complexity.
+The third post-MVP iteration focused on generalization rather than adding heavier model complexity.
 
-1. Add a harder third benchmark document, ideally a noisier scanned PDF or another treatment-heavy review, and expand the evaluation set with new grounded and negative cases.
-2. Extend chunk quality labels so they can also gate neighbor expansion and suppress low-signal context before answer assembly, not only during top-k reranking.
-3. Refactor the current vitamin-C-specific retrieval heuristics toward more document-agnostic treatment evidence categories such as prevention, duration, subgroup benefit, and null-effect findings.
-4. Improve the OCR-to-chunk handoff on scanned or low-text PDFs by reducing footer/header carryover and producing cleaner paragraph boundaries before chunk assembly.
-5. Add a richer evaluation/debug report that stores top-k retrieval snapshots and answer snippets per case so regression analysis is faster after each quality pass.
+Completed scope:
+
+1. Added a third benchmark document built around the echinacea meta-analysis.
+2. Extended chunk quality labels into neighbor-expansion gating before answer assembly.
+3. Replaced vitamin-C-specific treatment heuristics with more general treatment-evidence categories.
+4. Improved the OCR-to-chunk handoff on low-text or scanned pages.
+5. Added a richer evaluation/debug report with per-case retrieval and answer snapshots.
+
+All five milestones are now complete in the current local implementation. The next useful work should focus less on core local pipeline pieces and more on harder scanned documents, broader benchmark coverage, and clearer generalization limits.
+
+## 6.4. v1.4 Milestones
+
+The fourth post-MVP iteration focused on noisier inputs, clearer benchmark slices, and deciding what kind of quality work should come next.
+
+Completed scope:
+
+1. Added a locally derived scanned CT-study benchmark document plus new grounded and negative cases.
+2. Tightened OCR cleanup, OCR paragraph grouping, and scanned-case retrieval behavior on that benchmark.
+3. Added simple benchmark slicing for `native_text` vs `ocr_derived` and `treatment` vs `non_treatment`.
+4. Reduced the remaining treatment-heavy warning cases with a targeted answer-selection pass.
+5. Used the expanded benchmark to decide that the next gain should come from stronger chunking before any lightweight reranking upgrade.
+
+All five milestones are now complete in the current local implementation. The benchmark spans 17 cases across four indexed documents, and the OCR-derived slice is stable enough that the next iteration can focus on chunk-boundary quality rather than scanned-path recovery.
+
+## 6.5. v1.5 Plan
+
+The next iteration should be chunking-first and use the current benchmark to see whether cleaner structure handling removes the last treatment-heavy warning without adding more intent-specific logic.
+
+1. Split mixed treatment-summary chunks more cleanly where prevention, null-effect, subgroup-benefit, and duration evidence still coexists in the same chunk.
+2. Make chunk boundaries more section-aware inside long review-summary blocks rather than relying mostly on page/block edges plus overflow splitting.
+3. Add lightweight chunk-level subtopic cues for treatment evidence types such as prevention, null effect, subgroup benefit, duration, and overall conclusion.
+4. Re-run the benchmark after the chunking pass and check whether the remaining treatment-heavy warning resolves without another answer-selection exception.
+5. Only if the chunking-first pass stalls, prototype a lightweight reranking upgrade and compare it against the chunking-only baseline on the same benchmark.
 
 
 ## 7. Explicitly Deferred

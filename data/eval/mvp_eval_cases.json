@@ -139,6 +139,69 @@
     "notes": "The answer should capture the special-case benefit under substantial cold or physical stress."
   },
   {
+    "case_id": "echinacea_overall_conclusion",
+    "case_type": "grounded",
+    "query": "What does the echinacea meta-analysis conclude about the common cold?",
+    "relevant_chunk_ids": [
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0082",
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0068",
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0001"
+    ],
+    "expected_keywords": [
+      "incidence",
+      "duration",
+      "prevention",
+      "treatment"
+    ],
+    "notes": "The answer should reflect the paper's overall conclusion rather than only a table fragment or generic cold background."
+  },
+  {
+    "case_id": "echinacea_incidence",
+    "case_type": "grounded",
+    "query": "Does echinacea reduce the incidence of the common cold?",
+    "relevant_chunk_ids": [
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0082",
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0068",
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0001"
+    ],
+    "expected_keywords": [
+      "incidence",
+      "reduces",
+      "benefit"
+    ],
+    "notes": "The answer should capture the meta-analysis conclusion that echinacea lowers common-cold incidence."
+  },
+  {
+    "case_id": "ct_abnormalities_prevalence",
+    "case_type": "grounded",
+    "query": "Did CT scans often show sinus abnormalities during common colds?",
+    "relevant_chunk_ids": [
+      "ct-study-of-the-common-cold-scanned-chunk-0022",
+      "ct-study-of-the-common-cold-scanned-chunk-0018"
+    ],
+    "expected_keywords": [
+      "high prevalence",
+      "ostiomeatal",
+      "sinus abnormalities"
+    ],
+    "notes": "The scanned CT-study benchmark should surface the discussion-level conclusion that sinus abnormalities were common during naturally acquired colds."
+  },
+  {
+    "case_id": "ct_follow_up_improvement",
+    "case_type": "grounded",
+    "query": "What did follow-up CT scans show after 13 to 20 days?",
+    "relevant_chunk_ids": [
+      "ct-study-of-the-common-cold-scanned-chunk-0021",
+      "ct-study-of-the-common-cold-scanned-chunk-0022"
+    ],
+    "expected_keywords": [
+      "13 to 20 days",
+      "residual abnormalities",
+      "follow-up"
+    ],
+    "notes": "The scanned CT-study benchmark should capture the follow-up evaluation window and the fact that some residual abnormalities remained."
+  },
+  {
     "case_id": "negative_vaccine",
     "case_type": "negative",
     "query": "What vaccine prevents the common cold?",
@@ -153,5 +216,21 @@
     "relevant_chunk_ids": [],
     "expected_keywords": [],
     "notes": "The current benchmark documents that unrelated treatment questions should trigger abstention."
+  },
+  {
+    "case_id": "negative_echinacea_influenza",
+    "case_type": "negative",
+    "query": "Does echinacea prevent influenza?",
+    "relevant_chunk_ids": [],
+    "expected_keywords": [],
+    "notes": "The benchmark should abstain when the treatment-focused echinacea review is asked about influenza rather than the common cold."
+  },
+  {
+    "case_id": "negative_gadolinium",
+    "case_type": "negative",
+    "query": "Was gadolinium administered?",
+    "relevant_chunk_ids": [],
+    "expected_keywords": [],
+    "notes": "The benchmark should abstain on an unsupported imaging-contrast question even after adding the scanned CT-study document."
   }
 ]

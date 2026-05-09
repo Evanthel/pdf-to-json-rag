@@ -51,6 +51,7 @@ BIBLIOGRAPHY_NOISE_HINTS = (
 NOISY_SECTION_RE = re.compile(r"^(P\s*=|RR\b|Population\b|Ref\b|Comment:|Very low\b|Low\b)")
 TOC_LEADER_RE = re.compile(r"\.\s*\.\s*\.\s*\.")
 PAGE_NUMBER_ONLY_RE = re.compile(r"^\d+$")
+GARBLED_OCR_SECTION_RE = re.compile(r"^[A-Z][A-Z\s\-]{0,20}$")
 
 
 def classify_chunk_quality(
@@ -66,6 +67,8 @@ def classify_chunk_quality(
 
     if extraction_method in {"ocr", "mixed"}:
         labels.add("ocr_derived")
+        if section and GARBLED_OCR_SECTION_RE.match(section) and len(section.split()) <= 4:
+            labels.add("garbled_ocr")
 
     if any(noisy in section for noisy in NOISY_SECTION_HINTS):
         labels.add("noisy_section")
@@ -116,6 +119,7 @@ def classify_chunk_quality(
         "page_number": 0.40,
         "title_fragment": 0.30,
         "short_fragment": 0.10,
+        "garbled_ocr": 0.20,
     }
     for label in labels:
         score -= penalty_map.get(label, 0.0)

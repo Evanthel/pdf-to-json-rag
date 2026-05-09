@@ -31,6 +31,16 @@ SHORT_TOC_NOISE = {
     "sore throat",
     "interventions to prevent common cold",
 }
+OCR_LINEBREAK_RE = re.compile(r"(?<![.!?:])\n(?![\n•\-])")
+OCR_NOISE_PREFIXES = (
+    "doi:",
+    "http://",
+    "https://",
+    "www.",
+    "copyright",
+    "downloaded from",
+)
+OCR_GARBLED_SECTION_RE = re.compile(r"^[A-Z][A-Z\s\-]{0,20}$")
 
 
 def normalize_reading_order(blocks: list[ExtractedBlock]) -> list[ExtractedBlock]:
@@ -120,6 +130,40 @@ def _is_noise_paragraph(text: str) -> bool:
     return False
 
 
+def _normalize_ocr_block_text(text: str) -> str:
+    text = text.replace("ﬁ", "fi").replace("ﬂ", "fl")
+    text = OCR_LINEBREAK_RE.sub(" ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    cleaned_lines: list[str] = []
+    for line in lines:
+        lower = line.lower()
+        if any(lower.startswith(prefix) for prefix in OCR_NOISE_PREFIXES):
+            continue
+        if PAGE_NUMBER_ONLY_RE.match(_normalize_for_match(line)):
+            continue
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines).strip()
+
+
+def _looks_like_garbled_ocr_fragment(text: str) -> bool:
+    normalized = _normalize_for_match(text)
+    if not normalized:
+        return True
+    if len(normalized) < 18 and normalized.count(" ") <= 1:
+        return True
+    alpha_chars = sum(1 for char in normalized if char.isalpha())
+    if alpha_chars and sum(1 for char in normalized if char.isdigit()) >= alpha_chars:
+        return True
+    if normalized.count(" = ") >= 1 and len(normalized) < 80:
+        return True
+    if OCR_GARBLED_SECTION_RE.match(text.strip()) and len(text.strip().split()) <= 4:
+        return True
+    if normalized.startswith(("table ", "figure ")) and len(normalized) < 40:
+        return True
+    return False
+
+
 def _sentence_aware_split(text: str, max_chars: int) -> list[str]:
     sentences = [item.strip() for item in SENTENCE_SPLIT_RE.split(text) if item.strip()]
     if not sentences or len(text) <= max_chars:
@@ -145,7 +189,13 @@ def _sentence_aware_split(text: str, max_chars: int) -> list[str]:
     return [chunk for chunk in chunks if chunk]
 
 
-def _normalize_block_segments(text: str, max_segment_chars: int = 650) -> list[str]:
+def _normalize_block_segments(
+    text: str,
+    extraction_method: str = "native",
+    max_segment_chars: int = 650,
+) -> list[str]:
+    if extraction_method == "ocr":
+        text = _normalize_ocr_block_text(text)
     lower_text = text.lower()
     if "key points" in lower_text:
         text = text[lower_text.index("key points") + len("key points") :]
@@ -154,6 +204,8 @@ def _normalize_block_segments(text: str, max_segment_chars: int = 650) -> list[s
     for paragraph in paragraphs:
         paragraph = _clean_text(paragraph)
         if not paragraph or _is_noise_paragraph(paragraph):
+            continue
+        if extraction_method == "ocr" and _looks_like_garbled_ocr_fragment(paragraph):
             continue
         if len(paragraph) > max_segment_chars:
             cleaned.extend(_sentence_aware_split(paragraph, max_segment_chars))
@@ -320,7 +372,10 @@ def chunk_document(
             flush_buffer()
             in_key_points_summary = False
 
-        normalized_segments = _normalize_block_segments(block.text)
+        normalized_segments = _normalize_block_segments(
+            block.text,
+            extraction_method=block.extraction_method,
+        )
         if not normalized_segments:
             continue
 

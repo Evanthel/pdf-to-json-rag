@@ -1,6 +1,6 @@
 # PDF-to-JSON RAG
 
-Local-first pipeline for extracting structured JSON from PDFs, indexing the resulting chunks locally, and answering questions with grounded evidence.
+Local-first PDF-to-JSON RAG pipeline with structured extraction, grounded retrieval, and a small inspectable evaluation loop.
 
 ## Lineage
 
@@ -23,29 +23,24 @@ The split is deliberate:
 
 ## Current Status
 
-This repo is currently at:
+Current version: `v1.4`.
 
-- completed end-to-end MVP
-- completed `v1.1` robustness and quality pass
-- completed `v1.2` structure, evaluation-expansion, and multi-document retrieval milestones
-- completed a first post-`v1.2` treatment-specific retrieval / answer-quality pass for the vitamin-C document cases
-- current focus has shifted from pipeline structure to generalization on harder documents and broader evaluation coverage
-- still intentionally local-first and heuristic-heavy
+The repo is in a working local-first state: PDF extraction, chunking, local indexing, grounded answering, and benchmark evaluation all run end-to-end across multiple sample documents.
 
-The pipeline now works across multiple local sample PDFs and includes a mixed benchmark with grounded multi-document cases plus negative abstention checks.
+The current implementation is still deliberately heuristic-heavy, but `v1.4` is now complete: the benchmark spans four indexed documents, includes a locally derived scanned CT-study PDF plus negative abstention checks, and now has OCR-focused cleanup, generalized treatment-evidence handling, per-case debug records, and simple slice summaries. The next iteration should be chunking-first rather than reranking-first.
 
 ## What Works
 
 - Native PDF extraction with `PyMuPDF`
-- OCR fallback for pages with weak or missing native text, with paragraph-like OCR block recovery instead of a single full-page text blob
+- OCR fallback for pages with weak or missing native text, with paragraph-like OCR block recovery and cleaner OCR-to-chunk handoff instead of a single full-page text blob
 - OCR provenance carried through extraction and chunk metadata
 - Document-level JSON output in `data/documents/`
 - Chunk generation with reading-order preservation, section detection, paragraph-aware cleanup, sentence-aware overflow splitting, cleaner `Key points`-style summary splitting, and chunk-level noise labels / quality scores
 - Local vector indexing with `ChromaDB`
-- Retrieval from the local index with intent-aware reranking, noise-label-aware filtering, heuristic noise suppression, intent-aware neighbor expansion, and treatment-specific vitamin-C retrieval behavior
+- Retrieval from the local index with intent-aware reranking, noise-label-aware filtering, heuristic noise suppression, quality-gated neighbor expansion, and generalized treatment-evidence retrieval behavior
 - Adjacent-chunk expansion for context reconstruction
-- Grounded answer assembly with explicit evidence citations and targeted answer-selection heuristics for vitamin-C prevention, cold-stress, and duration queries
-- multi-document evaluation workflow with grounded cases and negative abstention checks
+- Grounded answer assembly with explicit evidence citations and targeted answer-selection heuristics for treatment prevention, null-effect, subgroup-benefit, duration, and overall-conclusion queries
+- multi-document evaluation workflow across four indexed sample documents, with grounded cases, negative abstention checks, per-case debug snapshots, and simple benchmark slices
 
 ## Workflow
 
@@ -55,7 +50,7 @@ The pipeline now works across multiple local sample PDFs and includes a mixed be
 4. Retrieve top-k chunks for a query
 5. Expand with adjacent chunks
 6. Assemble a grounded answer from the expanded context
-7. Evaluate retrieval and answer quality on a hand-built multi-document benchmark with negative queries
+7. Evaluate retrieval and answer quality on a hand-built multi-document benchmark with negative queries and inspect the saved per-case debug snapshots
 
 ## How to Run
 
@@ -104,13 +99,25 @@ PYTHONPATH=src python -m pdf_to_json_rag.cli evaluate-mvp --k 5
 
 Current local benchmark snapshot:
 
-- `precision@5`: `0.400`
+- `precision@5`: `0.431`
 - `recall@5`: `1.0`
 - `MRR`: `1.0`
-- average answer keyword coverage: `0.926`
+- average answer keyword coverage: `0.974`
 - negative case success rate: `1.0`
 
-This reflects the current 11-case benchmark after adding a second document, two negative abstention checks, and a treatment-specific tuning pass for the vitamin-C cases. The benchmark now measures whether the pipeline can separate narrower treatment evidence from the broader common-cold review and decline unsupported questions instead of fabricating a grounded answer.
+This reflects the current 17-case benchmark after adding a locally derived scanned CT-study document, two new OCR-heavy grounded cases, and a fourth negative abstention check. The benchmark now measures whether the pipeline can stay coherent not only across treatment-heavy native PDFs, but also when OCR-derived evidence is mixed into the same local index.
+
+The saved report now also includes per-case debug records with top-k retrieval snapshots, expanded-context snapshots, answer previews, and evidence snippets so regressions are faster to inspect after each quality pass.
+
+It now also stores simple slice summaries for:
+
+- `native_text` vs `ocr_derived`
+- `treatment` vs `non_treatment`
+
+At the moment the slice summaries show that:
+
+- the `ocr_derived` slice has recovered to full recall and MRR after the scanned cleanup pass
+- the only remaining warning case sits in the treatment-heavy native-text slice
 
 ## Limitations
 
@@ -120,9 +127,12 @@ This reflects the current 11-case benchmark after adding a second document, two 
 - Section detection is improved, but still rule-based and fragile on other document layouts
 - Retrieval quality still depends on lightweight heuristics, including rule-based chunk quality labeling
 - Multi-evidence answer assembly is improved, but some queries can still pull in secondary epidemiology, prognosis, or treatment-summary details that are relevant-but-not-ideal
-- Treatment-specific retrieval and answer behavior now works better for the current vitamin-C document, but the logic is still partly query-family-specific and not yet validated on a broader treatment corpus
+- The generalized treatment-evidence heuristics now work across vitamin-C and echinacea cases, but they are still heuristic and not yet validated on a broader treatment corpus
+- The remaining keyword-coverage miss is still treatment-heavy, especially where null-effect and subgroup-benefit findings are mixed in the same source block
 - Grounded answers are extractive, not LLM-synthesized
-- The evaluation set is still small and currently covers only two sample documents
+- The evaluation set is still small and currently covers only four indexed sample documents
+- The scanned benchmark currently uses one locally derived OCR-heavy document rather than a broader scanned-document set
+- The richer debug report helps inspection, but the benchmark is still hand-built and not yet broad enough to validate true generalization
 - Table extraction and harder layout handling are still deferred
 - Multi-document and multilingual robustness are not validated yet
 
@@ -144,9 +154,9 @@ Those reference notebooks were not kept as part of the final repo structure. The
 
 ## Near-Term Next Steps
 
-- add a harder third benchmark document, ideally a noisier scanned PDF or another treatment-heavy review
-- test whether chunk quality labels should also gate neighbor expansion, not just top-k reranking
-- generalize the current vitamin-C-specific treatment heuristics into more document-agnostic evidence categories
+- split mixed treatment-summary chunks more cleanly so prevention, null-effect, subgroup-benefit, and duration evidence stop sharing the same answer context
+- make chunk boundaries more section-aware inside long review-summary blocks before trying any reranking upgrade
+- only prototype lightweight reranking if the chunking-first pass does not remove the last treatment-heavy warning
 
 ## Version Log
 
@@ -217,3 +227,37 @@ By the end of the pass, the benchmark had moved to:
 - `negative_success_rate = 1.0`
 
 At this point the main remaining work is not the basic local pipeline anymore, but broader robustness testing on additional treatment-heavy or noisier documents.
+
+### 2026-05-09
+
+`v1.3` and `v1.4` together pushed the project from broader cross-document generalization into a harder scanned-document benchmark, OCR stabilization, better treatment-answer behavior, and clearer evaluation diagnostics.
+
+This day included:
+
+- processing the echinacea meta-analysis as a third local document
+- rebuilding the shared index across three documents
+- adding new echinacea grounded cases and a new influenza abstention case
+- rerunning the benchmark to test how current heuristics generalize beyond the vitamin-C paper
+- extending chunk quality labels into neighbor-expansion gating before answer assembly
+- generalizing the earlier vitamin-C-specific heuristics into broader treatment-evidence categories
+- cleaning OCR-derived text more aggressively before chunk assembly so top/bottom line noise is less likely to survive into chunks
+- adding a richer evaluation/debug report with top-k snapshots, expanded-context snapshots, answer previews, and evidence snippets per case
+- deriving a noisier image-based PDF from the CT-study source
+- extracting and chunking that scanned document through the existing OCR path
+- rebuilding the shared local index across four documents
+- adding new scanned-document grounded cases and a new negative contrast-agent abstention case
+- rerunning the benchmark to surface OCR-derived retrieval failures explicitly
+- adding simple slice summaries so native-text and OCR-derived behavior can be compared directly in the saved report
+- recovering the scanned CT cases back to full recall and MRR through OCR cleanup and scanned-path retrieval tuning
+- tightening treatment-heavy answer selection until the warning set dropped to a single remaining case
+- using the expanded benchmark to decide that the next gain should come from stronger chunking before any reranking upgrade
+
+By the end of the pass, the benchmark had moved to:
+
+- `precision@5 = 0.431`
+- `recall@5 = 1.0`
+- `MRR = 1.0`
+- `avg_keyword_coverage = 0.974`
+- `negative_success_rate = 1.0`
+
+At this point the scanned OCR slice is stable, the report is easier to inspect, and the remaining gap points more toward chunk-boundary quality than toward retrieval ranking.

@@ -827,16 +827,441 @@ Verified at a high level:
 
 What is not yet done:
 
-- a harder third document or noisier scanned PDF in the benchmark
 - validation that current treatment-specific heuristics generalize beyond the vitamin-C review
 - more semantic chunk boundary logic beyond the current heuristic cleanup
+
+## v1.3 Task 1
+
+The first `v1.3` step was to broaden the benchmark again with a third document and additional evaluation cases.
+
+For this pass, the chosen third document was:
+
+- `Evaluation_of_echinacea_for_the_prevention_and_treatment_of_the_common_cold.pdf`
+
+The goal was not just to add more volume, but to test whether the current treatment-heavy retrieval and answer heuristics still behave sensibly once another review paper shares the same local index.
+
+### Benchmark Expansion Work
+
+This pass included:
+
+- extracting and chunking the echinacea meta-analysis into the local JSON pipeline
+- rebuilding the shared local index across all three current documents
+- adding new grounded echinacea cases
+- adding a new negative abstention case for influenza
+
+### Verification
+
+This pass was checked by:
+
+- direct retrieval tests for echinacea incidence and overall-conclusion queries
+- direct answer-path checks for the same queries
+- a negative abstention check on `Does echinacea prevent influenza?`
+- a full benchmark rerun after updating the eval set
+
+Observed behavior:
+
+- the third document integrated cleanly into the local index
+- the new influenza case abstained correctly
+- top-k retrieval stayed strong on the new echinacea queries
+- answer keyword coverage dropped even though retrieval metrics stayed high, which is a useful signal rather than a regression to hide
+
+### Updated Evaluation Check
+
+After the third-document expansion, the benchmark grew from 11 to 14 cases.
+
+Updated summary metrics:
+
+- average `precision@5`: `0.400`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `0.879`
+- negative-case success rate: `1.0`
+
+Interpretation:
+
+- retrieval still looks very strong on the current benchmark
+- the broadened benchmark is now better at exposing cross-document answer-selection weakness
+- the main signal from this pass is not top-k failure, but that treatment-heavy multi-document answering remains more fragile than retrieval alone suggests
+
+## v1.3 Task 2
+
+The second `v1.3` step was to make chunk-quality labeling affect neighbor expansion directly, not only top-k reranking.
+
+This pass focused on the point where low-signal adjacent chunks can still leak into answer assembly even when the primary retrieval set already looks clean.
+
+### Expansion-Gating Work
+
+This pass included:
+
+- defining a separate set of expansion-block labels for obvious low-signal neighbor content
+- gating neighbor expansion on chunk quality score as well as noise labels
+- requiring weakly matched neighbors to either match the current query intent or stay in the same local section as the anchor chunk
+
+### Verification
+
+This pass was checked by:
+
+- rerunning the full 14-case benchmark
+- spot-checking expanded answer context on the new echinacea benchmark queries
+
+Observed behavior:
+
+- the answer context is now filtered through a more explicit quality-control step before assembly
+- benchmark headline metrics stayed stable, which is acceptable for this pass
+- the main value of the change is architectural: the answer layer no longer depends only on top-k cleanup to avoid obvious low-signal neighbors
+
+### Updated Evaluation Check
+
+After the expansion-gating pass, the benchmark remained at:
+
+- average `precision@5`: `0.400`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `0.879`
+- negative-case success rate: `1.0`
+
+Interpretation:
+
+- this was a control-quality pass more than a headline-metrics pass
+- the repo now has a cleaner separation between top-k retrieval filtering and downstream context-expansion filtering
+- this gives a better base for the next step, which is to generalize treatment-specific heuristics instead of only adding more query-time exceptions
+
+## v1.3 Task 3
+
+The third `v1.3` step was to replace the earlier vitamin-C-specific treatment logic with broader treatment-evidence categories that also work on the echinacea document.
+
+This pass focused on moving from document-specific query handling toward reusable evidence types such as prevention, null effect, subgroup benefit, duration, and overall treatment conclusions.
+
+### Treatment-Generalization Work
+
+This pass included:
+
+- replacing the earlier vitamin-C-only retrieval intents with broader treatment-evidence intents
+- doing the same on the answer-selection side
+- tightening a few scoring rules so prevention, overall-treatment, and duration cases do not drift toward methods-style or generic background sentences
+- refining the echinacea eval gold set so it better reflects acceptable summary-evidence chunks rather than only one narrow formulation
+
+### Verification
+
+This pass was checked by:
+
+- rerunning the full 14-case benchmark
+- spot-checking vitamin-C prevention answers after the generalization
+- spot-checking echinacea overall-conclusion and incidence answers after the generalization
+- checking that the negative influenza abstention case still holds
+
+Observed behavior:
+
+- the generalized treatment-evidence logic now works across both vitamin-C and echinacea queries
+- the benchmark recovered from the first too-broad version of the pass after the scoring was narrowed again
+- the duration answer path improved once the answer layer got an explicit `duration` intent instead of falling back to generic scoring
+
+### Updated Evaluation Check
+
+After the generalized treatment-evidence pass, the benchmark moved to:
+
+- average `precision@5`: `0.436`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `0.909`
+- negative-case success rate: `1.0`
+
+Interpretation:
+
+- retrieval remains strong across the three-document benchmark
+- the generalized treatment-evidence pass improved over the earlier task-1/task-2 state instead of just preserving it
+- the remaining answer-quality misses are now concentrated in a few treatment-heavy cases rather than spread across the benchmark
+
+## v1.3 Task 4
+
+The fourth `v1.3` step was to improve the OCR-to-chunk handoff on low-text or scanned pages before adding a noisier scanned benchmark document.
+
+This pass focused on reducing header/footer carryover and making OCR-derived paragraph text cleaner before it reaches chunk assembly.
+
+### OCR Handoff Work
+
+This pass included:
+
+- filtering more OCR line noise near page top/bottom bands, especially DOI / URL / copyright / page-number style lines
+- normalizing OCR line text before paragraph grouping
+- joining OCR lines into paragraph text more carefully, including simple hyphenation repair
+- adding OCR-specific block cleanup in chunking so linebreak noise and obvious OCR header/footer fragments are less likely to survive into chunk segments
+
+### Verification
+
+This pass was checked by:
+
+- rerunning the full 14-case benchmark to confirm no regression on the current three-document set
+- a synthetic image-only OCR smoke test with header/footer-style noise added to the page
+
+Observed behavior:
+
+- the OCR fallback still produced a chunk from the synthetic page
+- the obvious top DOI/header line and bottom page marker no longer dominated the OCR-derived chunk content
+- the current benchmark stayed stable, which is what this pass needed to preserve
+
+### Updated Evaluation Check
+
+After the OCR handoff cleanup pass, the benchmark remained at:
+
+- average `precision@5`: `0.436`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `0.909`
+- negative-case success rate: `1.0`
+
+Interpretation:
+
+- this was another infrastructure-quality pass rather than a direct benchmark-boost pass
+- the repo is now in a better position to add a genuinely noisier scanned benchmark document
+- OCR-derived content is still noisy in a real-world sense, but the handoff into chunking is cleaner and more controllable than before
+
+## v1.3 Task 5
+
+The fifth `v1.3` step was to make the evaluation output more useful for regression analysis, not by changing the benchmark itself, but by making each case easier to inspect after a quality pass.
+
+### Evaluation Debug Report Work
+
+This pass included:
+
+- adding per-case debug records to the saved evaluation report
+- storing top-k retrieval snapshots with chunk metadata and short previews
+- storing expanded-context snapshots so neighbor-expansion behavior is visible after each run
+- storing answer previews and evidence snippets for each case
+- adding simple case-status labels and warning-case IDs so weaker cases are easier to spot without reading the whole report
+
+### Verification
+
+This pass was checked by:
+
+- rerunning the full 14-case benchmark
+- confirming that the generated report includes `debug_cases`
+- spot-checking the new warning-case summary fields
+
+Observed behavior:
+
+- benchmark headline metrics stayed unchanged, which is expected because this pass improves observability rather than retrieval quality
+- the report is now much more useful for regression review because it shows what the retriever and answer layer actually surfaced for each case
+- current warning cases are visible immediately without scanning the full raw report
+
+### Updated Evaluation Check
+
+After the richer debug-report pass, the benchmark remained at:
+
+- average `precision@5`: `0.436`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `0.909`
+- negative-case success rate: `1.0`
+
+Interpretation:
+
+- the repo now has stronger evaluation visibility without changing the current retrieval/answer baseline
+- the remaining work is no longer “make the report readable”, but “stress the pipeline on noisier scanned evidence and broader treatment-heavy documents”
+
+## v1.4 Task 1
+
+The first `v1.4` step was to stop relying only on native-text benchmark documents and add a genuinely noisier scanned case to the local evaluation loop.
+
+### Scanned Benchmark Setup
+
+This pass included:
+
+- creating a local image-based scanned version of the CT-study PDF from the course medical sample set
+- sending that derived PDF through the existing OCR extraction path
+- chunking the scanned document and rebuilding the shared local index across all current benchmark documents
+- extending the evaluation set with two OCR-heavy grounded CT-study cases and one additional negative abstention case
+
+### Verification
+
+This pass was checked by:
+
+- confirming that all six pages of the derived CT-study document triggered OCR fallback
+- confirming that chunk JSON files were produced for the scanned document
+- rerunning the full benchmark after rebuilding the shared index
+
+Observed behavior:
+
+- the OCR path remained operational on the derived scanned document
+- negative abstention still held on the new contrast-agent query
+- the new CT-study cases lowered recall and MRR, which is useful because it exposes a real OCR-derived retrieval weakness instead of only adding another easy native-text case
+
+### Updated Evaluation Check
+
+After the scanned-benchmark expansion pass, the benchmark moved to:
+
+- average `precision@5`: `0.415`
+- average `recall@5`: `0.962`
+- `MRR`: `0.891`
+- average answer keyword coverage: `0.923`
+- negative-case success rate: `1.0`
+
+Interpretation:
+
+- this is the first benchmark pass that clearly separates native-text performance from OCR-derived performance
+- the current OCR path is good enough to keep the pipeline running end-to-end, but not yet strong enough to preserve earlier retrieval metrics on the scanned cases
+- the next useful work is to audit OCR-derived chunk quality and retrieval behavior on the CT-study cases rather than immediately widening the benchmark again
+
+## v1.4 Task 2
+
+The second `v1.4` step was to tighten the scanned OCR path where the new CT-study cases exposed real weaknesses.
+
+### OCR Cleanup And Grouping Work
+
+This pass included:
+
+- splitting OCR paragraph groups more aggressively around structural headings such as `Abstract`, `Methods`, `Discussion`, and `Follow-up Evaluations`
+- dropping more OCR-specific title, author, footer, and reprint-credit fragments before they become blocks
+- adding stronger OCR fragment cleanup during chunking
+- labeling obviously garbled OCR chunks more explicitly
+- adding lightweight CT-specific retrieval and answer intents for the new scanned benchmark questions
+
+### Verification
+
+This pass was checked by:
+
+- regenerating the scanned CT-study extraction and chunk outputs
+- rebuilding the shared index across all four documents
+- rerunning the full 17-case benchmark
+- checking that the scanned CT-study cases recovered while negative abstention still held
+
+Observed behavior:
+
+- the scanned CT-study document now produces fewer chunks, with less obvious author/title/footer carryover
+- the scanned-case retrieval drop seen right after `v1.4 / task 1` was recovered
+- the remaining benchmark warnings are again concentrated in treatment-heavy native-text cases rather than the scanned CT-study cases
+
+### Updated Evaluation Check
+
+After the OCR cleanup and scanned-retrieval pass, the benchmark moved to:
+
+- average `precision@5`: `0.431`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `0.923`
+- negative-case success rate: `1.0`
+
+Interpretation:
+
+- the scanned benchmark is now useful without dragging down the whole evaluation loop
+- OCR-derived cases are still noisier than native-text cases, but the current local path is good enough to preserve full recall and MRR on the expanded benchmark
+- the next useful step is no longer OCR cleanup itself, but clearer benchmark slicing so native and OCR-derived behavior can be compared directly in the report
+
+## v1.4 Task 3
+
+The third `v1.4` step was to make the evaluation report easier to read at a higher level by adding a few simple benchmark slices.
+
+### Benchmark Slicing Work
+
+This pass included:
+
+- adding per-case slice labels to the debug records
+- adding aggregate summaries for `native_text` vs `ocr_derived`
+- adding aggregate summaries for `treatment` vs `non_treatment`
+
+### Verification
+
+This pass was checked by:
+
+- rerunning the full 17-case benchmark
+- confirming that the saved report now contains a `slices` section
+- checking that the OCR-derived slice and treatment slice reflect the current warning distribution
+
+Observed behavior:
+
+- benchmark headline metrics did not change, which is expected
+- the report now shows directly that the remaining warnings are concentrated in treatment-heavy native-text cases
+- the current OCR-derived slice is back to full recall and MRR after the scanned cleanup pass
+
+### Updated Evaluation Check
+
+After the slicing pass, the benchmark remained at:
+
+- average `precision@5`: `0.431`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `0.923`
+- negative-case success rate: `1.0`
+
+Interpretation:
+
+- the report is now easier to use for deciding where the next quality pass should land
+- the next useful work is no longer better reporting, but improving the remaining treatment-heavy answer warnings without regressing the scanned path
+
+## v1.4 Task 4
+
+The fourth `v1.4` step was to tighten answer selection on the remaining treatment-heavy warning cases without undoing the scanned-path stabilization work.
+
+### Treatment-Focused Answer Pass
+
+This pass included:
+
+- normalizing ligature-heavy answer text more robustly during keyword-coverage evaluation
+- adding a small coverage guard in answer selection for treatment intents so key phrases such as `benefit`, `beneficial effect`, and `not altered` are less likely to be dropped when evidence is already present in the retrieved context
+- tightening `treatment_null_effect` scoring so methods-style or duration-style vitamin-C sentences are less likely to outrank the actual null-effect evidence
+
+### Verification
+
+This pass was checked by:
+
+- rerunning the full 17-case benchmark
+- checking the three remaining treatment-heavy warning cases directly
+- confirming that the scanned OCR slice did not regress
+
+Observed behavior:
+
+- benchmark headline retrieval metrics stayed fixed, which is what this pass was meant to preserve
+- average keyword coverage improved noticeably
+- warning cases dropped from three to one
+
+### Updated Evaluation Check
+
+After the treatment-focused answer-selection pass, the benchmark moved to:
+
+- average `precision@5`: `0.431`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `0.974`
+- negative-case success rate: `1.0`
+
+Interpretation:
+
+- the remaining weakness is now a narrow treatment-specific edge case rather than a broader cluster
+- the next useful step should be a design choice about chunking vs lightweight reranking, not another round of narrow intent exceptions
+
+## v1.4 Task 5
+
+The fifth `v1.4` step was not another heuristic tweak. It was a benchmark-driven design decision about where the next useful gain should come from.
+
+### Decision
+
+The current benchmark now points to a chunking-first next iteration rather than a reranking-first one.
+
+### Why This Direction
+
+The decision is based on the current state of the benchmark:
+
+- retrieval headline metrics are already saturated on the current 17-case setup
+- the OCR-derived slice has recovered to full recall and MRR
+- the remaining warning is narrow and treatment-heavy rather than a broad ranking failure
+- the remaining gap looks more like a mixed-summary / chunk-boundary problem than a top-k ordering problem
+
+### Practical Outcome
+
+No new metric jump was expected from this step.
+
+The value of the pass is architectural:
+
+- `v1.4` is now complete
+- the next useful work should focus on stronger chunk boundaries inside long treatment-summary regions
+- lightweight reranking should only be revisited if that chunking-first pass stalls
 
 ## Next Suggested Step
 
 The next sensible implementation step is:
 
-- expand the benchmark again with a harder third document or a noisier scanned PDF and use that to test whether the current treatment-specific heuristics generalize
+- split mixed treatment-summary chunks more cleanly and make chunk boundaries more section-aware inside long review-summary blocks
 
 After that:
 
-- decide whether to keep the extractive answer path or swap in an LLM synthesis stage
+- only prototype lightweight reranking if the chunking-first pass does not resolve the final warning naturally

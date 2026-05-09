@@ -15,6 +15,17 @@ import pytesseract
 from .schemas import DocumentRecord
 
 
+OCR_PAGE_NUMBER_RE = re.compile(r"^\d+$")
+OCR_STRUCTURAL_HEADING_RE = re.compile(
+    r"^(abstract|background|methods?|results?|discussion|conclusions?|follow-?up evaluations?|ct scans?)[:.]?$",
+    re.IGNORECASE,
+)
+OCR_AUTHOR_LINE_RE = re.compile(
+    r"\b(m\.d\.|ph\.d\.|b\.s\.|m\.s\.)\b",
+    re.IGNORECASE,
+)
+
+
 @dataclass
 class ExtractedBlock:
     page_num: int
@@ -307,6 +318,117 @@ def _normalize_pixel_bbox(
     )
 
 
+def _normalize_ocr_line_text(text: str) -> str:
+    text = text.replace("ﬁ", "fi").replace("ﬂ", "fl")
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _looks_like_ocr_noise_line(
+    text: str,
+    *,
+    top: int,
+    bottom: int,
+    image_height: int,
+    line_height: int,
+) -> bool:
+    normalized = text.strip().lower()
+    if not normalized:
+        return True
+    if OCR_PAGE_NUMBER_RE.match(normalized):
+        return True
+
+    is_top_band = top <= max(int(image_height * 0.08), line_height * 2)
+    is_bottom_band = bottom >= image_height - max(int(image_height * 0.08), line_height * 2)
+
+    if is_top_band or is_bottom_band:
+        if any(
+            hint in normalized
+            for hint in (
+                "doi:",
+                "http://",
+                "https://",
+                "www.",
+                "copyright",
+                "all rights reserved",
+                "vol ",
+                "issue",
+                "journal",
+                "downloaded from",
+                "page ",
+            )
+        ):
+            return True
+        if len(normalized) < 18 and sum(ch.isdigit() for ch in normalized) >= 2:
+            return True
+
+    if normalized.startswith("figure ") and len(normalized) < 24:
+        return True
+    return False
+
+
+def _join_ocr_lines(lines: list[dict]) -> str:
+    parts: list[str] = []
+    for line in lines:
+        line_text = _normalize_ocr_line_text(line["text"])
+        if not line_text:
+            continue
+        if parts:
+            prev = parts[-1]
+            if prev.endswith("-") and line_text[:1].islower():
+                parts[-1] = prev[:-1] + line_text
+                continue
+            if prev.endswith(("/", "(", "[")):
+                parts[-1] = prev + line_text
+                continue
+            if prev.endswith((".", "?", "!", ":")):
+                parts.append(line_text)
+                continue
+            parts[-1] = prev + " " + line_text
+            continue
+        parts.append(line_text)
+    return "\n".join(parts).strip()
+
+
+def _looks_like_structural_heading(text: str) -> bool:
+    normalized = _normalize_ocr_line_text(text)
+    if not normalized:
+        return False
+    if OCR_STRUCTURAL_HEADING_RE.match(normalized):
+        return True
+    if normalized.lower().startswith(("abstract ", "background ", "methods ", "results ", "discussion ")):
+        return True
+    return False
+
+
+def _looks_like_author_credit(text: str) -> bool:
+    normalized = _normalize_ocr_line_text(text)
+    if not normalized:
+        return False
+    if not OCR_AUTHOR_LINE_RE.search(normalized):
+        return False
+    return len(normalized) <= 180
+
+
+def _should_drop_ocr_paragraph(block_text: str, page_num: int) -> bool:
+    normalized = _normalize_ocr_line_text(block_text)
+    lower = normalized.lower()
+    if not normalized:
+        return True
+    if page_num == 0 and (
+        _looks_like_author_credit(normalized)
+        or normalized.startswith("COMPUTED TOMOGRAPHIC STUDY OF THE COMMON COLD")
+    ):
+        return True
+    if lower.startswith(("downloaded from", "massachusetts medical society registry")):
+        return True
+    if "reprint requests" in lower or "supported by the procter" in lower:
+        return True
+    if normalized.count("—") >= 2 and len(normalized) < 160:
+        return True
+    return False
+
+
 def _build_ocr_blocks_from_image(image: Image.Image, page_num: int) -> list[ExtractedBlock]:
     try:
         ocr_data = pytesseract.image_to_data(
@@ -363,13 +485,22 @@ def _build_ocr_blocks_from_image(image: Image.Image, page_num: int) -> list[Extr
         ordered_lines = []
         for line_num in sorted(lines):
             line_words = sorted(lines[line_num], key=lambda item: (item["left"], item["top"]))
-            line_text = " ".join(word["text"] for word in line_words).strip()
+            line_text = _normalize_ocr_line_text(" ".join(word["text"] for word in line_words))
             if not line_text:
                 continue
             line_left = min(word["left"] for word in line_words)
             line_top = min(word["top"] for word in line_words)
             line_right = max(word["left"] + word["width"] for word in line_words)
             line_bottom = max(word["top"] + word["height"] for word in line_words)
+            line_height = max(1, line_bottom - line_top)
+            if _looks_like_ocr_noise_line(
+                line_text,
+                top=line_top,
+                bottom=line_bottom,
+                image_height=image.size[1],
+                line_height=line_height,
+            ):
+                continue
             ordered_lines.append(
                 {
                     "line_num": line_num,
@@ -379,7 +510,7 @@ def _build_ocr_blocks_from_image(image: Image.Image, page_num: int) -> list[Extr
                     "top": line_top,
                     "right": line_right,
                     "bottom": line_bottom,
-                    "height": max(1, line_bottom - line_top),
+                    "height": line_height,
                 }
             )
 
@@ -407,8 +538,10 @@ def _build_ocr_blocks_from_image(image: Image.Image, page_num: int) -> list[Extr
         gap_threshold = max(max(prev_line["height"], line["height"]) * 4.5, 40)
         left_delta = abs(line["left"] - prev_line["left"])
         same_column = left_delta <= max(prev_line["height"], line["height"]) * 6
+        current_is_heading = _looks_like_structural_heading(line["text"])
+        prev_is_heading = _looks_like_structural_heading(prev_line["text"])
 
-        if gap > gap_threshold or not same_column:
+        if gap > gap_threshold or not same_column or current_is_heading or prev_is_heading:
             paragraph_groups.append(current_group)
             current_group = [line]
         else:
@@ -419,8 +552,10 @@ def _build_ocr_blocks_from_image(image: Image.Image, page_num: int) -> list[Extr
         paragraph_groups.append(current_group)
 
     for paragraph in paragraph_groups:
-        block_text = "\n".join(line["text"] for line in paragraph).strip()
+        block_text = _join_ocr_lines(paragraph)
         if not block_text:
+            continue
+        if _should_drop_ocr_paragraph(block_text, page_num):
             continue
 
         left = min(line["left"] for line in paragraph)

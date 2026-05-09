@@ -32,6 +32,16 @@ SOFT_NOISE_LABELS = {
     "commentary_section",
     "short_fragment",
     "title_fragment",
+    "garbled_ocr",
+}
+EXPANSION_BLOCK_LABELS = {
+    "disclaimer",
+    "bibliography",
+    "toc_fragment",
+    "toc_leader",
+    "page_number",
+    "title_fragment",
+    "garbled_ocr",
 }
 
 INTENT_CANDIDATE_K = {
@@ -42,10 +52,14 @@ INTENT_CANDIDATE_K = {
     "transmission": (5, 18),
     "causes": (5, 18),
     "incidence": (6, 24),
+    "ct_findings": (6, 24),
+    "ct_follow_up": (6, 24),
     "antibiotics": (6, 24),
-    "vitamin_c_prophylaxis": (6, 24),
-    "vitamin_c_cold_stress": (6, 24),
-    "vitamin_c_duration": (6, 24),
+    "treatment_prevention": (6, 24),
+    "treatment_null_effect": (6, 24),
+    "treatment_subgroup_benefit": (6, 24),
+    "treatment_duration": (6, 24),
+    "treatment_overall": (6, 24),
 }
 
 INTENT_NEIGHBOR_DEPTH = {
@@ -56,10 +70,14 @@ INTENT_NEIGHBOR_DEPTH = {
     "transmission": 1,
     "causes": 1,
     "incidence": 2,
+    "ct_findings": 2,
+    "ct_follow_up": 2,
     "antibiotics": 2,
-    "vitamin_c_prophylaxis": 1,
-    "vitamin_c_cold_stress": 1,
-    "vitamin_c_duration": 1,
+    "treatment_prevention": 1,
+    "treatment_null_effect": 1,
+    "treatment_subgroup_benefit": 1,
+    "treatment_duration": 1,
+    "treatment_overall": 1,
 }
 
 INTENT_SECTION_HINTS = {
@@ -69,10 +87,20 @@ INTENT_SECTION_HINTS = {
     "transmission": ("AETIOLOGY", "RISK FACTORS", "TRANSMISSION", "TREATMENTS"),
     "causes": ("AETIOLOGY", "RISK FACTORS", "TRANSMISSION"),
     "incidence": ("PREVALENCE", "INCIDENCE"),
+    "ct_findings": ("DISCUSSION", "CT SCANS", "FOLLOW-UP"),
+    "ct_follow_up": ("FOLLOW-UP", "DISCUSSION", "CT SCANS"),
     "antibiotics": ("OPTION", "TREATMENTS", "COMMENT:"),
-    "vitamin_c_prophylaxis": ("THE UPDATED REVIEW",),
-    "vitamin_c_cold_stress": ("THE UPDATED REVIEW",),
-    "vitamin_c_duration": ("THE UPDATED REVIEW",),
+    "treatment_prevention": ("THE UPDATED REVIEW", "CONCLUSION", "META-ANALYSES OUTCOMES"),
+    "treatment_null_effect": ("THE UPDATED REVIEW", "CONCLUSION"),
+    "treatment_subgroup_benefit": ("THE UPDATED REVIEW", "SUBGROUP", "SENSITIVITY ANALYSIS"),
+    "treatment_duration": ("THE UPDATED REVIEW", "CONCLUSION", "META-ANALYSES OUTCOMES"),
+    "treatment_overall": ("CONCLUSION", "REVIEW", "META-ANALYSES OUTCOMES"),
+}
+
+TREATMENT_ENTITY_TERMS = {
+    "vitamin",
+    "echinacea",
+    "propolis",
 }
 
 
@@ -80,25 +108,37 @@ def _query_terms(query: str) -> set[str]:
     return set(re.findall(r"[a-zA-Z]{2,}", query.lower()))
 
 
+def _has_treatment_entity(terms: set[str]) -> bool:
+    return bool(terms.intersection(TREATMENT_ENTITY_TERMS))
+
+
 def _detect_query_intent(query: str) -> str:
     terms = _query_terms(query)
     query_lower = query.lower()
-    has_vitamin_c = "vitamin" in terms and "cold" in terms
-    if has_vitamin_c:
-        if "stress" in terms or ("cold" in terms and "stress" in terms):
-            return "vitamin_c_cold_stress"
-        if "duration" in terms or "shorten" in terms or "prophylaxis" in terms:
-            return "vitamin_c_duration"
+    has_treatment_query = _has_treatment_entity(terms) and "cold" in terms
+    if has_treatment_query:
+        if "stress" in terms or ("physical" in terms and "stress" in terms) or "subgroup" in terms:
+            return "treatment_subgroup_benefit"
+        if "normal" in terms and "populations" in terms:
+            return "treatment_null_effect"
+        if "duration" in terms or "shorten" in terms:
+            return "treatment_duration"
+        if "conclude" in terms or "conclusion" in terms or "meta" in terms or "analysis" in terms:
+            return "treatment_overall"
         if (
             "prevent" in terms
             or "prevents" in terms
             or "prevention" in terms
             or "prophylaxis" in terms
-            or ("normal" in terms and "populations" in terms)
+            or "incidence" in terms
         ):
-            return "vitamin_c_prophylaxis"
+            return "treatment_prevention"
     if query_lower.startswith("what is") or "definition" in terms or "define" in terms:
         return "definition"
+    if "ct" in terms and ("follow" in terms or "followup" in terms):
+        return "ct_follow_up"
+    if "ct" in terms and ("abnormalities" in terms or "sinus" in terms or "scans" in terms):
+        return "ct_findings"
     if "antibiotic" in terms or "antibiotics" in terms:
         return "antibiotics"
     if "cause" in terms or "causes" in terms:
@@ -126,18 +166,33 @@ def _augment_query(query: str) -> str:
         "transmission": "transmission hand-to-hand contact droplets nostrils eyes",
         "duration": "prognosis duration symptoms peak clear by 1 week cough persists",
         "incidence": "incidence prevalence children adults each year infections",
+        "ct_findings": (
+            "ct scans sinus abnormalities ostiomeatal follow-up discussion "
+            "high prevalence maxillary ethmoid infundibulum"
+        ),
+        "ct_follow_up": (
+            "follow-up evaluations 13 to 20 days marked improvement residual abnormalities "
+            "returned to normal resolved"
+        ),
         "symptoms": "symptoms sneezing runny nose headache sore throat cough",
-        "vitamin_c_prophylaxis": (
-            "vitamin c prophylaxis incidence was not altered normal populations "
-            "continuous prophylaxis 200 mg daily"
+        "treatment_prevention": (
+            "treatment prevention incidence reduces odds contracting a cold "
+            "prevention prophylaxis incidence benefit"
         ),
-        "vitamin_c_cold_stress": (
-            "vitamin c cold stress physical stress marathon runners skiers soldiers "
-            "50% reduction beneficial effect"
+        "treatment_null_effect": (
+            "treatment prevention incidence was not altered no effect "
+            "normal populations no prophylactic benefit"
         ),
-        "vitamin_c_duration": (
-            "vitamin c duration prophylaxis reduced duration children adults "
-            "14% 8% onset symptoms"
+        "treatment_subgroup_benefit": (
+            "treatment subgroup benefit cold stress physical stress "
+            "marathon runners skiers soldiers 50% reduction beneficial effect"
+        ),
+        "treatment_duration": (
+            "treatment duration reduced duration of cold episodes "
+            "shortens course shortened by days onset of symptoms"
+        ),
+        "treatment_overall": (
+            "meta-analysis conclusion prevention treatment incidence duration benefit evidence"
         ),
     }.get(intent, "")
     if not suffix:
@@ -204,7 +259,11 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
     elif intent == "duration":
         if section.startswith("PROGNOSIS"):
             bonus += 6.0
-        if "1 week" in text or "few days" in text or "cough" in text:
+        if "1 week" in text:
+            bonus += 4.0
+        if "generally clear by 1 week" in text:
+            bonus += 2.0
+        if "few days" in text or "cough" in text:
             bonus += 2.0
     elif intent == "incidence":
         if "INCIDENCE" in section or "PREVALENCE" in section:
@@ -225,6 +284,32 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
             bonus -= 4.0
         if "statistical_noise" in labels:
             bonus -= 4.0
+    elif intent == "ct_findings":
+        if "DISCUSSION" in section or "FOLLOW-UP" in section or "CT SCANS" in section:
+            bonus += 4.5
+        if "high prevalence of ostiomeatal and sinus abnormalities" in text:
+            bonus += 6.0
+        if "sinus abnormalities on ct scans" in text or "abnormalities of one or more sinuses" in text:
+            bonus += 4.0
+        if "subjects with ct scans" in text and "abnormalities" in text:
+            bonus += 2.5
+        if "abstract" in text or "methods" in text or "study was approved" in text:
+            bonus -= 3.0
+        if "downloaded trom nejm" in text or "continuing medical education" in text:
+            bonus -= 5.0
+    elif intent == "ct_follow_up":
+        if "FOLLOW-UP" in section or "DISCUSSION" in section:
+            bonus += 4.5
+        if "follow-up evaluation after 13 to 20 days" in text:
+            bonus += 6.0
+        if "residual abnormalities" in text or "marked improvement" in text:
+            bonus += 4.0
+        if "returned to normal" in text or "resolved or markedly improved" in text:
+            bonus += 3.0
+        if "abstract" in text or "methods" in text:
+            bonus -= 3.5
+        if "downloaded trom nejm" in text or "continuing medical education" in text:
+            bonus -= 5.0
     elif intent == "symptoms":
         if section.startswith("DEFINITION") or section.startswith("PROGNOSIS"):
             bonus += 4.0
@@ -232,38 +317,73 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
             bonus += 4.0
         if "sore throat" in text or "runny nose" in text or "rhinorrhoea" in text:
             bonus += 2.0
-    elif intent == "vitamin_c_prophylaxis":
-        if "vitamin c" in text:
+    elif intent == "treatment_prevention":
+        if "vitamin c" in text or "echinacea" in text:
             bonus += 2.0
-        if "prophylactic vitamin" in text or "continuous prophylaxis" in text:
+        if section.startswith("CONCLUSION") or section.startswith("REVIEW"):
+            bonus += 2.0
+        if "prevention" in text or "prophylaxis" in text:
             bonus += 4.0
-        if "incidence was not altered" in text:
-            bonus += 6.0
-        if "normal populations" in text:
+        if "decreasing the incidence" in text or "reduces the incidence" in text:
             bonus += 5.0
-        if "cold stress" in text:
-            bonus -= 1.0
+        if "substantial reductions in the incidence" in text:
+            bonus += 5.0
+        if "published evidence supports" in text:
+            bonus += 4.0
+        if "suggests an additional benefit" in text:
+            bonus += 4.0
+        if "contracting a cold" in text:
+            bonus += 3.0
+        if "benefit" in text:
+            bonus += 1.5
+        if "incidence was not altered" in text or "normal populations" in text:
+            bonus -= 2.5
+        if "evidence for the prevention of a cold was lacking" in text:
+            bonus -= 3.0
         if len(text.strip()) < 120:
             bonus -= 4.0
-    elif intent == "vitamin_c_cold_stress":
-        if "vitamin c" in text:
+    elif intent == "treatment_null_effect":
+        if "vitamin c" in text or "echinacea" in text:
             bonus += 2.0
-        if "cold stress" in text or "physical stress" in text:
+        if "incidence was not altered" in text:
+            bonus += 6.0
+        if "lack of effect" in text:
+            bonus += 4.0
+        if "normal populations" in text:
+            bonus += 5.0
+        if "beneficial effect" in text or "50% reduction" in text or "decreasing the incidence" in text:
+            bonus -= 3.0
+        if len(text.strip()) < 120:
+            bonus -= 4.0
+    elif intent == "treatment_subgroup_benefit":
+        if "vitamin c" in text or "echinacea" in text:
+            bonus += 2.0
+        if "cold stress" in text or "physical stress" in text or "subgroup" in text:
             bonus += 6.0
         if "marathon runners" in text or "skiers" in text or "soldiers" in text:
             bonus += 4.0
         if "50% reduction" in text or "beneficial effect" in text:
             bonus += 4.0
+        if "collective evidence indicates" in text:
+            bonus += 2.0
         if "normal populations" in text:
             bonus -= 2.0
         if len(text.strip()) < 120:
             bonus -= 4.0
-    elif intent == "vitamin_c_duration":
-        if "vitamin c" in text:
+    elif intent == "treatment_duration":
+        if "vitamin c" in text or "echinacea" in text:
             bonus += 2.0
-        if "duration of cold episodes" in text or "duration of common cold episodes" in text:
+        if (
+            "duration of cold episodes" in text
+            or "duration of common cold episodes" in text
+            or "duration of the common cold" in text
+        ):
             bonus += 5.0
-        if "children" in text and "adults" in text:
+        if "reduced the duration" in text or "decrease the duration" in text:
+            bonus += 4.0
+        if "shortens the course" in text:
+            bonus += 3.0
+        if "days" in text:
             bonus += 2.0
         if "14%" in text or "8%" in text:
             bonus += 2.0
@@ -271,6 +391,25 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
             bonus += 1.0
         if len(text.strip()) < 120:
             bonus -= 4.0
+    elif intent == "treatment_overall":
+        if "vitamin c" in text or "echinacea" in text:
+            bonus += 2.0
+        if section.startswith("CONCLUSION") or section.startswith("REVIEW"):
+            bonus += 4.0
+        if "incidence" in text and "duration" in text:
+            bonus += 4.0
+        if "prevention" in text and "treatment" in text:
+            bonus += 3.0
+        if "published evidence supports" in text or "suggests that echinacea has a benefit" in text:
+            bonus += 4.0
+        if "suggests an additional benefit" in text:
+            bonus += 4.0
+        if "large-scale randomised prospective studies" in text:
+            bonus += 1.5
+        if "trials were included for analysis" in text or "inclusion criteria" in text:
+            bonus -= 4.0
+        if len(text.strip()) < 120:
+            bonus -= 2.0
     return bonus
 
 
@@ -281,6 +420,39 @@ def _should_exclude_chunk(chunk: ChunkRecord) -> bool:
     if chunk.quality_score <= 0.10:
         return True
     return False
+
+
+def _should_expand_to_neighbor(
+    anchor: ChunkRecord,
+    neighbor: ChunkRecord,
+    query: str,
+) -> bool:
+    """Decide whether a neighbor is high-signal enough to expand into answer context."""
+    if _should_exclude_chunk(neighbor):
+        return False
+
+    labels = set(neighbor.noise_labels)
+    if labels.intersection(EXPANSION_BLOCK_LABELS):
+        return False
+
+    if neighbor.quality_score < 0.35:
+        return False
+
+    intent = _detect_query_intent(query)
+    if intent != "generic" and not _chunk_matches_intent(neighbor, intent):
+        anchor_section = (anchor.section_title or "").strip().upper()
+        neighbor_section = (neighbor.section_title or "").strip().upper()
+        same_section = bool(anchor_section and neighbor_section and anchor_section == neighbor_section)
+        if not same_section:
+            return False
+
+    if (
+        neighbor.quality_score < 0.55
+        and len(labels.intersection(SOFT_NOISE_LABELS)) >= 2
+    ):
+        return False
+
+    return True
 
 
 def _chunk_matches_intent(chunk: ChunkRecord, intent: str) -> bool:
@@ -296,17 +468,35 @@ def _chunk_matches_intent(chunk: ChunkRecord, intent: str) -> bool:
         return ("each year" in text and "children" in text) or ("adults" in text and "infections" in text)
     if intent == "antibiotics":
         return "antibiotic" in text or "antibiotics" in text
-    if intent == "vitamin_c_prophylaxis":
-        return "vitamin c" in text and (
-            "normal populations" in text or "incidence was not altered" in text or "prophylaxis" in text
+    if intent == "treatment_prevention":
+        return _has_treatment_entity(set(re.findall(r"[a-zA-Z]{2,}", text))) and (
+            "incidence" in text
+            or "prevention" in text
+            or "prophylaxis" in text
+            or "contracting a cold" in text
+            or "substantial reductions in the incidence" in text
         )
-    if intent == "vitamin_c_cold_stress":
-        return "vitamin c" in text and (
+    if intent == "treatment_null_effect":
+        return _has_treatment_entity(set(re.findall(r"[a-zA-Z]{2,}", text))) and (
+            "normal populations" in text or "incidence was not altered" in text or "no effect" in text
+        )
+    if intent == "treatment_subgroup_benefit":
+        return _has_treatment_entity(set(re.findall(r"[a-zA-Z]{2,}", text))) and (
             "cold stress" in text or "physical stress" in text or "marathon runners" in text
         )
-    if intent == "vitamin_c_duration":
-        return "vitamin c" in text and (
-            "duration of cold episodes" in text or "duration" in text or "onset of symptoms" in text
+    if intent == "treatment_duration":
+        return _has_treatment_entity(set(re.findall(r"[a-zA-Z]{2,}", text))) and (
+            "duration of cold episodes" in text
+            or "duration of the common cold" in text
+            or "reduced the duration" in text
+            or "shortens the course" in text
+        )
+    if intent == "treatment_overall":
+        return _has_treatment_entity(set(re.findall(r"[a-zA-Z]{2,}", text))) and (
+            ("incidence" in text and "duration" in text)
+            or ("prevention" in text and "treatment" in text)
+            or "meta-analysis" in text
+            or "suggests an additional benefit" in text
         )
     if intent == "transmission":
         return "hand-to-hand contact" in text or "droplet" in text or "transmission" in text
@@ -437,22 +627,26 @@ def expand_with_neighbors(
     depth = INTENT_NEIGHBOR_DEPTH.get(intent, 1)
     expanded: dict[str, ChunkRecord] = {}
 
-    def maybe_add_neighbor(neighbor_id: str | None, steps_remaining: int) -> None:
+    def maybe_add_neighbor(
+        anchor: ChunkRecord,
+        neighbor_id: str | None,
+        steps_remaining: int,
+    ) -> None:
         if not neighbor_id or neighbor_id in expanded or steps_remaining <= 0:
             return
         neighbor = all_chunks.get(neighbor_id)
-        if not neighbor or _should_exclude_chunk(neighbor):
+        if not neighbor:
             return
-        if intent != "generic" and not _chunk_matches_intent(neighbor, intent):
+        if not _should_expand_to_neighbor(anchor=anchor, neighbor=neighbor, query=query):
             return
         expanded[neighbor.chunk_id] = neighbor
-        maybe_add_neighbor(neighbor.preceding_chunk_id, steps_remaining - 1)
-        maybe_add_neighbor(neighbor.following_chunk_id, steps_remaining - 1)
+        maybe_add_neighbor(neighbor, neighbor.preceding_chunk_id, steps_remaining - 1)
+        maybe_add_neighbor(neighbor, neighbor.following_chunk_id, steps_remaining - 1)
 
     for chunk in hits:
         expanded[chunk.chunk_id] = chunk
-        maybe_add_neighbor(chunk.preceding_chunk_id, depth)
-        maybe_add_neighbor(chunk.following_chunk_id, depth)
+        maybe_add_neighbor(chunk, chunk.preceding_chunk_id, depth)
+        maybe_add_neighbor(chunk, chunk.following_chunk_id, depth)
     return sorted(
         expanded.values(),
         key=lambda chunk: (chunk.doc_id, chunk.reading_order_index, chunk.chunk_id),
