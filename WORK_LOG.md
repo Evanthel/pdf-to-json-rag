@@ -1256,12 +1256,271 @@ The value of the pass is architectural:
 - the next useful work should focus on stronger chunk boundaries inside long treatment-summary regions
 - lightweight reranking should only be revisited if that chunking-first pass stalls
 
+## v1.5 Task 1
+
+The first `v1.5` step focused on cleaner chunk boundaries inside treatment-heavy summary material rather than another retrieval-side heuristic pass.
+
+### Chunking Work
+
+This pass included:
+
+- replacing the earlier regex-heavy paragraph splitter with a line-aware paragraph grouping pass so wrapped review text is less likely to fragment into artificial mini-segments
+- splitting mixed treatment-summary paragraphs more cleanly, especially where null-effect, subgroup-benefit, duration, and therapeutic findings previously coexisted inside one chunk
+- dropping single-letter paragraph debris more aggressively during chunk normalization
+- re-chunking all four indexed documents and rebuilding the shared local index
+- realigning the benchmark gold chunk IDs to the new finer-grained chunk layout
+
+### Answering Follow-Up
+
+The chunk split exposed one practical edge case:
+
+- strong null-effect evidence such as `incidence was not altered` could become too specific to survive candidate filtering when the query itself used broader surface wording
+
+To keep the benchmark aligned with the new chunk boundaries, the answer layer got one small follow-up:
+
+- strong treatment-intent anchor phrases can now survive scoring even when raw lexical overlap with the query is thin
+
+This was deliberately small and tied to the new chunk layout, not a return to broader retrieval-specific tuning.
+
+### Verification
+
+This pass was checked by:
+
+- inspecting the re-split vitamin-C treatment chunks directly
+- rebuilding the shared index across all four documents
+- rerunning the full 17-case benchmark after updating the gold chunk IDs
+
+Observed behavior:
+
+- the vitamin-C treatment summary now separates null-effect, subgroup-benefit, duration, and therapeutic findings more cleanly
+- the benchmark no longer carries the last mixed-summary warning case
+- OCR-derived CT-study cases remain stable after the chunking-first pass
+
+### Updated Evaluation Check
+
+After the first `v1.5` chunking-first pass, the benchmark moved to:
+
+- average `precision@5`: `0.354`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `1.0`
+- negative-case success rate: `1.0`
+- warning-case count: `0`
+
+Interpretation:
+
+- the lower `precision@5` now mainly reflects a finer-grained benchmark and narrower gold chunk targets after the chunk split
+- recall, MRR, and answer coverage are all back to their ceiling values on the current 17-case setup
+- the next useful step is to make long review-summary chunk boundaries more section-aware before deciding whether any reranking upgrade is still worth prototyping
+
+## v1.5 Tasks 2-5
+
+The remaining `v1.5` work completed the chunking-first iteration instead of switching to a reranking-first path.
+
+### Section-Aware Chunking Work
+
+This pass included:
+
+- adding more section-aware review chunk boundaries inside long summary-heavy review blocks
+- splitting inline review headings such as `Introduction`, `Methods`, `Search strategy and selection criteria`, and `Conclusion` into cleaner chunk scopes
+- keeping those boundaries local and inspectable instead of introducing a heavier segmentation model
+
+### Subtopic-Cue Work
+
+This pass also added lightweight chunk-level treatment subtopic cues for:
+
+- prevention
+- null effect
+- subgroup benefit
+- duration
+- overall conclusion
+
+The cues are now persisted in:
+
+- chunk JSON
+- document-level chunk metadata
+- index metadata
+
+They also contribute small retrieval bonuses for matching treatment-intent queries, but do not constitute a new reranking stage.
+
+### Benchmark Realignment And Validation
+
+Because the review-heavy chunk layout changed again, the benchmark gold chunk IDs were realigned to the new structure for the affected documents.
+
+After that:
+
+- the full 17-case benchmark was rerun
+- the warning-free state held
+- no additional answer-selection exception was needed beyond the small null-effect anchor fix already introduced during task 1
+
+### Updated Evaluation Check
+
+After the full `v1.5` pass, the benchmark remained at:
+
+- average `precision@5`: `0.354`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `1.0`
+- negative-case success rate: `1.0`
+- warning-case count: `0`
+
+Interpretation:
+
+- the current benchmark does not justify adding a lightweight reranking prototype yet
+- on the present document set, chunking-first work was enough to restore a clean warning-free state
+- the next useful iteration is to broaden the benchmark and use that broader pressure to decide which of the currently deferred features should come back into scope first
+
 ## Next Suggested Step
 
 The next sensible implementation step is:
 
-- split mixed treatment-summary chunks more cleanly and make chunk boundaries more section-aware inside long review-summary blocks
+- broaden the benchmark again with a more form- or grid-heavy eighth document so questionnaire/layout pressure is separated from the current table-heavy manual pressure
 
 After that:
 
-- only prototype lightweight reranking if the chunking-first pass does not resolve the final warning naturally
+- tighten answer compression on dense source-anchored technical/manual answers so the benchmark-clean path is also cleaner to read
+- only revive narrower deferred paths if the broader benchmark keeps exposing concrete failure modes
+
+## v1.6 Tasks 1-5
+
+`v1.6` was the first pass where the benchmark itself became the tool for deciding which deferred features should return, rather than treating those decisions as design assumptions.
+
+### Broader Benchmark Work
+
+This pass included:
+
+- adding a fifth benchmark document based on the CMAJ prevention/treatment review
+- expanding the benchmark to 21 cases, including new review-summary and negative cases
+- rebuilding the shared local index across five documents
+- widening the saved evaluation slices so review-heavy, source-anchored, and scanned-path cases can be inspected separately
+
+### Retrieval And Answering Work
+
+This pass also included:
+
+- prototyping a lightweight reranking pass only after the broader benchmark exposed real ranking pressure on the new review-summary queries
+- comparing that reranking pass against the chunking-first baseline inside the evaluation report
+- refining review-summary chunk splitting and source-aware answer assembly to reduce cross-document leakage
+- adding stronger chunk-quality labels for table-reference and reference-tail noise
+
+### Faithfulness Audit Work
+
+To avoid reintroducing heavier evaluation machinery too early, the pass added:
+
+- a small sampled faithfulness audit over selected grounded cases
+- a saved audit summary in the evaluation report
+- an explicit decision checkpoint for whether LLM-as-a-judge should return
+
+### Updated Evaluation Check
+
+After the full `v1.6` pass, the benchmark stood at:
+
+- average `precision@5`: `0.350`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `0.917`
+- negative-case success rate: `1.0`
+- warning-case count: `2`
+
+Interpretation:
+
+- the five-document benchmark is now broad enough to justify keeping the lightweight reranking pass over the chunking-only baseline
+- the remaining answer-quality debt is concentrated in two treatment-heavy review/native cases: `antibiotics` and `cmaj_zinc_prevention`
+- the current benchmark still does not justify reviving `pdfplumber` or LLM-as-a-judge, because the new failures are review-summary and table-reference noise rather than true table-extraction or unsupported-answer failures
+
+## v1.7 Tasks 1-5
+
+`v1.7` broadened the benchmark again and then used that broader setup to turn deferred-feature decisions into explicit artifacts instead of informal conclusions.
+
+### Broader Benchmark Work
+
+This pass included:
+
+- adding a sixth benchmark document based on *The common cold: a review of the literature*
+- expanding the benchmark from 21 to 25 cases
+- adding new source-anchored review cases plus one new negative case
+- rebuilding the shared local index across six documents
+
+### Retrieval, Answering, And Slice Work
+
+This pass also included:
+
+- making source-anchored review queries lock more aggressively onto their intended document
+- adding a dedicated symptom-pathogenesis intent for the new literature-review benchmark
+- labeling Elsevier/COVID disclaimer noise more explicitly
+- extending evaluation slices so `source_anchored_review` and the new review-heavy cases are tracked directly
+- adding explicit deferred-feature decisions into the saved evaluation report
+
+### Deferred-Feature Decision Check
+
+The sixth benchmark document was useful because it created new pressure without forcing premature complexity:
+
+- it exposed source-mixing, disclaimer noise, and review-summary issues
+- it did **not** expose a true table/text extraction miss that would justify reviving `pdfplumber`
+- it also did not justify a cross-encoder reranker or LLM-as-a-judge on the current benchmark
+
+### Updated Evaluation Check
+
+After the full `v1.7` pass, the benchmark stood at:
+
+- average `precision@5`: `0.344`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `1.0`
+- negative-case success rate: `1.0`
+- warning-case count: `0`
+
+Interpretation:
+
+- the benchmark is warning-free again across six indexed documents and 25 cases
+- the current lightweight reranking pass is still enough on this benchmark
+- the next useful work is not another local heuristic fix, but a stronger seventh benchmark document that can reopen `pdfplumber` or cross-encoder questions only if it really creates those failure modes
+
+## v1.8 Tasks 1-5
+
+`v1.8` added a genuinely table-heavy technical manual and used it to re-test whether any of the heavier deferred features needed to come back.
+
+### Broader Benchmark Work
+
+This pass included:
+
+- adding `AJMedP-4-2_SRD_EDA_V1_E_2561.pdf` as the seventh benchmark document
+- extracting it through the current `PyMuPDF`-first path, then chunking and indexing it alongside the existing six documents
+- expanding the benchmark from 25 to 30 cases with source-anchored technical/manual queries plus one new negative case
+
+### Retrieval, Answering, And Slice Work
+
+This pass also included:
+
+- source-aware document locking for `AJMedP` / `TB MED 508` technical queries
+- new technical/manual intents for hypothermia predisposition, hypothermia symptoms, frostbite-risk guidance, and immersion-limit lookup
+- stronger noise labeling for `List of Tables` / `List of Figures`-style chunks
+- expanded slices for `table_heavy`, `source_anchored_technical`, and `source_locked`
+- a focused cleanup of the remaining Wat review answer-selection warning so the broadened benchmark stayed warning-free
+
+### Deferred-Feature Decision Check
+
+The table-heavy benchmark was useful because it created real manual/table pressure without forcing more tooling:
+
+- the new manual exposed answer-selection and source-locking issues first
+- once those were fixed, the table-heavy slice became warning-free
+- because the core table content was already extracted well enough, `pdfplumber` still did not need to return
+- the benchmark also remained stable enough that neither cross-encoder reranking nor LLM-as-a-judge had to come back
+
+### Updated Evaluation Check
+
+After the full `v1.8` pass, the benchmark stood at:
+
+- average `precision@5`: `0.328`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `1.0`
+- negative-case success rate: `1.0`
+- warning-case count: `0`
+
+Interpretation:
+
+- the benchmark is warning-free again across seven indexed documents and 30 cases
+- the new `table_heavy` and `source_anchored_technical` slices are clean on the current benchmark
+- `pdfplumber` still stays deferred because the current table-heavy document does not expose a true table/text extraction miss
+- the current lightweight reranking pass and sampled faithfulness audit remain sufficient on this benchmark

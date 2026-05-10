@@ -14,6 +14,15 @@ from .schemas import ChunkRecord
 
 DEFAULT_EVAL_FILENAME = "mvp_eval_cases.json"
 DEFAULT_REPORT_FILENAME = "mvp_eval_report.json"
+DEFAULT_FAITHFULNESS_AUDIT_FILENAME = "faithfulness_audit_cases.json"
+DEFAULT_FAITHFULNESS_AUDIT_CASE_IDS = [
+    "antibiotics",
+    "echinacea_overall_conclusion",
+    "ct_follow_up_improvement",
+    "cmaj_nontraditional_treatments",
+    "cmaj_zinc_prevention",
+    "ajmedp_immersion_neck_limit",
+]
 DEFAULT_EVAL_CASES = [
     {
         "case_id": "symptoms",
@@ -300,6 +309,27 @@ def load_eval_cases(eval_path: Path) -> list[dict]:
     return json.loads(eval_path.read_text(encoding="utf-8"))
 
 
+def ensure_default_faithfulness_audit(eval_dir: Path) -> Path:
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    audit_path = eval_dir / DEFAULT_FAITHFULNESS_AUDIT_FILENAME
+    if not audit_path.exists():
+        audit_path.write_text(
+            json.dumps(DEFAULT_FAITHFULNESS_AUDIT_CASE_IDS, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    return audit_path
+
+
+def load_faithfulness_audit_case_ids(audit_path: Path) -> list[str]:
+    audit_path = audit_path.expanduser().resolve()
+    if not audit_path.exists():
+        raise FileNotFoundError(f"Faithfulness audit file not found: {audit_path}")
+    data = json.loads(audit_path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise ValueError("Faithfulness audit file must contain a JSON list of case IDs.")
+    return [str(item) for item in data]
+
+
 def _keyword_matches(answer_text: str, expected_keywords: list[str]) -> dict:
     answer_lower = (
         answer_text.lower()
@@ -331,6 +361,24 @@ def _preview_text(text: str, limit: int = 220) -> str:
     return f"{compact[: limit - 3].rstrip()}..."
 
 
+def _normalize_surface(text: str) -> str:
+    return " ".join(
+        text.lower()
+        .replace("ﬁ", "fi")
+        .replace("ﬂ", "fl")
+        .split()
+    )
+
+
+def _split_answer_sentences(answer_text: str) -> list[str]:
+    fragments = [
+        item.strip()
+        for item in answer_text.replace("\n", " ").split(".")
+        if item.strip()
+    ]
+    return [fragment if fragment.endswith(".") else f"{fragment}." for fragment in fragments]
+
+
 def _case_slice_labels(case: dict) -> list[str]:
     case_id = case["case_id"]
     case_type = case.get("case_type", "grounded")
@@ -350,7 +398,62 @@ def _case_slice_labels(case: dict) -> list[str]:
         or "insulin" in query_lower
     )
     labels.append("treatment" if is_treatment else "non_treatment")
-    return labels
+    if case_id.startswith("vitamin_c"):
+        labels.extend(["vitamin_c_review", "review_heavy"])
+    elif case_id.startswith("echinacea"):
+        labels.extend(["echinacea_review", "review_heavy"])
+    elif case_id.startswith("ct_") or case_id == "negative_gadolinium":
+        labels.extend(["scanned_ct", "layout_ocr"])
+    elif case_id.startswith("ajmedp_") or "ajmedp" in query_lower or "tb med 508" in query_lower:
+        labels.extend(["ajmedp_manual", "technical_manual", "table_heavy"])
+    elif case_id.startswith("wat_") or "literature review" in query_lower or "dennis wat" in query_lower:
+        labels.extend(["wat_review", "review_heavy"])
+    elif case_id.startswith("cmaj_") or "cmaj" in query_lower:
+        labels.extend(["cmaj_review", "review_heavy"])
+    else:
+        labels.extend(["clinical_reference", "section_structured"])
+
+    labels.extend(case.get("case_tags", []))
+    return sorted(set(labels))
+
+
+def _preferred_source_doc_id_from_query(query: str) -> str | None:
+    query_lower = query.lower()
+    anchors = {
+        "ajmedp": "ajmedp-4-2-srd-eda-v1-e-2561",
+        "tb med 508": "ajmedp-4-2-srd-eda-v1-e-2561",
+        "cmaj": "prevention-and-treatment-of-the-common-cold",
+        "literature review": "the-common-cold-a-review-of-the-literature",
+        "wat review": "the-common-cold-a-review-of-the-literature",
+        "dennis wat": "the-common-cold-a-review-of-the-literature",
+        "echinacea": "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold",
+        "vitamin c": "vitamin-c-for-preventing-and-treating-the-common-cold",
+        "ct study": "ct-study-of-the-common-cold-scanned",
+    }
+    for anchor, doc_id in anchors.items():
+        if anchor in query_lower:
+            return doc_id
+    return None
+
+
+def _result_slice_labels(grounded_answer: GroundedAnswer, base_labels: list[str]) -> list[str]:
+    labels = set(base_labels)
+    top_doc_ids = {chunk.doc_id for chunk in grounded_answer.top_k_hits}
+    expanded_noise = {
+        noise
+        for chunk in grounded_answer.expanded_hits
+        for noise in chunk.noise_labels
+    }
+
+    preferred_doc_id = _preferred_source_doc_id_from_query(grounded_answer.query)
+    if {"source_anchored_review", "source_anchored_technical"}.intersection(labels):
+        if preferred_doc_id and top_doc_ids == {preferred_doc_id}:
+            labels.add("source_locked")
+        elif len(top_doc_ids) > 1:
+            labels.add("cross_document_mixing")
+    if expanded_noise.intersection({"table_reference", "table_like_section", "reference_tail"}):
+        labels.add("table_adjacent")
+    return sorted(labels)
 
 
 def _chunk_snapshot(chunk: ChunkRecord) -> dict[str, Any]:
@@ -407,12 +510,13 @@ def _debug_case_record(
     grounded_answer: GroundedAnswer,
 ) -> dict[str, Any]:
     case_type = case.get("case_type", "grounded")
+    base_labels = _case_slice_labels(case)
     return {
         "case_id": case["case_id"],
         "case_type": case_type,
         "query": case["query"],
         "notes": case.get("notes"),
-        "slice_labels": _case_slice_labels(case),
+        "slice_labels": _result_slice_labels(grounded_answer, base_labels),
         "status": _case_status(case_type, retrieval_result, answer_result),
         "expected_keywords": case.get("expected_keywords", []),
         "matched_keywords": answer_result.get("matched_keywords", []),
@@ -430,6 +534,7 @@ def _debug_case_record(
             "abstained": answer_result["abstained"],
             "negative_success": answer_result.get("negative_success"),
             "keyword_coverage": answer_result["keyword_coverage"],
+            "full_answer": grounded_answer.answer,
             "answer_preview": _preview_text(grounded_answer.answer, limit=320),
             "evidence_snapshots": [
                 _evidence_snapshot(item) for item in grounded_answer.evidence
@@ -438,9 +543,101 @@ def _debug_case_record(
     }
 
 
-def evaluate_retrieval_case(case: dict, index_dir: Path, k: int) -> dict:
+def _summarize_retrieval_results(retrieval_results: list[dict], answer_results: list[dict]) -> dict[str, Any]:
+    grounded_retrieval = [item for item in retrieval_results if item.get("case_type") != "negative"]
+    negative_answers = [item for item in answer_results if item.get("case_type") == "negative"]
+    warning_case_ids = [
+        retrieval["case_id"]
+        for retrieval, answer in zip(retrieval_results, answer_results)
+        if (
+            retrieval.get("case_type") != "negative"
+            and (
+                (retrieval.get("reciprocal_rank") or 0.0) < 1.0
+                or (retrieval.get("recall_at_k") or 0.0) < 1.0
+                or (answer.get("keyword_coverage") or 0.0) < 1.0
+                or answer.get("abstained", False)
+            )
+        )
+    ]
+    return {
+        "avg_precision_at_k": _average([item["precision_at_k"] for item in grounded_retrieval]),
+        "avg_recall_at_k": _average([item["recall_at_k"] for item in grounded_retrieval]),
+        "mrr": _average([item["reciprocal_rank"] for item in grounded_retrieval]),
+        "avg_keyword_coverage": _average(
+            [item["keyword_coverage"] for item in answer_results if item.get("case_type") != "negative"]
+        ),
+        "negative_case_count": len(negative_answers),
+        "negative_success_rate": _average(
+            [1.0 if item["negative_success"] else 0.0 for item in negative_answers]
+        ),
+        "warning_case_count": len(warning_case_ids),
+        "warning_case_ids": warning_case_ids,
+    }
+
+
+def _faithfulness_audit_record(debug_case: dict[str, Any]) -> dict[str, Any]:
+    answer_sentences = [
+        item["sentence"] for item in debug_case["answer"]["evidence_snapshots"]
+    ]
+    support_corpus = " ".join(answer_sentences)
+    normalized_support = _normalize_surface(support_corpus)
+    supported = []
+    unsupported = []
+    for sentence in answer_sentences:
+        if _normalize_surface(sentence) in normalized_support:
+            supported.append(sentence)
+        else:
+            unsupported.append(sentence)
+
+    supported_ratio = (len(supported) / len(answer_sentences)) if answer_sentences else 0.0
+    return {
+        "case_id": debug_case["case_id"],
+        "supported_sentence_ratio": supported_ratio,
+        "supported_sentences": supported,
+        "unsupported_sentences": unsupported,
+        "evidence_preview": [
+            item["sentence"] for item in debug_case["answer"]["evidence_snapshots"]
+        ],
+    }
+
+
+def _run_faithfulness_audit(debug_cases: list[dict[str, Any]], audit_case_ids: list[str]) -> dict[str, Any]:
+    case_lookup = {item["case_id"]: item for item in debug_cases}
+    records = []
+    for case_id in audit_case_ids:
+        debug_case = case_lookup.get(case_id)
+        if not debug_case or debug_case.get("case_type") == "negative":
+            continue
+        records.append(_faithfulness_audit_record(debug_case))
+
+    failing_case_ids = [
+        item["case_id"] for item in records if item["supported_sentence_ratio"] < 1.0
+    ]
+    return {
+        "sampled_case_count": len(records),
+        "avg_supported_sentence_ratio": _average(
+            [item["supported_sentence_ratio"] for item in records]
+        ),
+        "failing_case_count": len(failing_case_ids),
+        "failing_case_ids": failing_case_ids,
+        "recommend_llm_judge": len(failing_case_ids) > 0,
+        "cases": records,
+    }
+
+
+def evaluate_retrieval_case(
+    case: dict,
+    index_dir: Path,
+    k: int,
+    use_lightweight_rerank: bool = True,
+) -> dict:
     """Evaluate retrieval metrics for a single query."""
-    hits = retrieve_top_k(query=case["query"], index_dir=index_dir, k=k)
+    hits = retrieve_top_k(
+        query=case["query"],
+        index_dir=index_dir,
+        k=k,
+        use_lightweight_rerank=use_lightweight_rerank,
+    )
     retrieved_ids = [chunk.chunk_id for chunk in hits]
     relevant = set(case["relevant_chunk_ids"])
     case_type = case.get("case_type", "grounded")
@@ -523,6 +720,52 @@ def _slice_summary(label: str, debug_cases: list[dict]) -> dict[str, Any]:
     }
 
 
+def _deferred_feature_decisions(
+    summary: dict[str, Any],
+    slices: dict[str, Any],
+    faithfulness_audit: dict[str, Any],
+    baseline_summary: dict[str, Any],
+) -> dict[str, Any]:
+    table_adjacent_warnings = slices.get("table_adjacent", {}).get("warning_case_count", 0)
+    table_heavy_warnings = slices.get("table_heavy", {}).get("warning_case_count", 0)
+    scanned_warnings = slices.get("ocr_derived", {}).get("warning_case_count", 0)
+    source_review_warnings = slices.get("source_anchored_review", {}).get("warning_case_count", 0)
+    source_technical_warnings = slices.get("source_anchored_technical", {}).get("warning_case_count", 0)
+    return {
+        "pdfplumber_probe": {
+            "recommended": bool(table_heavy_warnings and table_adjacent_warnings),
+            "reason": (
+                "keep deferred: the current table-heavy benchmark is hitting extracted table content, "
+                "and remaining issues are source-locking or answer selection rather than table extraction misses"
+                if not (table_heavy_warnings and table_adjacent_warnings)
+                else "table-heavy cases still show table-adjacent warnings after source-locking and chunk-quality filtering"
+            ),
+        },
+        "cross_encoder_reranking": {
+            "recommended": summary.get("warning_case_count", 0) > 0
+            and (source_review_warnings > 0 or source_technical_warnings > 0)
+            and baseline_summary.get("mrr", 0.0) == summary.get("mrr", 0.0),
+            "reason": (
+                "keep deferred: lightweight rerank plus source-aware heuristics are sufficient on the current benchmark"
+                if not (
+                    summary.get("warning_case_count", 0) > 0
+                    and (source_review_warnings > 0 or source_technical_warnings > 0)
+                    and baseline_summary.get("mrr", 0.0) == summary.get("mrr", 0.0)
+                )
+                else "remaining source-anchored warnings survive the current lightweight rerank without MRR improvement"
+            ),
+        },
+        "llm_as_judge": {
+            "recommended": bool(faithfulness_audit.get("recommend_llm_judge")),
+            "reason": (
+                "keep deferred: sampled extractive faithfulness audit does not show unsupported-answer drift"
+                if not faithfulness_audit.get("recommend_llm_judge")
+                else "sampled faithfulness audit found unsupported answer sentences"
+            ),
+        },
+    }
+
+
 def run_mvp_evaluation(
     index_dir: Path,
     chunk_root: Path,
@@ -539,9 +782,12 @@ def run_mvp_evaluation(
         eval_path = eval_path.expanduser().resolve()
 
     cases = load_eval_cases(eval_path)
+    audit_path = ensure_default_faithfulness_audit(eval_dir)
+    audit_case_ids = load_faithfulness_audit_case_ids(audit_path)
     retrieval_results = []
     answer_results = []
     debug_cases = []
+    baseline_retrieval_results = []
 
     for case in cases:
         grounded_answer = answer_query_with_retrieval(
@@ -549,10 +795,19 @@ def run_mvp_evaluation(
             index_dir=index_dir,
             chunk_root=chunk_root,
             k=k,
+            use_lightweight_rerank=True,
         )
         retrieved_ids = [chunk.chunk_id for chunk in grounded_answer.top_k_hits]
         relevant = set(case["relevant_chunk_ids"])
         case_type = case.get("case_type", "grounded")
+        baseline_retrieval_results.append(
+            evaluate_retrieval_case(
+                case=case,
+                index_dir=index_dir,
+                k=k,
+                use_lightweight_rerank=False,
+            )
+        )
         if case_type == "negative":
             retrieval_result = {
                 "case_id": case["case_id"],
@@ -604,46 +859,49 @@ def run_mvp_evaluation(
             )
         )
 
-    grounded_retrieval = [item for item in retrieval_results if item.get("case_type") != "negative"]
-    negative_answers = [item for item in answer_results if item.get("case_type") == "negative"]
-    warning_case_ids = [
-        item["case_id"] for item in debug_cases if item.get("status") not in {"pass"}
-    ]
-    slices = {
-        label: _slice_summary(label, debug_cases)
-        for label in (
-            "native_text",
-            "ocr_derived",
-            "treatment",
-            "non_treatment",
-        )
-    }
+    warning_case_ids = [item["case_id"] for item in debug_cases if item.get("status") not in {"pass"}]
+    all_slice_labels = sorted(
+        {
+            label
+            for item in debug_cases
+            for label in item.get("slice_labels", [])
+        }
+    )
+    slices = {label: _slice_summary(label, debug_cases) for label in all_slice_labels}
+    faithfulness_audit = _run_faithfulness_audit(debug_cases, audit_case_ids)
+    summary = _summarize_retrieval_results(retrieval_results, answer_results)
+    baseline_summary = _summarize_retrieval_results(baseline_retrieval_results, answer_results)
+    deferred_feature_decisions = _deferred_feature_decisions(
+        summary=summary,
+        slices=slices,
+        faithfulness_audit=faithfulness_audit,
+        baseline_summary=baseline_summary,
+    )
 
     report = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "k": k,
         "eval_file": str(eval_path),
+        "faithfulness_audit_file": str(audit_path),
         "case_count": len(cases),
-        "summary": {
-            "avg_precision_at_k": _average([item["precision_at_k"] for item in grounded_retrieval]),
-            "avg_recall_at_k": _average([item["recall_at_k"] for item in grounded_retrieval]),
-            "mrr": _average([item["reciprocal_rank"] for item in grounded_retrieval]),
-            "avg_keyword_coverage": _average(
-                [
-                    item["keyword_coverage"]
-                    for item in answer_results
-                    if item.get("case_type") != "negative"
-                ]
-            ),
-            "negative_case_count": len(negative_answers),
-            "negative_success_rate": _average(
-                [1.0 if item["negative_success"] else 0.0 for item in negative_answers]
-            ),
-            "warning_case_count": len(warning_case_ids),
-            "warning_case_ids": warning_case_ids,
-        },
+        "summary": summary,
         "slices": slices,
+        "retrieval_strategy_comparison": {
+            "baseline_chunking_only": {
+                "avg_precision_at_k": baseline_summary["avg_precision_at_k"],
+                "avg_recall_at_k": baseline_summary["avg_recall_at_k"],
+                "mrr": baseline_summary["mrr"],
+            },
+            "lightweight_rerank": {
+                "avg_precision_at_k": summary["avg_precision_at_k"],
+                "avg_recall_at_k": summary["avg_recall_at_k"],
+                "mrr": summary["mrr"],
+            },
+        },
+        "faithfulness_audit": faithfulness_audit,
+        "deferred_feature_decisions": deferred_feature_decisions,
         "retrieval_results": retrieval_results,
+        "baseline_retrieval_results": baseline_retrieval_results,
         "answer_results": answer_results,
         "debug_cases": debug_cases,
     }

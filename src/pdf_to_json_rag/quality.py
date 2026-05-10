@@ -30,12 +30,17 @@ TOC_NOISE_HINTS = (
     "what are the effects of treatments for common cold",
     "to be covered in future updates",
     "covered elsewhere in clinical evidence",
+    "list of tables",
+    "list of figures",
 )
 
 DISCLAIMER_NOISE_HINTS = (
     "the information contained in this publication is intended for medical professionals",
     "readers should be aware",
     "to the fullest extent permitted by law",
+    "covid-19 resource centre",
+    "elsevier hereby grants permission",
+    "publicly funded repositories",
 )
 
 BIBLIOGRAPHY_NOISE_HINTS = (
@@ -47,11 +52,26 @@ BIBLIOGRAPHY_NOISE_HINTS = (
     "competing interests:",
     "correspondence should be addressed",
 )
+TABLE_REFERENCE_HINTS = (
+    "summarized details of these interventions can be found in table",
+    "preventive therapies are summarized in table",
+    "the traditional pharmacologic treatments of the common cold are summarized in table",
+    "alternative and nonpharmacologic treatments of the common cold are summarized in table",
+    "table 1 (part",
+    "table 2 (part",
+    "table 3:",
+    "table 3-",
+    "table 4-",
+)
 
 NOISY_SECTION_RE = re.compile(r"^(P\s*=|RR\b|Population\b|Ref\b|Comment:|Very low\b|Low\b)")
 TOC_LEADER_RE = re.compile(r"\.\s*\.\s*\.\s*\.")
 PAGE_NUMBER_ONLY_RE = re.compile(r"^\d+$")
 GARBLED_OCR_SECTION_RE = re.compile(r"^[A-Z][A-Z\s\-]{0,20}$")
+REFERENCE_TAIL_RE = re.compile(
+    r"^[A-Z][A-Za-zÀ-ÿ'’\-]+(?:\s+[A-Z][A-Za-zÀ-ÿ'’\-]+)?\s+[A-Z],.*et al\.",
+    re.IGNORECASE,
+)
 
 
 def classify_chunk_quality(
@@ -79,10 +99,16 @@ def classify_chunk_quality(
     if section.startswith("COMMENT:"):
         labels.add("commentary_section")
 
-    if "bmj publishing group" in text_lower or "all rights reserved" in text_lower:
+    if (
+        "bmj publishing group" in text_lower
+        or "all rights reserved" in text_lower
+        or "www.elsevier.com/locate/" in text_lower
+    ):
         labels.add("boilerplate")
     if any(hint in text_lower for hint in BIBLIOGRAPHY_NOISE_HINTS):
         labels.add("bibliography")
+    if any(hint in text_lower for hint in TABLE_REFERENCE_HINTS):
+        labels.add("table_reference")
     if any(hint in text_lower for hint in STATISTICAL_NOISE_HINTS):
         labels.add("statistical_noise")
     if any(hint in text_lower for hint in TOC_NOISE_HINTS):
@@ -91,6 +117,9 @@ def classify_chunk_quality(
         labels.add("disclaimer")
     if TOC_LEADER_RE.search(text):
         labels.add("toc_leader")
+    if "list of tables" in normalized or "list of figures" in normalized:
+        labels.add("toc_fragment")
+        labels.add("table_reference")
     if PAGE_NUMBER_ONLY_RE.match(normalized):
         labels.add("page_number")
     if (
@@ -103,11 +132,15 @@ def classify_chunk_quality(
         labels.add("title_fragment")
     if len(normalized) < 25:
         labels.add("short_fragment")
+    if REFERENCE_TAIL_RE.match(text.strip()):
+        labels.add("reference_tail")
 
     score = 1.0
     penalty_map = {
         "disclaimer": 0.45,
         "bibliography": 0.30,
+        "reference_tail": 0.30,
+        "table_reference": 0.30,
         "toc_fragment": 0.35,
         "toc_leader": 0.25,
         "noisy_section": 0.20,

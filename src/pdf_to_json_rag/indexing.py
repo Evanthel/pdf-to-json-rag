@@ -112,6 +112,7 @@ def _chunk_metadata(chunk: ChunkRecord) -> dict[str, str | int | bool | None]:
         "language": chunk.language,
         "extraction_method": chunk.extraction_method,
         "ocr_used": chunk.ocr_used,
+        "subtopic_cues": "|".join(chunk.subtopic_cues) if chunk.subtopic_cues else None,
         "noise_labels": "|".join(chunk.noise_labels) if chunk.noise_labels else None,
         "quality_score": chunk.quality_score,
     }

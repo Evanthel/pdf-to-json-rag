@@ -41,6 +41,82 @@ OCR_NOISE_PREFIXES = (
     "downloaded from",
 )
 OCR_GARBLED_SECTION_RE = re.compile(r"^[A-Z][A-Z\s\-]{0,20}$")
+SENTENCE_END_RE = re.compile(r"[.!?][\"')\]]?$")
+REVIEW_SECTION_LABELS = (
+    "Search strategy and selection criteria",
+    "Subgroup and sensitivity analysis",
+    "Implications of the Review",
+    "Introduction",
+    "Methods",
+    "Discussion",
+    "Conclusion",
+    "Results",
+    "Review",
+)
+REVIEW_SECTION_LABELS_SORTED = tuple(sorted(REVIEW_SECTION_LABELS, key=len, reverse=True))
+REVIEW_INLINE_HEADING_RE = re.compile(
+    r"(?<=[.!?])\s+(?P<label>"
+    + "|".join(re.escape(label) for label in REVIEW_SECTION_LABELS_SORTED)
+    + r")\s+(?=[A-Z])"
+)
+QUESTION_INLINE_HEADING_RE = re.compile(
+    r"(?P<label>(?:How|What|Which|When|Why)[^?]{12,140}\?)\s+(?=[A-Z])"
+)
+TREATMENT_SEGMENT_SPLIT_MARKERS = (
+    "But a subgroup of",
+)
+TREATMENT_SUBTOPIC_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
+        (
+            "treatment_null_effect",
+            (
+                "normal populations",
+                "not altered",
+                "lack of effect",
+                "no prophylactic benefit",
+                "incidence of the common cold",
+            ),
+        ),
+    (
+        "treatment_subgroup_benefit",
+        (
+            "physical stress",
+            "marathon runners",
+            "skiing school",
+            "soldiers",
+            "beneficial effect",
+            "50% reduction",
+        ),
+    ),
+    (
+        "treatment_duration",
+        (
+            "duration of cold episodes",
+            "reduction in duration",
+            "symptom days",
+            "duration was",
+            "duration of the common cold",
+        ),
+    ),
+    (
+        "treatment_prevention",
+        (
+            "incidence",
+            "prophylaxis",
+            "prophylactic",
+            "prevent the common cold",
+            "reduces the incidence",
+        ),
+    ),
+    (
+        "treatment_therapeutic",
+        (
+            "therapeutic use",
+            "onset of symptoms",
+            "therapeutic impact",
+            "treat the common cold",
+        ),
+    ),
+)
 
 
 def normalize_reading_order(blocks: list[ExtractedBlock]) -> list[ExtractedBlock]:
@@ -74,13 +150,55 @@ def _normalize_for_match(text: str) -> str:
 
 
 def _split_paragraphs(text: str) -> list[str]:
-    parts = re.split(r"\n\s*\n|\n(?=[A-Z0-9•-])", text)
-    return [part.strip() for part in parts if part.strip()]
+    lines = [line.rstrip() for line in text.splitlines()]
+    paragraphs: list[str] = []
+    buffer: list[str] = []
+
+    def flush() -> None:
+        nonlocal buffer
+        if not buffer:
+            return
+        paragraph = " ".join(part.strip() for part in buffer if part.strip()).strip()
+        if paragraph:
+            paragraphs.append(paragraph)
+        buffer = []
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if not line:
+            flush()
+            continue
+        if not buffer:
+            buffer.append(line)
+            continue
+        previous_line = buffer[-1].strip()
+        starts_new_paragraph = False
+        if line.startswith(("•", "-")):
+            starts_new_paragraph = True
+        elif SENTENCE_END_RE.search(previous_line) and (
+            line[:1].isupper() or line[:1].isdigit()
+        ):
+            starts_new_paragraph = True
+        elif (
+            len(line.split()) <= 5
+            and _looks_like_title_case(line)
+            and SENTENCE_END_RE.search(previous_line)
+        ):
+            starts_new_paragraph = True
+
+        if starts_new_paragraph:
+            flush()
+        buffer.append(line)
+
+    flush()
+    return paragraphs
 
 
 def _is_noise_paragraph(text: str) -> bool:
     normalized = _normalize_for_match(text)
     if not normalized:
+        return True
+    if len(normalized) == 1:
         return True
     if PAGE_NUMBER_ONLY_RE.match(normalized):
         return True
@@ -211,6 +329,23 @@ def _normalize_block_segments(
             cleaned.extend(_sentence_aware_split(paragraph, max_segment_chars))
         else:
             cleaned.append(paragraph)
+    expanded: list[str] = []
+    for segment in cleaned:
+        split_segment = False
+        for marker in TREATMENT_SEGMENT_SPLIT_MARKERS:
+            marker_index = segment.find(marker)
+            if marker_index > 0:
+                left = _clean_text(segment[:marker_index])
+                right = _clean_text(segment[marker_index:])
+                if left:
+                    expanded.append(left)
+                if right:
+                    expanded.append(right)
+                split_segment = True
+                break
+        if not split_segment:
+            expanded.append(segment)
+    cleaned = expanded
     first_bullet_index = next(
         (index for index, paragraph in enumerate(cleaned) if paragraph.lstrip().startswith("•")),
         None,
@@ -218,6 +353,97 @@ def _normalize_block_segments(
     if first_bullet_index is not None:
         cleaned = cleaned[first_bullet_index:]
     return cleaned
+
+
+def _split_review_section_segments(text: str) -> list[tuple[str | None, str]]:
+    segment = _clean_text(text)
+    if not segment:
+        return []
+
+    parts: list[tuple[str | None, str]] = []
+    pending_heading: str | None = None
+
+    while segment:
+        if pending_heading is None:
+            for label in REVIEW_SECTION_LABELS_SORTED:
+                prefix = f"{label} "
+                if segment.startswith(prefix):
+                    pending_heading = label
+                    segment = segment[len(prefix) :].strip()
+                    break
+                if segment == label:
+                    parts.append((label, ""))
+                    return parts
+
+        match = REVIEW_INLINE_HEADING_RE.search(segment)
+        if pending_heading is not None and match:
+            body = _clean_text(segment[: match.start()])
+            if body:
+                parts.append((pending_heading, body))
+            pending_heading = match.group("label")
+            segment = segment[match.end() :].strip()
+            continue
+        if pending_heading is None and match:
+            body = _clean_text(segment[: match.start()])
+            if body:
+                parts.append((None, body))
+            pending_heading = match.group("label")
+            segment = segment[match.end() :].strip()
+            continue
+
+        question_match = QUESTION_INLINE_HEADING_RE.search(segment)
+        if pending_heading is not None and question_match:
+            body = _clean_text(segment[: question_match.start()])
+            if body:
+                parts.append((pending_heading, body))
+            pending_heading = question_match.group("label")
+            segment = segment[question_match.end() :].strip()
+            continue
+        if pending_heading is None and question_match:
+            body = _clean_text(segment[: question_match.start()])
+            if body:
+                parts.append((None, body))
+            pending_heading = question_match.group("label")
+            segment = segment[question_match.end() :].strip()
+            continue
+
+        parts.append((pending_heading, segment))
+        break
+
+    return [(heading, body) for heading, body in parts if body or heading]
+
+
+def _detect_treatment_subtopic(text: str) -> str | None:
+    normalized = _normalize_for_match(text)
+    if "vitamin c" not in normalized and "echinacea" not in normalized:
+        if (
+            "common cold incidence" not in normalized
+            and "incidence of the common cold" not in normalized
+            and "prophylaxis" not in normalized
+            and "prophylactic" not in normalized
+            and "therapeutic" not in normalized
+        ):
+            return None
+    for subtopic, patterns in TREATMENT_SUBTOPIC_PATTERNS:
+        if any(pattern in normalized for pattern in patterns):
+            return subtopic
+    return None
+
+
+def _collect_subtopic_cues(text: str, section_title: str | None) -> list[str]:
+    normalized = _normalize_for_match(text)
+    cues: list[str] = []
+    for subtopic, patterns in TREATMENT_SUBTOPIC_PATTERNS:
+        if any(pattern in normalized for pattern in patterns):
+            cues.append(subtopic)
+    section_upper = (section_title or "").upper()
+    if (
+        "CONCLUSION" in section_upper
+        and ("echinacea" in normalized or "vitamin c" in normalized)
+        and "treatment_overall" not in cues
+    ):
+        cues.append("treatment_overall")
+    return sorted(set(cues))
 
 
 def _looks_like_title_case(text: str) -> bool:
@@ -289,6 +515,7 @@ def _make_chunk_record(
     inferred_title = _extract_inline_section_label(blocks[0].text)
     extraction_method, ocr_used = _infer_extraction_method(blocks)
     resolved_section_title = inferred_title or section_title
+    subtopic_cues = _collect_subtopic_cues(text=text, section_title=resolved_section_title)
     noise_labels, quality_score = classify_chunk_quality(
         text=text,
         section_title=resolved_section_title,
@@ -309,6 +536,7 @@ def _make_chunk_record(
         language=document.detected_language,
         extraction_method=extraction_method,
         ocr_used=ocr_used,
+        subtopic_cues=subtopic_cues,
         noise_labels=noise_labels,
         quality_score=quality_score,
         confidence=None,
@@ -342,9 +570,10 @@ def chunk_document(
     current_section_level: int | None = 1 if document.title else None
     in_key_points_summary = False
     last_buffer_page_num: int | None = None
+    buffer_treatment_subtopic: str | None = None
 
     def flush_buffer() -> None:
-        nonlocal buffer, buffer_chars, chunk_number, last_buffer_page_num
+        nonlocal buffer, buffer_chars, chunk_number, last_buffer_page_num, buffer_treatment_subtopic
         if not buffer:
             return
         chunks.append(
@@ -360,6 +589,7 @@ def chunk_document(
         buffer = []
         buffer_chars = 0
         last_buffer_page_num = None
+        buffer_treatment_subtopic = None
 
     for block in ordered_blocks:
         raw_block_text = _clean_text(block.text)
@@ -380,43 +610,84 @@ def chunk_document(
             continue
 
         for segment in normalized_segments:
-            inline_section_title = _extract_inline_section_label(segment)
-            if inline_section_title:
-                flush_buffer()
-                current_section_title = inline_section_title
-                current_section_level = None
+            review_section_segments = _split_review_section_segments(segment)
+            if not review_section_segments:
+                review_section_segments = [(None, segment)]
 
-            if _is_probable_header(segment, toc_entries):
-                flush_buffer()
-                current_section_title = segment
-                current_section_level = (
-                    1 if _normalize_for_match(segment) in toc_entries else None
+            for inline_heading, scoped_segment in review_section_segments:
+                if inline_heading:
+                    flush_buffer()
+                    current_section_title = inline_heading
+                    current_section_level = None
+                    in_key_points_summary = False
+
+                segment = scoped_segment
+                if not segment:
+                    continue
+                inline_section_title = _extract_inline_section_label(segment)
+                if inline_section_title:
+                    flush_buffer()
+                    current_section_title = inline_section_title
+                    current_section_level = None
+
+                if _is_probable_header(segment, toc_entries):
+                    flush_buffer()
+                    current_section_title = segment
+                    current_section_level = (
+                        1 if _normalize_for_match(segment) in toc_entries else None
+                    )
+                    in_key_points_summary = False
+                    continue
+
+                is_bullet_summary = in_key_points_summary and segment.lstrip().startswith("•")
+                if is_bullet_summary and buffer:
+                    flush_buffer()
+
+                segment_treatment_subtopic = _detect_treatment_subtopic(segment)
+                if (
+                    buffer
+                    and segment_treatment_subtopic
+                    and buffer_treatment_subtopic
+                    and segment_treatment_subtopic != buffer_treatment_subtopic
+                ):
+                    flush_buffer()
+                elif (
+                    buffer
+                    and segment_treatment_subtopic
+                    and buffer_treatment_subtopic is None
+                    and buffer_chars >= 200
+                ):
+                    flush_buffer()
+
+                if (
+                    buffer
+                    and current_section_title
+                    and any(label.lower() in current_section_title.lower() for label in REVIEW_SECTION_LABELS)
+                    and buffer_chars >= min_chunk_chars
+                    and len(segment) >= 180
+                ):
+                    flush_buffer()
+
+                prospective_chars = buffer_chars + len(segment)
+                should_split = (
+                    buffer and prospective_chars > target_chars and buffer_chars >= min_chunk_chars
                 )
-                in_key_points_summary = False
-                continue
+                if should_split:
+                    flush_buffer()
 
-            is_bullet_summary = in_key_points_summary and segment.lstrip().startswith("•")
-            if is_bullet_summary and buffer:
-                flush_buffer()
-
-            prospective_chars = buffer_chars + len(segment)
-            should_split = (
-                buffer and prospective_chars > target_chars and buffer_chars >= min_chunk_chars
-            )
-            if should_split:
-                flush_buffer()
-
-            buffer.append(
-                ExtractedBlock(
-                    page_num=block.page_num,
-                    text=segment,
-                    bbox=block.bbox,
-                    reading_order_index=block.reading_order_index,
-                    extraction_method=block.extraction_method,
+                buffer.append(
+                    ExtractedBlock(
+                        page_num=block.page_num,
+                        text=segment,
+                        bbox=block.bbox,
+                        reading_order_index=block.reading_order_index,
+                        extraction_method=block.extraction_method,
+                    )
                 )
-            )
-            buffer_chars += len(segment)
-            last_buffer_page_num = block.page_num
+                buffer_chars += len(segment)
+                last_buffer_page_num = block.page_num
+                if buffer_treatment_subtopic is None and segment_treatment_subtopic:
+                    buffer_treatment_subtopic = segment_treatment_subtopic
 
     flush_buffer()
     return _link_adjacent_chunks(chunks)

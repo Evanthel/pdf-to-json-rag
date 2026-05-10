@@ -200,6 +200,33 @@ def main() -> None:
         print(f"avg_keyword_coverage: {report['summary']['avg_keyword_coverage']:.3f}")
         print(f"negative_case_count: {report['summary']['negative_case_count']}")
         print(f"negative_success_rate: {report['summary']['negative_success_rate']:.3f}")
+        print(f"warning_case_count: {report['summary']['warning_case_count']}")
+        print(
+            "faithfulness_supported_sentence_ratio: "
+            f"{report['faithfulness_audit']['avg_supported_sentence_ratio']:.3f}"
+        )
+        print(
+            "recommend_llm_judge: "
+            f"{report['faithfulness_audit']['recommend_llm_judge']}"
+        )
+        rerank = report.get("retrieval_strategy_comparison", {})
+        if rerank:
+            baseline = rerank.get("baseline_chunking_only", {})
+            lightweight = rerank.get("lightweight_rerank", {})
+            print(
+                "baseline_vs_rerank_mrr: "
+                f"{baseline.get('mrr', 0.0):.3f} -> {lightweight.get('mrr', 0.0):.3f}"
+            )
+        deferred = report.get("deferred_feature_decisions", {})
+        if deferred:
+            print(
+                "recommend_pdfplumber_probe: "
+                f"{deferred.get('pdfplumber_probe', {}).get('recommended', False)}"
+            )
+            print(
+                "recommend_cross_encoder: "
+                f"{deferred.get('cross_encoder_reranking', {}).get('recommended', False)}"
+            )
 
 
 if __name__ == "__main__":

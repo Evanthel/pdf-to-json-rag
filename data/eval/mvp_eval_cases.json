@@ -5,7 +5,7 @@
     "query": "What are common cold symptoms?",
     "relevant_chunk_ids": [
       "common-cold-clinincal-evidence-chunk-0009",
-      "common-cold-clinincal-evidence-chunk-0012"
+      "common-cold-clinincal-evidence-chunk-0010"
     ],
     "expected_keywords": [
       "sneezing",
@@ -21,7 +21,7 @@
     "case_type": "grounded",
     "query": "How long do common cold symptoms last?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0012",
+      "common-cold-clinincal-evidence-chunk-0013",
       "common-cold-clinincal-evidence-chunk-0003"
     ],
     "expected_keywords": [
@@ -36,7 +36,7 @@
     "case_type": "grounded",
     "query": "How are common cold infections transmitted?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0011",
+      "common-cold-clinincal-evidence-chunk-0012",
       "common-cold-clinincal-evidence-chunk-0003"
     ],
     "expected_keywords": [
@@ -66,7 +66,7 @@
     "case_type": "grounded",
     "query": "What usually causes the common cold?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0011"
+      "common-cold-clinincal-evidence-chunk-0012"
     ],
     "expected_keywords": [
       "viruses",
@@ -80,7 +80,7 @@
     "case_type": "grounded",
     "query": "How many colds do children and adults get each year?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0010",
+      "common-cold-clinincal-evidence-chunk-0011",
       "common-cold-clinincal-evidence-chunk-0003"
     ],
     "expected_keywords": [
@@ -96,10 +96,7 @@
     "case_type": "grounded",
     "query": "Do antibiotics help with the common cold?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0005",
-      "common-cold-clinincal-evidence-chunk-0175",
-      "common-cold-clinincal-evidence-chunk-0176",
-      "common-cold-clinincal-evidence-chunk-0192"
+      "common-cold-clinincal-evidence-chunk-0005"
     ],
     "expected_keywords": [
       "don't reduce symptoms overall",
@@ -113,8 +110,7 @@
     "case_type": "grounded",
     "query": "Does vitamin C prevent the common cold in normal populations?",
     "relevant_chunk_ids": [
-      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0004",
-      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0005"
+      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0009"
     ],
     "expected_keywords": [
       "incidence",
@@ -128,8 +124,8 @@
     "case_type": "grounded",
     "query": "Does vitamin C help people under cold stress?",
     "relevant_chunk_ids": [
-      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0004",
-      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0005"
+      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0006",
+      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0011"
     ],
     "expected_keywords": [
       "cold stress",
@@ -143,9 +139,8 @@
     "case_type": "grounded",
     "query": "What does the echinacea meta-analysis conclude about the common cold?",
     "relevant_chunk_ids": [
-      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0082",
-      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0068",
-      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0001"
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0052",
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0037"
     ],
     "expected_keywords": [
       "incidence",
@@ -160,9 +155,9 @@
     "case_type": "grounded",
     "query": "Does echinacea reduce the incidence of the common cold?",
     "relevant_chunk_ids": [
-      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0082",
-      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0068",
-      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0001"
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0052",
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0037",
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0002"
     ],
     "expected_keywords": [
       "incidence",
@@ -202,6 +197,65 @@
     "notes": "The scanned CT-study benchmark should capture the follow-up evaluation window and the fact that some residual abnormalities remained."
   },
   {
+    "case_id": "cmaj_prevention_evidence",
+    "case_type": "grounded",
+    "query": "What preventive interventions have the best evidence in the CMAJ common cold review?",
+    "relevant_chunk_ids": [
+      "prevention-and-treatment-of-the-common-cold-chunk-0008"
+    ],
+    "expected_keywords": [
+      "handwashing",
+      "physical interventions",
+      "zinc"
+    ],
+    "case_tags": [
+      "review_summary",
+      "source_anchored_review",
+      "summary_bullets"
+    ],
+    "notes": "The CMAJ review should foreground the summary bullet and supporting prevention section instead of generic title or table-pointer chunks."
+  },
+  {
+    "case_id": "cmaj_nontraditional_treatments",
+    "case_type": "grounded",
+    "query": "What nontraditional treatments does the CMAJ review support for the common cold?",
+    "relevant_chunk_ids": [
+      "prevention-and-treatment-of-the-common-cold-chunk-0010"
+    ],
+    "expected_keywords": [
+      "oral zinc",
+      "honey",
+      "nontraditional"
+    ],
+    "case_tags": [
+      "review_summary",
+      "source_anchored_review",
+      "table_mixed_review"
+    ],
+    "notes": "The answer should surface the CMAJ review summary about oral zinc and honey, not just table pointers."
+  },
+  {
+    "case_id": "cmaj_zinc_prevention",
+    "case_type": "grounded",
+    "query": "What does the CMAJ review say about zinc for preventing common colds?",
+    "relevant_chunk_ids": [
+      "prevention-and-treatment-of-the-common-cold-chunk-0008",
+      "prevention-and-treatment-of-the-common-cold-chunk-0012",
+      "prevention-and-treatment-of-the-common-cold-chunk-0019"
+    ],
+    "expected_keywords": [
+      "zinc",
+      "children",
+      "number of colds"
+    ],
+    "case_tags": [
+      "review_summary",
+      "source_anchored_review",
+      "table_mixed_review"
+    ],
+    "notes": "This case should prefer the CMAJ prevention-summary plus supporting zinc-prevention evidence over unrelated zinc symptom-treatment chunks from other documents."
+  },
+  {
     "case_id": "negative_vaccine",
     "case_type": "negative",
     "query": "What vaccine prevents the common cold?",
@@ -232,5 +286,168 @@
     "relevant_chunk_ids": [],
     "expected_keywords": [],
     "notes": "The benchmark should abstain on an unsupported imaging-contrast question even after adding the scanned CT-study document."
+  },
+  {
+    "case_id": "negative_monoclonal_antibodies",
+    "case_type": "negative",
+    "query": "Do monoclonal antibodies prevent the common cold?",
+    "relevant_chunk_ids": [],
+    "expected_keywords": [],
+    "case_tags": [
+      "cmaj_review"
+    ],
+    "notes": "The expanded benchmark should still abstain on unsupported modern-biologic prevention questions."
+  },
+  {
+    "case_id": "wat_rhinovirus_most_common",
+    "case_type": "grounded",
+    "query": "According to the literature review, which virus is the most common cause of the common cold?",
+    "relevant_chunk_ids": [
+      "the-common-cold-a-review-of-the-literature-chunk-0004",
+      "the-common-cold-a-review-of-the-literature-chunk-0010"
+    ],
+    "expected_keywords": [
+      "rhinovirus",
+      "most common"
+    ],
+    "case_tags": [
+      "source_anchored_review",
+      "review_summary"
+    ],
+    "notes": "This should stay inside the Dennis Wat literature review instead of drifting into other review introductions."
+  },
+  {
+    "case_id": "wat_symptom_production",
+    "case_type": "grounded",
+    "query": "According to the literature review, what causes common cold symptoms?",
+    "relevant_chunk_ids": [
+      "the-common-cold-a-review-of-the-literature-chunk-0004"
+    ],
+    "expected_keywords": [
+      "viral cytopathic effect",
+      "inflammatory pathways"
+    ],
+    "case_tags": [
+      "source_anchored_review",
+      "review_summary"
+    ],
+    "notes": "This should prefer the abstract-level mechanistic summary rather than generic symptom lists from other papers."
+  },
+  {
+    "case_id": "wat_antibiotics_review",
+    "case_type": "grounded",
+    "query": "According to the literature review, do antibiotics help with the common cold?",
+    "relevant_chunk_ids": [
+      "the-common-cold-a-review-of-the-literature-chunk-0046"
+    ],
+    "expected_keywords": [
+      "no evidence",
+      "side effects",
+      "resistant organisms"
+    ],
+    "case_tags": [
+      "source_anchored_review",
+      "review_summary"
+    ],
+    "notes": "This should stay anchored to the Wat review and not drift into CMAJ or clinical-evidence antibiotic summaries."
+  },
+  {
+    "case_id": "ajmedp_hypothermia_predisposition",
+    "case_type": "grounded",
+    "query": "According to AJMedP Table 4-1, what categories of factors predispose to hypothermia?",
+    "relevant_chunk_ids": [
+      "ajmedp-4-2-srd-eda-v1-e-2561-chunk-0168"
+    ],
+    "expected_keywords": [
+      "decrease heat production",
+      "increase heat loss",
+      "impair thermoregulation"
+    ],
+    "case_tags": [
+      "source_anchored_technical",
+      "table_heavy",
+      "table_guidance"
+    ],
+    "notes": "This should stay locked to the AJMedP table-introduction chunk instead of drifting into generic hypothermia text from elsewhere in the manual."
+  },
+  {
+    "case_id": "ajmedp_hypothermia_symptoms",
+    "case_type": "grounded",
+    "query": "According to AJMedP Table 4-4, what signs and symptoms of hypothermia are listed?",
+    "relevant_chunk_ids": [
+      "ajmedp-4-2-srd-eda-v1-e-2561-chunk-0187",
+      "ajmedp-4-2-srd-eda-v1-e-2561-chunk-0188"
+    ],
+    "expected_keywords": [
+      "shivering",
+      "hypotension",
+      "altered mental status"
+    ],
+    "case_tags": [
+      "source_anchored_technical",
+      "table_heavy",
+      "table_guidance"
+    ],
+    "notes": "This should use the AJMedP hypothermia-symptoms table rather than drifting into common-cold symptom chunks."
+  },
+  {
+    "case_id": "ajmedp_frostbite_severe_zone",
+    "case_type": "grounded",
+    "query": "According to AJMedP Table 3-4, what is recommended for the severe frostbite risk zone?",
+    "relevant_chunk_ids": [
+      "ajmedp-4-2-srd-eda-v1-e-2561-chunk-0124"
+    ],
+    "expected_keywords": [
+      "mandatory buddy checks every 10 minutes",
+      "wear ecwcs"
+    ],
+    "case_tags": [
+      "source_anchored_technical",
+      "table_heavy",
+      "table_guidance"
+    ],
+    "notes": "This should prefer the severe-risk row from Table 3-4 rather than the list-of-tables page or the neighbouring extreme-risk row."
+  },
+  {
+    "case_id": "ajmedp_immersion_neck_limit",
+    "case_type": "grounded",
+    "query": "According to AJMedP Table 3-3, what is the neck-depth immersion time limit at 50-54°F?",
+    "relevant_chunk_ids": [
+      "ajmedp-4-2-srd-eda-v1-e-2561-chunk-0113"
+    ],
+    "expected_keywords": [
+      "50-54",
+      "neck",
+      "5 minutes"
+    ],
+    "case_tags": [
+      "source_anchored_technical",
+      "table_heavy",
+      "numeric_table"
+    ],
+    "notes": "This is a direct table-value lookup and should surface the AJMedP immersion-limits table rather than nearby immersion discussion text."
+  },
+  {
+    "case_id": "negative_wat_monoclonal_antibodies",
+    "case_type": "negative",
+    "query": "According to the literature review, do monoclonal antibodies cure the common cold?",
+    "relevant_chunk_ids": [],
+    "expected_keywords": [],
+    "case_tags": [
+      "source_anchored_review"
+    ],
+    "notes": "The literature review benchmark should abstain on unsupported monoclonal-antibody treatment claims."
+  },
+  {
+    "case_id": "negative_ajmedp_aspirin_frostbite",
+    "case_type": "negative",
+    "query": "According to AJMedP, what aspirin dose is recommended for frostbite?",
+    "relevant_chunk_ids": [],
+    "expected_keywords": [],
+    "case_tags": [
+      "source_anchored_technical",
+      "table_heavy"
+    ],
+    "notes": "The AJMedP benchmark should abstain on unsupported aspirin-dosing claims even after adding the table-heavy technical manual."
   }
 ]

@@ -152,15 +152,71 @@ Completed scope:
 
 All five milestones are now complete in the current local implementation. The benchmark spans 17 cases across four indexed documents, and the OCR-derived slice is stable enough that the next iteration can focus on chunk-boundary quality rather than scanned-path recovery.
 
-## 6.5. v1.5 Plan
+## 6.5. v1.5 Milestones
 
-The next iteration should be chunking-first and use the current benchmark to see whether cleaner structure handling removes the last treatment-heavy warning without adding more intent-specific logic.
+The fifth post-MVP iteration stayed chunking-first and used the current benchmark to resolve the last treatment-heavy warning without adding another retrieval-specific complexity layer.
 
-1. Split mixed treatment-summary chunks more cleanly where prevention, null-effect, subgroup-benefit, and duration evidence still coexists in the same chunk.
-2. Make chunk boundaries more section-aware inside long review-summary blocks rather than relying mostly on page/block edges plus overflow splitting.
-3. Add lightweight chunk-level subtopic cues for treatment evidence types such as prevention, null effect, subgroup benefit, duration, and overall conclusion.
-4. Re-run the benchmark after the chunking pass and check whether the remaining treatment-heavy warning resolves without another answer-selection exception.
-5. Only if the chunking-first pass stalls, prototype a lightweight reranking upgrade and compare it against the chunking-only baseline on the same benchmark.
+Completed scope:
+
+1. Split mixed treatment-summary chunks more cleanly where prevention, null-effect, subgroup-benefit, and duration evidence previously coexisted in the same chunk.
+2. Made chunk boundaries more section-aware inside long review-summary blocks instead of relying mostly on page/block edges plus overflow splitting.
+3. Added lightweight chunk-level treatment subtopic cues and persisted them through chunk JSON and index metadata.
+4. Re-ran the benchmark after the chunking pass and confirmed that the warning-free state stayed stable without another answer-selection exception.
+5. Confirmed that the chunking-first pass did not stall, so no lightweight reranking prototype was needed on the current benchmark.
+
+All five milestones are now complete in the current local implementation. The benchmark remains warning-free across 17 cases, so the next useful step is broader generalization pressure rather than another local optimization loop on the same documents.
+
+## 6.6. v1.6 Milestones
+
+The sixth post-MVP iteration broadened the benchmark enough to make explicit decisions about which deferred items are worth reviving.
+
+Completed scope:
+
+1. Added a fifth benchmark document based on the CMAJ prevention/treatment review and folded it into the shared local index.
+2. Expanded the evaluation report with document-family and structure-oriented slices, including review-heavy and summary-bullet cases.
+3. Prototyped a lightweight reranking pass after the broader benchmark exposed real ranking failures on new review-summary queries, and compared it against the chunking-first baseline.
+4. Added a tiny sampled faithfulness audit and used it to decide that LLM-as-a-judge still does not need to return yet for the current extractive answer path.
+5. Revisited the deferred list with the broadened benchmark and kept `pdfplumber`, cross-encoder reranking, cloud deployment, schema extraction, and visual grounding UI out of scope for now.
+
+All five milestones are now complete in the current local implementation. The benchmark now spans 21 cases across five indexed documents, includes richer slices, and records both retrieval-strategy comparison and a small faithfulness-audit decision.
+
+## 6.7. v1.7 Milestones
+
+The seventh post-MVP iteration focused on broadening the benchmark again, cleaning up source-anchored review behavior, and turning deferred-feature decisions into explicit benchmark outputs.
+
+Completed scope:
+
+1. Removed the remaining warning cases, including the legacy `antibiotics` path and the source-anchored `cmaj_zinc_prevention` answer assembly.
+2. Added a sixth benchmark document that is layout-hostile enough to stress review-summary mixing and disclaimer/reference-tail noise without pretending it is a true table benchmark.
+3. Expanded the evaluation slices so source-anchored review queries and newer review-heavy cases can be separated more clearly in the report.
+4. Used the sixth benchmark document to test whether `pdfplumber` should return, and kept it deferred because the new failures were not true table/text extraction misses.
+5. Kept cross-encoder reranking, automated LLM-as-a-judge, cloud deployment, multi-document schema extraction, and visual grounding UI deferred, while making those decisions explicit in the evaluation report.
+
+All five milestones are now complete in the current local implementation. The benchmark now spans 25 cases across six indexed documents and is warning-free again, with explicit decision checkpoints for the next deferred features.
+
+## 6.8. v1.8 Milestones
+
+The eighth post-MVP iteration used a genuinely table-heavy technical manual to decide whether table-specific extraction support actually needs to return yet.
+
+Completed scope:
+
+1. Added a seventh benchmark document built from a large table-heavy technical manual instead of another review-style paper.
+2. Added source-anchored technical/manual benchmark cases for hypothermia, frostbite-risk guidance, immersion-limit lookup, and a new unsupported technical-query negative case.
+3. Expanded benchmark slices to separate source-anchored technical cases, table-heavy behavior, and source-locking outcomes from the existing review-heavy slices.
+4. Re-checked whether the new table-heavy document actually justifies bringing `pdfplumber` back, and kept it deferred because the current failures were answer-selection and source-locking issues rather than table extraction misses.
+5. Re-checked whether the broader benchmark now justifies cross-encoder reranking or LLM-as-a-judge, and kept both deferred after the final warning-free rerun.
+
+All five milestones are now complete in the current local implementation. The benchmark now spans 30 cases across seven indexed documents, remains warning-free, and includes an explicit table-heavy/manual slice that still does not justify reviving the heavier deferred features.
+
+## 6.9. v1.9 Plan
+
+The next iteration should broaden the benchmark again, but this time with form/grid-heavy pressure rather than another review or prose-heavy document.
+
+1. Add an eighth benchmark document that is more questionnaire-, form-, or grid-heavy than the current technical manual, so table-like pressure is separated from structured-form pressure.
+2. Add benchmark cases and slices for form/grid extraction, appendix-heavy sections, numeric lookups, and source-anchored technical answers on that new document.
+3. Tighten answer compression for dense technical/table answers so the benchmark-clean path is also shorter and easier to inspect.
+4. If the new form/grid benchmark exposes real cell-boundary or field-label extraction misses, prototype a narrow structured-table/form assist path and compare it only on those flagged slices.
+5. Revisit cross-encoder reranking or LLM-as-a-judge only if the expanded eight-document benchmark reopens concrete retrieval or faithfulness warnings.
 
 
 ## 7. Explicitly Deferred

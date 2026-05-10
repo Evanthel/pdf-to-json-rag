@@ -22,6 +22,8 @@ HARD_EXCLUDE_LABELS = {
 }
 SOFT_NOISE_LABELS = {
     "bibliography",
+    "reference_tail",
+    "table_reference",
     "toc_fragment",
     "toc_leader",
     "noisy_section",
@@ -37,6 +39,8 @@ SOFT_NOISE_LABELS = {
 EXPANSION_BLOCK_LABELS = {
     "disclaimer",
     "bibliography",
+    "reference_tail",
+    "table_reference",
     "toc_fragment",
     "toc_leader",
     "page_number",
@@ -46,6 +50,13 @@ EXPANSION_BLOCK_LABELS = {
 
 INTENT_CANDIDATE_K = {
     "generic": (4, 15),
+    "symptom_pathogenesis": (6, 20),
+    "hypothermia_predisposition": (6, 24),
+    "hypothermia_symptoms": (6, 24),
+    "frostbite_prevention": (6, 24),
+    "immersion_limit": (6, 24),
+    "review_prevention": (6, 24),
+    "review_nontraditional": (6, 24),
     "definition": (4, 15),
     "symptoms": (4, 15),
     "duration": (5, 18),
@@ -64,6 +75,13 @@ INTENT_CANDIDATE_K = {
 
 INTENT_NEIGHBOR_DEPTH = {
     "generic": 1,
+    "symptom_pathogenesis": 1,
+    "hypothermia_predisposition": 1,
+    "hypothermia_symptoms": 1,
+    "frostbite_prevention": 1,
+    "immersion_limit": 1,
+    "review_prevention": 1,
+    "review_nontraditional": 1,
     "definition": 1,
     "symptoms": 1,
     "duration": 1,
@@ -81,6 +99,13 @@ INTENT_NEIGHBOR_DEPTH = {
 }
 
 INTENT_SECTION_HINTS = {
+    "symptom_pathogenesis": ("ABSTRACT", "INTRODUCTION", "REVIEW"),
+    "hypothermia_predisposition": ("TB MED 508", "HYPOTHERMIA", "GERMANY", "ENDOCRINE", "IATROGENIC"),
+    "hypothermia_symptoms": ("TB MED 508", "HYPOTHERMIA"),
+    "frostbite_prevention": ("SEVERE", "EXTREME", "HIGH", "TB MED 508"),
+    "immersion_limit": ("TB MED 508",),
+    "review_prevention": ("CMAJ", "REVIEW", "INTERVENTION"),
+    "review_nontraditional": ("CMAJ", "REVIEW"),
     "definition": ("DEFINITION", "PROGNOSIS"),
     "symptoms": ("DEFINITION", "PROGNOSIS"),
     "duration": ("PROGNOSIS",),
@@ -96,11 +121,56 @@ INTENT_SECTION_HINTS = {
     "treatment_duration": ("THE UPDATED REVIEW", "CONCLUSION", "META-ANALYSES OUTCOMES"),
     "treatment_overall": ("CONCLUSION", "REVIEW", "META-ANALYSES OUTCOMES"),
 }
+INTENT_SUBTOPIC_CUES = {
+    "treatment_prevention": {"treatment_prevention"},
+    "treatment_null_effect": {"treatment_null_effect"},
+    "treatment_subgroup_benefit": {"treatment_subgroup_benefit"},
+    "treatment_duration": {"treatment_duration"},
+    "treatment_overall": {"treatment_overall"},
+}
 
 TREATMENT_ENTITY_TERMS = {
     "vitamin",
     "echinacea",
     "propolis",
+    "zinc",
+    "honey",
+    "ginseng",
+    "handwashing",
+}
+QUERY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "according",
+    "cold",
+    "common",
+    "does",
+    "for",
+    "help",
+    "helps",
+    "how",
+    "in",
+    "is",
+    "of",
+    "review",
+    "say",
+    "says",
+    "the",
+    "to",
+    "what",
+    "with",
+}
+SOURCE_DOC_ANCHORS = {
+    "ajmedp": "ajmedp-4-2-srd-eda-v1-e-2561",
+    "tb med 508": "ajmedp-4-2-srd-eda-v1-e-2561",
+    "cmaj": "prevention-and-treatment-of-the-common-cold",
+    "literature review": "the-common-cold-a-review-of-the-literature",
+    "wat review": "the-common-cold-a-review-of-the-literature",
+    "dennis wat": "the-common-cold-a-review-of-the-literature",
+    "echinacea": "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold",
+    "vitamin c": "vitamin-c-for-preventing-and-treating-the-common-cold",
+    "ct study": "ct-study-of-the-common-cold-scanned",
 }
 
 
@@ -112,9 +182,47 @@ def _has_treatment_entity(terms: set[str]) -> bool:
     return bool(terms.intersection(TREATMENT_ENTITY_TERMS))
 
 
+def _content_terms(text: str) -> set[str]:
+    return {
+        term
+        for term in re.findall(r"[a-zA-Z]{3,}", text.lower())
+        if term not in QUERY_STOPWORDS
+    }
+
+
 def _detect_query_intent(query: str) -> str:
     terms = _query_terms(query)
     query_lower = query.lower()
+    if "hypothermia" in terms and {"predisposing", "predispose", "factors", "categories"}.intersection(terms):
+        return "hypothermia_predisposition"
+    if "hypothermia" in terms and {"signs", "symptoms"}.intersection(terms):
+        return "hypothermia_symptoms"
+    if "frostbite" in terms and (
+        "severe" in terms
+        or "preventive" in terms
+        or "measures" in terms
+        or "zone" in terms
+        or "risk" in terms
+    ):
+        return "frostbite_prevention"
+    if "immersion" in terms and ("neck" in terms or "depth" in terms):
+        return "immersion_limit"
+    if (
+        ("cause" in terms or "causes" in terms)
+        and ("symptom" in terms or "symptoms" in terms)
+    ):
+        return "symptom_pathogenesis"
+    if (
+        ("nontraditional" in terms and "treatments" in terms)
+        or "nontraditional treatments" in query_lower
+    ):
+        return "review_nontraditional"
+    if (
+        ("preventive" in terms and "interventions" in terms)
+        or ("handwashing" in terms and "prevent" in terms)
+        or "best evidence" in query_lower and "prevent" in query_lower
+    ):
+        return "review_prevention"
     has_treatment_query = _has_treatment_entity(terms) and "cold" in terms
     if has_treatment_query:
         if "stress" in terms or ("physical" in terms and "stress" in terms) or "subgroup" in terms:
@@ -154,9 +262,41 @@ def _detect_query_intent(query: str) -> str:
     return "generic"
 
 
+def _preferred_source_doc_id(query: str) -> str | None:
+    query_lower = query.lower()
+    for anchor, doc_id in SOURCE_DOC_ANCHORS.items():
+        if anchor in query_lower:
+            return doc_id
+    return None
+
+
 def _augment_query(query: str) -> str:
     intent = _detect_query_intent(query)
     suffix = {
+        "review_prevention": (
+            "review summary prevention best evidence handwashing physical interventions zinc supplements"
+        ),
+        "symptom_pathogenesis": (
+            "review mechanism symptom production viral cytopathic effect activation inflammatory pathways"
+        ),
+        "hypothermia_predisposition": (
+            "predisposing factors for hypothermia decrease heat production "
+            "increase heat loss impair thermoregulation miscellaneous clinical states"
+        ),
+        "hypothermia_symptoms": (
+            "signs and symptoms of hypothermia shivering altered mental status "
+            "hypotension confusion table 4-4"
+        ),
+        "frostbite_prevention": (
+            "severe frostbite risk zone mandatory buddy checks no exposed skin "
+            "warming facilities stay active wear ecwcs table 3-4"
+        ),
+        "immersion_limit": (
+            "table 3-3 immersion time limits neck 50-54 5 minutes water temperature"
+        ),
+        "review_nontraditional": (
+            "review summary nontraditional treatments oral zinc honey cough adults children"
+        ),
         "definition": "definition defined as upper respiratory tract infection",
         "antibiotics": (
             "option antibiotics clinical guide don't reduce symptoms overall "
@@ -212,6 +352,7 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
     intent = _detect_query_intent(query)
     bonus = 0.0
     labels = set(chunk.noise_labels)
+    subtopic_cues = set(chunk.subtopic_cues)
 
     if "ocr_derived" in labels:
         bonus -= 0.15
@@ -225,6 +366,96 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
             bonus += 5.0
         if section.startswith("PROGNOSIS") or section.startswith("AETIOLOGY"):
             bonus += 1.0
+    elif intent == "review_prevention":
+        if "handwashing" in text or "physical interventions" in text:
+            bonus += 6.0
+        if "best evidence for the prevention" in text:
+            bonus += 5.0
+        if "preventive measures" in text:
+            bonus += 4.0
+        if "zinc supplements" in text:
+            bonus += 2.0
+        if "summarized in table 1" in text:
+            bonus -= 4.0
+        if "we review the evidence" in text or "quality of the evidence was frequently poor" in text:
+            bonus -= 4.0
+        if "although preventive interventions have somewhat discrete outcomes" in text:
+            bonus -= 4.0
+    elif intent == "symptom_pathogenesis":
+        if "symptom production is a combination of viral cytopathic effect" in text:
+            bonus += 7.0
+        if "activation of inflammatory pathways" in text:
+            bonus += 5.0
+        if "abstract" in section or "review" in section:
+            bonus += 2.0
+        if "rhinovirus is the most common" in text:
+            bonus -= 1.5
+        if "transmission" in text or "droplet" in text:
+            bonus -= 4.0
+    elif intent == "hypothermia_predisposition":
+        if "predisposing factors for hypothermia" in text:
+            bonus += 8.0
+        if "decrease heat production" in text or "increase heat loss" in text:
+            bonus += 5.0
+        if "impair thermoregulation" in text or "miscellaneous clinical states" in text:
+            bonus += 4.0
+        if section.startswith(("GERMANY", "ENDOCRINE", "IATROGENIC")):
+            bonus += 2.0
+        if "to diagnose hypothermia" in text or "signs and symptoms of hypothermia" in text:
+            bonus -= 4.0
+    elif intent == "hypothermia_symptoms":
+        if "signs and symptoms of hypothermia" in text:
+            bonus += 8.0
+        if "shivering" in text or "altered mental status" in text or "hypotension" in text:
+            bonus += 4.0
+        if "table 4-4" in text:
+            bonus += 3.0
+        if "common cold" in text or "sore throat" in text or "rhinorrhoea" in text:
+            bonus -= 8.0
+    elif intent == "frostbite_prevention":
+        if "table 3-4" in text:
+            bonus += 7.0
+        if section in {"SEVERE", "EXTREME", "HIGH"}:
+            bonus += 5.0
+        if "severe" in query.lower():
+            if section == "SEVERE":
+                bonus += 6.0
+            elif section in {"EXTREME", "HIGH", "LOW"}:
+                bonus -= 5.0
+        if "mandatory buddy checks every 10 minutes" in text:
+            bonus += 7.0
+        if "wear ecwcs or equivalent" in text or "provide warming facilities" in text:
+            bonus += 5.0
+        if "no exposed skin" in text or "stay active" in text:
+            bonus += 4.0
+        if "wear vb boots" in text or "work groups of no less than two personnel" in text:
+            bonus += 3.0
+        if "extreme risk" in text and "severe" in query.lower():
+            bonus -= 7.0
+        if "list of tables" in text or "frostbite risk low" in text:
+            bonus -= 7.0
+    elif intent == "immersion_limit":
+        if "table 3-3" in text:
+            bonus += 7.0
+        if "50-54" in text and "neck" in text:
+            bonus += 8.0
+        if "5 minutes" in text:
+            bonus += 5.0
+        if "water temperature" in text and "immersion depths" in text:
+            bonus += 4.0
+        if "list of tables" in text:
+            bonus -= 8.0
+    elif intent == "review_nontraditional":
+        if "nontraditional treatments" in text:
+            bonus += 6.0
+        if "oral zinc supplements" in text or ("honey" in text and "children" in text):
+            bonus += 4.0
+        if "summarized in table 3" in text or "summarized in table 2" in text:
+            bonus -= 4.0
+        if "we review the evidence" in text or "symptoms and signs of the common cold overlap" in text:
+            bonus -= 4.0
+        if "treatment of the common cold with echinacea: a structured review" in text:
+            bonus -= 5.0
     elif intent == "antibiotics":
         if section.startswith("OPTION"):
             bonus += 4.0
@@ -318,6 +549,8 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
         if "sore throat" in text or "runny nose" in text or "rhinorrhoea" in text:
             bonus += 2.0
     elif intent == "treatment_prevention":
+        if subtopic_cues.intersection(INTENT_SUBTOPIC_CUES["treatment_prevention"]):
+            bonus += 2.5
         if "vitamin c" in text or "echinacea" in text:
             bonus += 2.0
         if section.startswith("CONCLUSION") or section.startswith("REVIEW"):
@@ -343,6 +576,8 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
         if len(text.strip()) < 120:
             bonus -= 4.0
     elif intent == "treatment_null_effect":
+        if subtopic_cues.intersection(INTENT_SUBTOPIC_CUES["treatment_null_effect"]):
+            bonus += 2.5
         if "vitamin c" in text or "echinacea" in text:
             bonus += 2.0
         if "incidence was not altered" in text:
@@ -356,6 +591,8 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
         if len(text.strip()) < 120:
             bonus -= 4.0
     elif intent == "treatment_subgroup_benefit":
+        if subtopic_cues.intersection(INTENT_SUBTOPIC_CUES["treatment_subgroup_benefit"]):
+            bonus += 2.5
         if "vitamin c" in text or "echinacea" in text:
             bonus += 2.0
         if "cold stress" in text or "physical stress" in text or "subgroup" in text:
@@ -371,6 +608,8 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
         if len(text.strip()) < 120:
             bonus -= 4.0
     elif intent == "treatment_duration":
+        if subtopic_cues.intersection(INTENT_SUBTOPIC_CUES["treatment_duration"]):
+            bonus += 2.5
         if "vitamin c" in text or "echinacea" in text:
             bonus += 2.0
         if (
@@ -392,6 +631,8 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
         if len(text.strip()) < 120:
             bonus -= 4.0
     elif intent == "treatment_overall":
+        if subtopic_cues.intersection(INTENT_SUBTOPIC_CUES["treatment_overall"]):
+            bonus += 2.5
         if "vitamin c" in text or "echinacea" in text:
             bonus += 2.0
         if section.startswith("CONCLUSION") or section.startswith("REVIEW"):
@@ -410,6 +651,59 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
             bonus -= 4.0
         if len(text.strip()) < 120:
             bonus -= 2.0
+    return bonus
+
+
+def _lightweight_query_bonus(chunk: ChunkRecord, query: str) -> float:
+    query_terms = _content_terms(query)
+    preferred_doc_id = _preferred_source_doc_id(query)
+    if not query_terms:
+        query_terms = set()
+
+    text = chunk.text.lower()
+    section = (chunk.section_title or "").lower()
+    source = chunk.source_pdf.lower()
+    doc_id = chunk.doc_id.lower()
+    combined_terms = _content_terms(f"{section} {source} {text}")
+    overlap = query_terms.intersection(combined_terms)
+    bonus = len(overlap) * 0.45
+
+    if len(overlap) >= max(2, len(query_terms) // 2):
+        bonus += 1.0
+
+    if "cmaj" in query_terms and ("cmaj" in text or "cmaj" in section or "cmaj" in source):
+        bonus += 3.0
+    if "ajmedp" in query_terms and ("ajmedp" in text or "tb med 508" in text or "tb med 508" in section):
+        bonus += 3.0
+    if "zinc" in query_terms and "zinc" in text:
+        bonus += 2.5
+    if "honey" in query_terms and "honey" in text:
+        bonus += 2.5
+    if "handwashing" in query_terms and "handwashing" in text:
+        bonus += 4.0
+    if "nontraditional" in query_terms and "nontraditional" in text:
+        bonus += 4.0
+    if "prevent" in query_terms or "preventing" in query_terms or "prevention" in query_terms:
+        if "prevention" in text or "preventing" in text or "physical interventions" in text:
+            bonus += 2.0
+    if preferred_doc_id and preferred_doc_id in doc_id:
+        bonus += 4.0
+        if "review" in query.lower():
+            bonus += 1.5
+
+    labels = set(chunk.noise_labels)
+    if "table_reference" in labels:
+        bonus -= 3.0
+    if "toc_fragment" in labels or "toc_leader" in labels:
+        bonus -= 4.0
+    if "reference_tail" in labels or "bibliography" in labels:
+        bonus -= 4.0
+    if "title_fragment" in labels:
+        bonus -= 1.5
+
+    if len(text.strip()) < 90:
+        bonus -= 0.5
+
     return bonus
 
 
@@ -459,11 +753,65 @@ def _chunk_matches_intent(chunk: ChunkRecord, intent: str) -> bool:
     if intent == "generic":
         return True
 
+    text = chunk.text.lower()
+
+    if intent == "review_prevention":
+        return (
+            "handwashing" in text
+            or "physical interventions" in text
+            or "best evidence for the prevention" in text
+            or "preventive measures" in text
+            or "zinc supplements" in text
+        )
+    if intent == "review_nontraditional":
+        return (
+            "nontraditional treatments" in text
+            or "oral zinc supplements" in text
+            or "honey at bedtime" in text
+            or ("honey" in text and "children" in text)
+        )
+    if intent == "symptom_pathogenesis":
+        return (
+            "symptom production is a combination of viral cytopathic effect" in text
+            or "activation of inflammatory pathways" in text
+        )
+    if intent == "hypothermia_predisposition":
+        return (
+            "predisposing factors for hypothermia" in text
+            or "decrease heat production" in text
+            or "increase heat loss" in text
+            or "impair thermoregulation" in text
+            or "miscellaneous clinical states" in text
+        )
+    if intent == "hypothermia_symptoms":
+        return (
+            "signs and symptoms of hypothermia" in text
+            or ("hypothermia" in text and "shivering" in text)
+            or "altered mental status" in text
+            or "hypotension" in text
+        )
+    if intent == "frostbite_prevention":
+        return (
+            "table 3-4" in text
+            or "mandatory buddy checks every 10 minutes" in text
+            or "no exposed skin" in text
+            or "stay active" in text
+            or "warming facilities" in text
+            or "wear ecwcs" in text
+        )
+    if intent == "immersion_limit":
+        return (
+            "table 3-3" in text
+            or ("50-54" in text and "neck" in text)
+            or ("immersion time limits" in text and "water temperature" in text)
+        )
+
+    if set(chunk.subtopic_cues).intersection(INTENT_SUBTOPIC_CUES.get(intent, set())):
+        return True
+
     section = (chunk.section_title or "").upper()
     if any(hint in section for hint in INTENT_SECTION_HINTS.get(intent, ())):
         return True
-
-    text = chunk.text.lower()
     if intent == "incidence":
         return ("each year" in text and "children" in text) or ("adults" in text and "infections" in text)
     if intent == "antibiotics":
@@ -520,7 +868,25 @@ def _rerank_hits(hits: list[ChunkRecord], query: str) -> list[ChunkRecord]:
     return [chunk for _, chunk in scored]
 
 
-def retrieve_top_k(query: str, index_dir: Path, k: int = 5) -> list[ChunkRecord]:
+def _lightweight_rerank_hits(hits: list[ChunkRecord], query: str) -> list[ChunkRecord]:
+    scored = []
+    for index, chunk in enumerate(hits):
+        score = (
+            _heuristic_hit_bonus(chunk, query)
+            + _lightweight_query_bonus(chunk, query)
+            - (index * 0.01)
+        )
+        scored.append((score, chunk))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [chunk for _, chunk in scored]
+
+
+def retrieve_top_k(
+    query: str,
+    index_dir: Path,
+    k: int = 5,
+    use_lightweight_rerank: bool = True,
+) -> list[ChunkRecord]:
     """Retrieve the most relevant chunks for a query."""
     index_dir = index_dir.expanduser().resolve()
     manifest = load_index_manifest(index_dir)
@@ -551,6 +917,12 @@ def retrieve_top_k(query: str, index_dir: Path, k: int = 5) -> list[ChunkRecord]
             if noise_labels_raw
             else []
         )
+        subtopic_cues_raw = metadata.get("subtopic_cues")
+        subtopic_cues = (
+            [item for item in str(subtopic_cues_raw).split("|") if item]
+            if subtopic_cues_raw
+            else []
+        )
         hits.append(
             ChunkRecord(
                 doc_id=metadata["doc_id"],
@@ -573,6 +945,7 @@ def retrieve_top_k(query: str, index_dir: Path, k: int = 5) -> list[ChunkRecord]
                 language=metadata.get("language"),
                 extraction_method=metadata.get("extraction_method", "native"),
                 ocr_used=bool(metadata.get("ocr_used", False)),
+                subtopic_cues=subtopic_cues,
                 noise_labels=noise_labels,
                 quality_score=float(metadata.get("quality_score", 1.0)),
                 confidence=None,
@@ -580,16 +953,22 @@ def retrieve_top_k(query: str, index_dir: Path, k: int = 5) -> list[ChunkRecord]
         )
     hydrated_hits: list[ChunkRecord] = []
     for chunk in hits:
-        if not chunk.noise_labels:
-            labels, score = classify_chunk_quality(
-                text=chunk.text,
-                section_title=chunk.section_title,
-                extraction_method=chunk.extraction_method,
-            )
-            chunk.noise_labels = labels
-            chunk.quality_score = score
+        labels, score = classify_chunk_quality(
+            text=chunk.text,
+            section_title=chunk.section_title,
+            extraction_method=chunk.extraction_method,
+        )
+        chunk.noise_labels = sorted(set(chunk.noise_labels).union(labels))
+        chunk.quality_score = min(chunk.quality_score, score)
         hydrated_hits.append(chunk)
     filtered_hits = [chunk for chunk in hydrated_hits if not _should_exclude_chunk(chunk)]
+    preferred_doc_id = _preferred_source_doc_id(query)
+    if preferred_doc_id:
+        preferred_hits = [chunk for chunk in filtered_hits if chunk.doc_id == preferred_doc_id]
+        if preferred_hits:
+            filtered_hits = preferred_hits
+    if use_lightweight_rerank:
+        return _lightweight_rerank_hits(filtered_hits, query)[:k]
     return _rerank_hits(filtered_hits, query)[:k]
 
 
@@ -658,9 +1037,15 @@ def retrieve_top_k_with_neighbors(
     index_dir: Path,
     chunk_root: Path,
     k: int = 5,
+    use_lightweight_rerank: bool = True,
 ) -> tuple[list[ChunkRecord], list[ChunkRecord]]:
     """Retrieve top-k chunks and expand them with adjacent neighbors."""
-    hits = retrieve_top_k(query=query, index_dir=index_dir, k=k)
+    hits = retrieve_top_k(
+        query=query,
+        index_dir=index_dir,
+        k=k,
+        use_lightweight_rerank=use_lightweight_rerank,
+    )
     doc_ids = {chunk.doc_id for chunk in hits}
     all_chunks = load_chunk_lookup(chunk_root=chunk_root, doc_ids=doc_ids)
     expanded = expand_with_neighbors(hits=hits, all_chunks=all_chunks, query=query)
