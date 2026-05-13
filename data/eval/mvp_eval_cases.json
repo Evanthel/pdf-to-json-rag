@@ -449,5 +449,329 @@
       "table_heavy"
     ],
     "notes": "The AJMedP benchmark should abstain on unsupported aspirin-dosing claims even after adding the table-heavy technical manual."
+  },
+  {
+    "case_id": "health_questionnaire_performance_aspects",
+    "case_type": "grounded",
+    "query": "According to the health-check questionnaire, how does cold affect performance at work?",
+    "relevant_chunk_ids": [
+      "health-check-questionnaire-for-subjects-expose-to-chunk-0023"
+    ],
+    "expected_keywords": [
+      "concentration",
+      "motivation",
+      "manual strength",
+      "musculo-skeletal function"
+    ],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid"
+    ],
+    "notes": "This should stay locked to the questionnaire block that lists the assessed work-performance aspects."
+  },
+  {
+    "case_id": "health_questionnaire_question5_contexts",
+    "case_type": "grounded",
+    "query": "According to question 5 of the health-check questionnaire, in what contexts are respiratory symptoms rated?",
+    "relevant_chunk_ids": [
+      "health-check-questionnaire-for-subjects-expose-to-chunk-0014"
+    ],
+    "expected_keywords": [
+      "not at all",
+      "warm",
+      "cold",
+      "during exercise"
+    ],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid",
+      "numeric_lookup"
+    ],
+    "notes": "This should recover the response-scale contexts from the questionnaire grid rather than drifting into discussion text."
+  },
+  {
+    "case_id": "health_questionnaire_question9_colors",
+    "case_type": "grounded",
+    "query": "According to question 9 of the health-check questionnaire, which finger colors are assessed?",
+    "relevant_chunk_ids": [
+      "health-check-questionnaire-for-subjects-expose-to-chunk-0018"
+    ],
+    "expected_keywords": [
+      "white",
+      "blue",
+      "red/purple"
+    ],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid"
+    ],
+    "notes": "This should recover the finger-colour response grid rather than abstract-level questionnaire descriptions."
+  },
+  {
+    "case_id": "health_questionnaire_question12_frostbite_options",
+    "case_type": "grounded",
+    "query": "According to question 12 of the health-check questionnaire, what answer options are given for blister-grade frostbite history?",
+    "relevant_chunk_ids": [
+      "health-check-questionnaire-for-subjects-expose-to-chunk-0022"
+    ],
+    "expected_keywords": [
+      "no",
+      "once",
+      "several times"
+    ],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid",
+      "numeric_lookup"
+    ],
+    "notes": "This should return the structured answer options from the frostbite-history item."
+  },
+  {
+    "case_id": "health_questionnaire_table1_sensitivity",
+    "case_type": "grounded",
+    "query": "According to Table I of the health-check questionnaire, who should undertake the action for sensitivity?",
+    "relevant_chunk_ids": [
+      "health-check-questionnaire-for-subjects-expose-to-chunk-0025"
+    ],
+    "expected_keywords": [
+      "sensitivity",
+      "nurse",
+      "disease-focused interview"
+    ],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid",
+      "appendix_like",
+      "follow_up_schedule"
+    ],
+    "notes": "This is the structured follow-up table case that should stay locked to the sensitivity row instead of drifting to the symptom-of-disease row."
+  },
+  {
+    "case_id": "negative_health_questionnaire_aspirin_frostbite",
+    "case_type": "negative",
+    "query": "According to the health-check questionnaire, what aspirin dose should be used after frostbite?",
+    "relevant_chunk_ids": [],
+    "expected_keywords": [],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid"
+    ],
+    "notes": "The structured questionnaire benchmark should abstain on unsupported treatment dosing claims."
+  },
+  {
+    "case_id": "opioid_manager_appendix_a_optimized",
+    "case_type": "grounded",
+    "query": "According to the Opioid Manager Appendix A checklist, what should be optimized before opioid therapy?",
+    "relevant_chunk_ids": [
+      "cep-opioidmanager-appendix2017-chunk-0002"
+    ],
+    "expected_keywords": [
+      "non-pharmacological therapy",
+      "non-opioid pharmacotherapy",
+      "optimized"
+    ],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid",
+      "checklist_fields"
+    ],
+    "notes": "This should recover the core optimization fields from Appendix A instead of drifting into non-appendix treatment text."
+  },
+  {
+    "case_id": "opioid_manager_appendix_b_adverse_scale",
+    "case_type": "grounded",
+    "query": "In Appendix B of the Opioid Manager, what do adverse effect scores 0, 1, and 2 mean?",
+    "relevant_chunk_ids": [
+      "cep-opioidmanager-appendix2017-chunk-0008"
+    ],
+    "expected_keywords": [
+      "0 = none",
+      "1 = limits ADLs",
+      "2 = prevents ADLs"
+    ],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid",
+      "numeric_lookup"
+    ],
+    "notes": "This should stay in Appendix B and recover the adverse-effect severity scale values."
+  },
+  {
+    "case_id": "opioid_manager_appendix_c_follow_up_timing",
+    "case_type": "grounded",
+    "query": "In Appendix C of the Opioid Manager, what follow-up timing is suggested after switching opioids?",
+    "relevant_chunk_ids": [
+      "cep-opioidmanager-appendix2017-chunk-0021",
+      "cep-opioidmanager-appendix2017-chunk-0026"
+    ],
+    "expected_keywords": [
+      "3-day follow-up",
+      "withdrawal symptoms",
+      "every 2-4 weeks"
+    ],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid",
+      "appendix_like"
+    ],
+    "notes": "This should recover the staged follow-up timing from Appendix C switching guidance."
+  },
+  {
+    "case_id": "opioid_manager_appendix_b_med_legend",
+    "case_type": "grounded",
+    "query": "In Appendix B of the Opioid Manager chart, what does MED stand for?",
+    "relevant_chunk_ids": [
+      "cep-opioidmanager-appendix2017-chunk-0018"
+    ],
+    "expected_keywords": [
+      "MED",
+      "morphine equivalent dose"
+    ],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid",
+      "legend_lookup"
+    ],
+    "notes": "This should recover the chart legend definition, not unrelated dosing examples."
+  },
+  {
+    "case_id": "negative_opioid_manager_gadolinium_monitoring",
+    "case_type": "negative",
+    "query": "According to the Opioid Manager appendices, is gadolinium required for monitoring?",
+    "relevant_chunk_ids": [],
+    "expected_keywords": [],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid"
+    ],
+    "notes": "The opioid appendices should abstain on unsupported imaging-contrast monitoring claims."
+  },
+  {
+    "case_id": "pre_injection_checklist_live_vaccine",
+    "case_type": "grounded",
+    "query": "According to the pre injection checklist appendix, is live vaccine within 2 weeks listed as a caution?",
+    "relevant_chunk_ids": [
+      "appendix-2-examples-of-pre-injection-check-lists-final-chunk-0006"
+    ],
+    "expected_keywords": [
+      "live vaccine",
+      "within 2 weeks",
+      "caution"
+    ],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid",
+      "appendix_like",
+      "checklist_fields"
+    ],
+    "notes": "The appendix-style pre-injection checklist should surface the live-vaccine caution row without drifting into unrelated checklist items."
+  },
+  {
+    "case_id": "pre_injection_checklist_anticoagulants",
+    "case_type": "grounded",
+    "query": "According to the pre injection checklist appendix, is anticoagulant therapy listed among the cautions?",
+    "relevant_chunk_ids": [
+      "appendix-2-examples-of-pre-injection-check-lists-final-chunk-0007",
+      "appendix-2-examples-of-pre-injection-check-lists-final-chunk-0008"
+    ],
+    "expected_keywords": [
+      "anticoagulant therapy",
+      "warfarin",
+      "NOACs",
+      "DOACs"
+    ],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid",
+      "appendix_like",
+      "checklist_fields"
+    ],
+    "notes": "This should recover both the warfarin caution and the separate NOAC/DOAC caution row from the same appendix family."
+  },
+  {
+    "case_id": "pre_injection_checklist_side_effects",
+    "case_type": "grounded",
+    "query": "According to the pre injection checklist appendix, what possible risks or side effects from steroid injections are listed?",
+    "relevant_chunk_ids": [
+      "appendix-2-examples-of-pre-injection-check-lists-final-chunk-0023",
+      "appendix-2-examples-of-pre-injection-check-lists-final-chunk-0009"
+    ],
+    "expected_keywords": [
+      "allergic reaction",
+      "infections",
+      "tendon rupture",
+      "anaphylaxis"
+    ],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid",
+      "appendix_like",
+      "risk_list"
+    ],
+    "notes": "This should stay source-anchored and recover the checklist-style side-effect list rather than drifting into unrelated procedure text."
+  },
+  {
+    "case_id": "negative_pre_injection_checklist_insulin_dose",
+    "case_type": "negative",
+    "query": "According to the pre injection checklist appendix, what insulin dose is listed?",
+    "relevant_chunk_ids": [],
+    "expected_keywords": [],
+    "case_tags": [
+      "source_anchored_form",
+      "form_grid",
+      "appendix_like"
+    ],
+    "notes": "The pre-injection checklist appendix should abstain on unsupported medication-dosing claims."
+  },
+  {
+    "case_id": "source_listing_vitamin_c_and_echinacea",
+    "case_type": "grounded",
+    "query": "Which sources in the benchmark discuss vitamin C or echinacea for the common cold?",
+    "relevant_chunk_ids": [
+      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0009",
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0002"
+    ],
+    "expected_keywords": [
+      "Vitamin C for Preventing and Treating the Common Cold",
+      "Evaluation of echinacea for the prevention and treatment of the common cold"
+    ],
+    "case_tags": [
+      "cross_document",
+      "source_listing"
+    ],
+    "notes": "This should list at least the vitamin C review and the echinacea meta-analysis as relevant benchmark sources."
+  },
+  {
+    "case_id": "compare_vitamin_c_vs_echinacea_prevention",
+    "case_type": "grounded",
+    "query": "Compare what the benchmark says about vitamin C and echinacea for common cold prevention.",
+    "relevant_chunk_ids": [
+      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0009",
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0002",
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0052"
+    ],
+    "expected_keywords": [
+      "Vitamin C",
+      "normal populations",
+      "Echinacea",
+      "incidence"
+    ],
+    "case_tags": [
+      "cross_document",
+      "comparison"
+    ],
+    "notes": "This should contrast vitamin C prevention findings with echinacea prevention findings across different benchmark sources."
+  },
+  {
+    "case_id": "negative_source_listing_insulin",
+    "case_type": "negative",
+    "query": "Which sources in the benchmark discuss insulin dosing for the common cold?",
+    "relevant_chunk_ids": [],
+    "expected_keywords": [],
+    "case_tags": [
+      "cross_document",
+      "source_listing"
+    ],
+    "notes": "The source-listing path should abstain when no benchmark source supports the requested entity."
   }
 ]

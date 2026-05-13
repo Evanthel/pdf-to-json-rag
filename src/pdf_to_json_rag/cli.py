@@ -6,7 +6,7 @@ from pathlib import Path
 from .answering import answer_query_with_retrieval, format_grounded_answer
 from .chunking import process_saved_document_to_chunks
 from .config import PATHS
-from .evaluation import ensure_default_eval_cases, run_mvp_evaluation
+from .evaluation import ensure_default_eval_cases, run_mvp_evaluation, run_regression_suite
 from .extraction import process_native_pdf_to_json
 from .indexing import build_local_index, load_chunk_records
 from .retrieval import retrieve_top_k, retrieve_top_k_with_neighbors
@@ -25,6 +25,7 @@ def main() -> None:
             "retrieve-expanded",
             "answer-query",
             "evaluate-mvp",
+            "evaluate-regression",
         ],
         help="Currently available scaffold command.",
     )
@@ -49,6 +50,14 @@ def main() -> None:
     parser.add_argument(
         "--eval-file",
         help="Optional path to a custom evaluation JSON file.",
+    )
+    parser.add_argument(
+        "--case-ids",
+        help="Optional comma-separated case IDs for evaluate-regression.",
+    )
+    parser.add_argument(
+        "--shard",
+        help="Optional regression shard for evaluate-regression.",
     )
     args = parser.parse_args()
 
@@ -227,6 +236,42 @@ def main() -> None:
                 "recommend_cross_encoder: "
                 f"{deferred.get('cross_encoder_reranking', {}).get('recommended', False)}"
             )
+        stability = report.get("slice_stability", {})
+        if stability:
+            print(f"slice_stability_all_pass: {stability.get('all_pass', False)}")
+            failed = stability.get("failed_labels", [])
+            if failed:
+                print(f"slice_stability_failed_labels: {', '.join(failed)}")
+        return
+
+    if args.command == "evaluate-regression":
+        PATHS.ensure_dirs()
+        eval_path = Path(args.eval_file).expanduser().resolve() if args.eval_file else None
+        case_ids = None
+        if args.case_ids:
+            case_ids = [item.strip() for item in args.case_ids.split(",") if item.strip()]
+        report, report_path = run_regression_suite(
+            index_dir=PATHS.data_index,
+            chunk_root=PATHS.data_chunks,
+            eval_dir=PATHS.data_eval,
+            k=args.k,
+            eval_path=eval_path,
+            case_ids=case_ids,
+            shard=args.shard,
+        )
+        print(f"Regression report saved to: {report_path}")
+        if report.get("selected_shard"):
+            print(f"Selected shard: {report['selected_shard']}")
+        print(f"Selected cases: {report['case_count']}")
+        print(f"Pass count: {report['pass_count']}")
+        print(f"Fail count: {report['fail_count']}")
+        print(f"All pass: {report['all_pass']}")
+        missing = report.get("missing_case_ids", [])
+        if missing:
+            print(f"Missing case IDs: {', '.join(missing)}")
+        failed = report.get("failed_case_ids", [])
+        if failed:
+            print(f"Failed case IDs: {', '.join(failed)}")
 
 
 if __name__ == "__main__":

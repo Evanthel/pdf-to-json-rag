@@ -8,12 +8,14 @@ from pathlib import Path
 from typing import Any
 
 from .answering import GroundedAnswer, answer_query_with_retrieval
+from .intent_config import preferred_source_doc_id as configured_source_doc_id
 from .retrieval import retrieve_top_k
 from .schemas import ChunkRecord
 
 
 DEFAULT_EVAL_FILENAME = "mvp_eval_cases.json"
 DEFAULT_REPORT_FILENAME = "mvp_eval_report.json"
+DEFAULT_REGRESSION_REPORT_FILENAME = "regression_report.json"
 DEFAULT_FAITHFULNESS_AUDIT_FILENAME = "faithfulness_audit_cases.json"
 DEFAULT_FAITHFULNESS_AUDIT_CASE_IDS = [
     "antibiotics",
@@ -23,6 +25,49 @@ DEFAULT_FAITHFULNESS_AUDIT_CASE_IDS = [
     "cmaj_zinc_prevention",
     "ajmedp_immersion_neck_limit",
 ]
+DEFAULT_REGRESSION_CASE_IDS = [
+    "source_listing_vitamin_c_and_echinacea",
+    "compare_vitamin_c_vs_echinacea_prevention",
+    "health_questionnaire_question5_contexts",
+    "health_questionnaire_table1_sensitivity",
+    "pre_injection_checklist_live_vaccine",
+    "opioid_manager_appendix_a_optimized",
+    "opioid_manager_appendix_b_adverse_scale",
+    "opioid_manager_appendix_c_follow_up_timing",
+    "negative_health_questionnaire_aspirin_frostbite",
+    "negative_opioid_manager_gadolinium_monitoring",
+]
+DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
+    "cross_document_core": [
+        "source_listing_vitamin_c_and_echinacea",
+        "compare_vitamin_c_vs_echinacea_prevention",
+        "negative_source_listing_insulin",
+    ],
+    "form_grid_core": [
+        "health_questionnaire_question5_contexts",
+        "health_questionnaire_table1_sensitivity",
+        "pre_injection_checklist_live_vaccine",
+        "opioid_manager_appendix_a_optimized",
+        "opioid_manager_appendix_b_adverse_scale",
+        "opioid_manager_appendix_c_follow_up_timing",
+    ],
+    "source_anchored_review_core": [
+        "cmaj_zinc_prevention",
+        "cmaj_nontraditional_treatments",
+        "echinacea_overall_conclusion",
+    ],
+    "technical_manual_core": [
+        "ajmedp_hypothermia_predisposition",
+        "ajmedp_frostbite_severe_zone",
+        "ajmedp_immersion_neck_limit",
+    ],
+}
+SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
+    "checklist_fields": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
+    "legend_lookup": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
+    "follow_up_schedule": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
+    "form_grid": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
+}
 DEFAULT_EVAL_CASES = [
     {
         "case_id": "symptoms",
@@ -294,10 +339,19 @@ def ensure_default_eval_cases(eval_dir: Path) -> Path:
     eval_dir.mkdir(parents=True, exist_ok=True)
     eval_path = eval_dir / DEFAULT_EVAL_FILENAME
     if not eval_path.exists():
-        eval_path.write_text(
-            json.dumps(DEFAULT_EVAL_CASES, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        bundled_eval_path = (
+            Path(__file__).resolve().parents[2] / "data" / "eval" / DEFAULT_EVAL_FILENAME
         )
+        if bundled_eval_path.exists():
+            eval_path.write_text(
+                bundled_eval_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+        else:
+            eval_path.write_text(
+                json.dumps(DEFAULT_EVAL_CASES, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
     return eval_path
 
 
@@ -313,10 +367,22 @@ def ensure_default_faithfulness_audit(eval_dir: Path) -> Path:
     eval_dir.mkdir(parents=True, exist_ok=True)
     audit_path = eval_dir / DEFAULT_FAITHFULNESS_AUDIT_FILENAME
     if not audit_path.exists():
-        audit_path.write_text(
-            json.dumps(DEFAULT_FAITHFULNESS_AUDIT_CASE_IDS, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+        bundled_audit_path = (
+            Path(__file__).resolve().parents[2]
+            / "data"
+            / "eval"
+            / DEFAULT_FAITHFULNESS_AUDIT_FILENAME
         )
+        if bundled_audit_path.exists():
+            audit_path.write_text(
+                bundled_audit_path.read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+        else:
+            audit_path.write_text(
+                json.dumps(DEFAULT_FAITHFULNESS_AUDIT_CASE_IDS, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
     return audit_path
 
 
@@ -389,6 +455,8 @@ def _case_slice_labels(case: dict) -> list[str]:
 
     is_treatment = (
         case_id == "antibiotics"
+        or case_id.startswith("compare_vitamin_c")
+        or case_id.startswith("source_listing_vitamin_c")
         or case_id.startswith("vitamin_c")
         or case_id.startswith("echinacea")
         or "antibiotic" in query_lower
@@ -404,6 +472,24 @@ def _case_slice_labels(case: dict) -> list[str]:
         labels.extend(["echinacea_review", "review_heavy"])
     elif case_id.startswith("ct_") or case_id == "negative_gadolinium":
         labels.extend(["scanned_ct", "layout_ocr"])
+    elif (
+        case_id.startswith("health_questionnaire_")
+        or "health-check questionnaire" in query_lower
+        or "questionnaire for subjects exposed to cold" in query_lower
+    ):
+        labels.extend(["health_questionnaire_form", "form_grid"])
+    elif (
+        case_id.startswith("opioid_manager_")
+        or "opioid manager appendix" in query_lower
+        or "opioid manager appendices" in query_lower
+    ):
+        labels.extend(["opioid_appendix_form", "form_grid", "appendix_like"])
+    elif (
+        case_id.startswith("pre_injection_checklist_")
+        or "pre injection checklist" in query_lower
+        or "pre injection check list" in query_lower
+    ):
+        labels.extend(["pre_injection_checklist", "form_grid", "appendix_like"])
     elif case_id.startswith("ajmedp_") or "ajmedp" in query_lower or "tb med 508" in query_lower:
         labels.extend(["ajmedp_manual", "technical_manual", "table_heavy"])
     elif case_id.startswith("wat_") or "literature review" in query_lower or "dennis wat" in query_lower:
@@ -418,22 +504,7 @@ def _case_slice_labels(case: dict) -> list[str]:
 
 
 def _preferred_source_doc_id_from_query(query: str) -> str | None:
-    query_lower = query.lower()
-    anchors = {
-        "ajmedp": "ajmedp-4-2-srd-eda-v1-e-2561",
-        "tb med 508": "ajmedp-4-2-srd-eda-v1-e-2561",
-        "cmaj": "prevention-and-treatment-of-the-common-cold",
-        "literature review": "the-common-cold-a-review-of-the-literature",
-        "wat review": "the-common-cold-a-review-of-the-literature",
-        "dennis wat": "the-common-cold-a-review-of-the-literature",
-        "echinacea": "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold",
-        "vitamin c": "vitamin-c-for-preventing-and-treating-the-common-cold",
-        "ct study": "ct-study-of-the-common-cold-scanned",
-    }
-    for anchor, doc_id in anchors.items():
-        if anchor in query_lower:
-            return doc_id
-    return None
+    return configured_source_doc_id(query)
 
 
 def _result_slice_labels(grounded_answer: GroundedAnswer, base_labels: list[str]) -> list[str]:
@@ -446,7 +517,7 @@ def _result_slice_labels(grounded_answer: GroundedAnswer, base_labels: list[str]
     }
 
     preferred_doc_id = _preferred_source_doc_id_from_query(grounded_answer.query)
-    if {"source_anchored_review", "source_anchored_technical"}.intersection(labels):
+    if {"source_anchored_review", "source_anchored_technical", "source_anchored_form"}.intersection(labels):
         if preferred_doc_id and top_doc_ids == {preferred_doc_id}:
             labels.add("source_locked")
         elif len(top_doc_ids) > 1:
@@ -534,6 +605,7 @@ def _debug_case_record(
             "abstained": answer_result["abstained"],
             "negative_success": answer_result.get("negative_success"),
             "keyword_coverage": answer_result["keyword_coverage"],
+            "trace": grounded_answer.answer_trace,
             "full_answer": grounded_answer.answer,
             "answer_preview": _preview_text(grounded_answer.answer, limit=320),
             "evidence_snapshots": [
@@ -682,6 +754,7 @@ def evaluate_answer_case(case: dict, index_dir: Path, chunk_root: Path, k: int) 
         "expanded_hit_ids": [chunk.chunk_id for chunk in result.expanded_hits],
         "evidence_chunk_ids": [item.chunk_id for item in result.evidence],
         "evidence_sentences": [item.sentence for item in result.evidence],
+        "answer_trace": result.answer_trace,
         "abstained": abstained,
         "negative_success": abstained if case_type == "negative" else None,
         **keyword_eval,
@@ -717,6 +790,50 @@ def _slice_summary(label: str, debug_cases: list[dict]) -> dict[str, Any]:
         ),
         "warning_case_count": len(warning_case_ids),
         "warning_case_ids": warning_case_ids,
+    }
+
+
+def _evaluate_slice_stability(
+    slices: dict[str, Any],
+) -> dict[str, Any]:
+    checks: dict[str, Any] = {}
+    failed_labels: list[str] = []
+
+    for label, thresholds in SLICE_STABILITY_THRESHOLDS.items():
+        slice_summary = slices.get(label)
+        if slice_summary is None:
+            checks[label] = {
+                "present": False,
+                "pass": False,
+                "reason": "slice missing from current benchmark",
+                "thresholds": thresholds,
+            }
+            failed_labels.append(label)
+            continue
+
+        failed_metrics: dict[str, dict[str, float]] = {}
+        for metric_name, min_value in thresholds.items():
+            actual_value = float(slice_summary.get(metric_name, 0.0))
+            if actual_value < min_value:
+                failed_metrics[metric_name] = {
+                    "actual": actual_value,
+                    "required_min": min_value,
+                }
+
+        passed = not failed_metrics
+        checks[label] = {
+            "present": True,
+            "pass": passed,
+            "thresholds": thresholds,
+            "failed_metrics": failed_metrics,
+        }
+        if not passed:
+            failed_labels.append(label)
+
+    return {
+        "all_pass": not failed_labels,
+        "failed_labels": failed_labels,
+        "checks": checks,
     }
 
 
@@ -868,6 +985,7 @@ def run_mvp_evaluation(
         }
     )
     slices = {label: _slice_summary(label, debug_cases) for label in all_slice_labels}
+    slice_stability = _evaluate_slice_stability(slices)
     faithfulness_audit = _run_faithfulness_audit(debug_cases, audit_case_ids)
     summary = _summarize_retrieval_results(retrieval_results, answer_results)
     baseline_summary = _summarize_retrieval_results(baseline_retrieval_results, answer_results)
@@ -886,6 +1004,7 @@ def run_mvp_evaluation(
         "case_count": len(cases),
         "summary": summary,
         "slices": slices,
+        "slice_stability": slice_stability,
         "retrieval_strategy_comparison": {
             "baseline_chunking_only": {
                 "avg_precision_at_k": baseline_summary["avg_precision_at_k"],
@@ -907,5 +1026,81 @@ def run_mvp_evaluation(
     }
 
     report_path = eval_dir / DEFAULT_REPORT_FILENAME
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report, report_path
+
+
+def _regression_case_status(
+    case_type: str,
+    retrieval_result: dict[str, Any],
+    answer_result: dict[str, Any],
+) -> str:
+    if case_type == "negative":
+        return "pass" if answer_result.get("negative_success") else "negative_fail"
+    if float(retrieval_result.get("reciprocal_rank") or 0.0) <= 0.0:
+        return "retrieval_fail"
+    if float(answer_result.get("keyword_coverage") or 0.0) < 0.9:
+        return "answer_fail"
+    return "pass"
+
+
+def run_regression_suite(
+    index_dir: Path,
+    chunk_root: Path,
+    eval_dir: Path,
+    k: int = 5,
+    eval_path: Path | None = None,
+    case_ids: list[str] | None = None,
+    shard: str | None = None,
+) -> tuple[dict[str, Any], Path]:
+    """Run a deterministic high-risk regression subset before full benchmark reruns."""
+    eval_dir = eval_dir.expanduser().resolve()
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    if eval_path is None:
+        eval_path = ensure_default_eval_cases(eval_dir)
+    else:
+        eval_path = eval_path.expanduser().resolve()
+
+    all_cases = load_eval_cases(eval_path)
+    case_map = {item["case_id"]: item for item in all_cases}
+    selected_case_ids = case_ids or DEFAULT_REGRESSION_SHARDS.get(shard or "", DEFAULT_REGRESSION_CASE_IDS)
+
+    missing_case_ids = [case_id for case_id in selected_case_ids if case_id not in case_map]
+    selected_cases = [case_map[case_id] for case_id in selected_case_ids if case_id in case_map]
+
+    case_results: list[dict[str, Any]] = []
+    failed_case_ids: list[str] = []
+    for case in selected_cases:
+        retrieval_result = evaluate_retrieval_case(case=case, index_dir=index_dir, k=k)
+        answer_result = evaluate_answer_case(case=case, index_dir=index_dir, chunk_root=chunk_root, k=k)
+        status = _regression_case_status(case.get("case_type", "grounded"), retrieval_result, answer_result)
+        if status != "pass":
+            failed_case_ids.append(case["case_id"])
+        case_results.append(
+            {
+                "case_id": case["case_id"],
+                "case_type": case.get("case_type", "grounded"),
+                "status": status,
+                "retrieval": retrieval_result,
+                "answer": answer_result,
+            }
+        )
+
+    report: dict[str, Any] = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "k": k,
+        "eval_file": str(eval_path),
+        "selected_shard": shard,
+        "selected_case_ids": selected_case_ids,
+        "missing_case_ids": missing_case_ids,
+        "case_count": len(selected_cases),
+        "pass_count": len(selected_cases) - len(failed_case_ids),
+        "fail_count": len(failed_case_ids),
+        "failed_case_ids": failed_case_ids,
+        "all_pass": len(failed_case_ids) == 0 and not missing_case_ids,
+        "case_results": case_results,
+    }
+
+    report_path = eval_dir / DEFAULT_REGRESSION_REPORT_FILENAME
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report, report_path

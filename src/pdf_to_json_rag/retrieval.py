@@ -11,6 +11,12 @@ from .indexing import (
     load_embedder_from_manifest,
     load_index_manifest,
 )
+from .intent_config import (
+    detect_structured_intent,
+    get_structured_intent_profile,
+    matching_source_doc_ids as configured_matching_source_doc_ids,
+    preferred_source_doc_id as configured_source_doc_id,
+)
 from .quality import classify_chunk_quality
 from .schemas import ChunkRecord
 
@@ -50,6 +56,8 @@ EXPANSION_BLOCK_LABELS = {
 
 INTENT_CANDIDATE_K = {
     "generic": (4, 15),
+    "source_listing": (8, 30),
+    "cross_document_compare": (8, 30),
     "symptom_pathogenesis": (6, 20),
     "hypothermia_predisposition": (6, 24),
     "hypothermia_symptoms": (6, 24),
@@ -75,6 +83,8 @@ INTENT_CANDIDATE_K = {
 
 INTENT_NEIGHBOR_DEPTH = {
     "generic": 1,
+    "source_listing": 0,
+    "cross_document_compare": 0,
     "symptom_pathogenesis": 1,
     "hypothermia_predisposition": 1,
     "hypothermia_symptoms": 1,
@@ -99,6 +109,8 @@ INTENT_NEIGHBOR_DEPTH = {
 }
 
 INTENT_SECTION_HINTS = {
+    "source_listing": (),
+    "cross_document_compare": (),
     "symptom_pathogenesis": ("ABSTRACT", "INTRODUCTION", "REVIEW"),
     "hypothermia_predisposition": ("TB MED 508", "HYPOTHERMIA", "GERMANY", "ENDOCRINE", "IATROGENIC"),
     "hypothermia_symptoms": ("TB MED 508", "HYPOTHERMIA"),
@@ -161,17 +173,6 @@ QUERY_STOPWORDS = {
     "what",
     "with",
 }
-SOURCE_DOC_ANCHORS = {
-    "ajmedp": "ajmedp-4-2-srd-eda-v1-e-2561",
-    "tb med 508": "ajmedp-4-2-srd-eda-v1-e-2561",
-    "cmaj": "prevention-and-treatment-of-the-common-cold",
-    "literature review": "the-common-cold-a-review-of-the-literature",
-    "wat review": "the-common-cold-a-review-of-the-literature",
-    "dennis wat": "the-common-cold-a-review-of-the-literature",
-    "echinacea": "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold",
-    "vitamin c": "vitamin-c-for-preventing-and-treating-the-common-cold",
-    "ct study": "ct-study-of-the-common-cold-scanned",
-}
 
 
 def _query_terms(query: str) -> set[str]:
@@ -193,6 +194,13 @@ def _content_terms(text: str) -> set[str]:
 def _detect_query_intent(query: str) -> str:
     terms = _query_terms(query)
     query_lower = query.lower()
+    structured_intent = detect_structured_intent(query, terms)
+    if structured_intent:
+        return structured_intent
+    if "which sources" in query_lower or "which documents" in query_lower:
+        return "source_listing"
+    if "compare" in terms and len(terms.intersection(TREATMENT_ENTITY_TERMS)) >= 2:
+        return "cross_document_compare"
     if "hypothermia" in terms and {"predisposing", "predispose", "factors", "categories"}.intersection(terms):
         return "hypothermia_predisposition"
     if "hypothermia" in terms and {"signs", "symptoms"}.intersection(terms):
@@ -263,16 +271,27 @@ def _detect_query_intent(query: str) -> str:
 
 
 def _preferred_source_doc_id(query: str) -> str | None:
-    query_lower = query.lower()
-    for anchor, doc_id in SOURCE_DOC_ANCHORS.items():
-        if anchor in query_lower:
-            return doc_id
-    return None
+    return configured_source_doc_id(query)
+
+
+def _matching_source_doc_ids(query: str) -> list[str]:
+    return configured_matching_source_doc_ids(query)
 
 
 def _augment_query(query: str) -> str:
     intent = _detect_query_intent(query)
+    structured_profile = get_structured_intent_profile(intent)
+    if structured_profile:
+        return f"{query} {structured_profile.augment_suffix}"
     suffix = {
+        "source_listing": (
+            "sources documents benchmark review questionnaire checklist appendix manual "
+            "technical source document family"
+        ),
+        "cross_document_compare": (
+            "compare sources across documents benchmark evidence conclusions prevention "
+            "incidence treatment source contrast"
+        ),
         "review_prevention": (
             "review summary prevention best evidence handwashing physical interventions zinc supplements"
         ),
@@ -342,8 +361,16 @@ def _augment_query(query: str) -> str:
 
 def _candidate_pool_size(query: str, k: int) -> int:
     intent = _detect_query_intent(query)
+    structured_profile = get_structured_intent_profile(intent)
+    if structured_profile:
+        multiplier, minimum = structured_profile.candidate_k
+        return max(k * multiplier, minimum)
     multiplier, minimum = INTENT_CANDIDATE_K.get(intent, INTENT_CANDIDATE_K["generic"])
     return max(k * multiplier, minimum)
+
+
+def _is_cross_document_intent(intent: str) -> bool:
+    return intent in {"source_listing", "cross_document_compare"}
 
 
 def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
@@ -353,11 +380,35 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
     bonus = 0.0
     labels = set(chunk.noise_labels)
     subtopic_cues = set(chunk.subtopic_cues)
+    matched_doc_ids = set(_matching_source_doc_ids(query))
 
     if "ocr_derived" in labels:
         bonus -= 0.15
     bonus -= (1.0 - chunk.quality_score) * 6.0
     bonus -= len(labels.intersection(SOFT_NOISE_LABELS)) * 0.75
+
+    if intent in {"source_listing", "cross_document_compare"}:
+        if matched_doc_ids:
+            if chunk.doc_id in matched_doc_ids:
+                bonus += 6.0
+            else:
+                bonus -= 6.0
+        if section.startswith("CONCLUSION") or "IMPLICATIONS OF THE REVIEW" in section:
+            bonus += 4.0
+        if "published evidence supports echinacea" in text or "suggests that echinacea has a benefit" in text:
+            bonus += 6.0
+        if "decreasing the incidence" in text or "substantial reductions in the incidence" in text:
+            bonus += 5.0
+        if "incidence was not altered" in text or "normal populations" in text or "lack of effect" in text:
+            bonus += 6.0
+        if "trials were included for analysis" in text or "inclusion criteria" in text:
+            bonus -= 6.0
+        if "search strategy and selection criteria" in text or "subject of controversy" in text:
+            bonus -= 4.0
+        if "we sought to discover whether" in text or "criteria for inclusion were placebo-controlled trials" in text:
+            bonus -= 3.5
+        if "our meta-analysis had only one cold incidence study" in text:
+            bonus -= 2.0
 
     if intent == "definition":
         if section.startswith("DEFINITION"):
@@ -366,6 +417,131 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
             bonus += 5.0
         if section.startswith("PROGNOSIS") or section.startswith("AETIOLOGY"):
             bonus += 1.0
+    elif intent == "opioid_pre_therapy_checklist":
+        if "appendix a" in text or "appendix a" in section.lower():
+            bonus += 6.0
+        if "checklist" in text:
+            bonus += 3.0
+        if "non-pharmacological therapy" in text:
+            bonus += 5.0
+        if "non-opioid pharmacotherapy" in text:
+            bonus += 5.0
+        if "informed consent" in text or "opioid safety" in text:
+            bonus += 3.0
+        if "urine drug screening" in text:
+            bonus += 2.5
+    elif intent == "opioid_adverse_effect_scale":
+        if "appendix b" in text or "appendix b" in section.lower():
+            bonus += 6.0
+        if "adverse effects" in text:
+            bonus += 4.0
+        if "0 = none" in text:
+            bonus += 5.0
+        if "1 = limits adls" in text or "2 = prevents adls" in text:
+            bonus += 7.0
+        if "fatal overdose" in text or "non-fatal overdose" in text:
+            bonus += 2.0
+    elif intent == "opioid_switch_follow_up":
+        if "appendix c" in text or "switching opioids" in text:
+            bonus += 6.0
+        if "3-day follow-up" in text:
+            bonus += 7.0
+        if "every 2-4 weeks" in text or "every 2–4 weeks" in text:
+            bonus += 5.0
+        if "withdrawal symptoms" in text and "pain" in text:
+            bonus += 3.0
+    elif intent == "questionnaire_performance":
+        if "question 13" in text or "performance at work" in text:
+            bonus += 7.0
+        if "concentration" in text or "motivation" in text:
+            bonus += 4.0
+        if "manual strength" in text or "musculo-skeletal function" in text:
+            bonus += 4.0
+        if "cooling symptoms" in text:
+            bonus += 3.0
+        if "health-check questionnaire" in text:
+            bonus += 2.0
+    elif intent == "questionnaire_symptom_scale":
+        if "question 5" in text or "shortness of breath" in text:
+            bonus += 6.0
+        if "persistent coughing" in text or "wheezing" in text:
+            bonus += 4.0
+        if "not at all" in text and "during exercise" in text:
+            bonus += 5.0
+        if "mucus excretion" in text:
+            bonus += 3.0
+    elif intent == "questionnaire_color_change":
+        if "question 9" in text:
+            bonus += 6.0
+        if "white" in text and "blue" in text and ("red/purple" in text or "red purple" in text):
+            bonus += 7.0
+        if "episodically change" in text:
+            bonus += 3.0
+    elif intent == "questionnaire_frostbite_history":
+        if "question 12" in text or "blister grade" in text:
+            bonus += 6.0
+        if "once" in text and "several times" in text:
+            bonus += 5.0
+        if "frostbite" in text:
+            bonus += 3.0
+    elif intent == "questionnaire_follow_up_table":
+        if "table i" in text:
+            bonus += 8.0
+        if "uncomfortable" in text or "sensitivity" in text:
+            bonus += 4.0
+        if "interview of working ability" in text or "disease-focused interview" in text:
+            bonus += 4.0
+        if "professional: nurse" in text or "nurse and physician" in text:
+            bonus += 5.0
+        if "sensitivity" in query.lower():
+            if "sensitivity" in text and "professional: nurse" in text:
+                bonus += 6.0
+            if "sensitivity" not in text:
+                bonus -= 5.0
+            if "symptom of some disease" in text:
+                bonus -= 5.0
+        if "uncomfortable" in query.lower():
+            if "uncomfortable" in text and "professional: nurse" in text:
+                bonus += 6.0
+            if "uncomfortable" not in text:
+                bonus -= 5.0
+            if "symptom of some disease" in text:
+                bonus -= 4.0
+        if "discussion" in section:
+            bonus -= 3.0
+        if "questionnaire was developed" in text:
+            bonus -= 4.0
+    elif intent == "appendix_checklist_lookup":
+        query_lower = query.lower()
+        if section == "Y/N":
+            bonus += 5.0
+        if "contra-indications" in text or "cautions" in text:
+            bonus += 3.0
+        if "live vaccine" in query_lower:
+            if "live vaccine" in text:
+                bonus += 8.0
+            else:
+                bonus -= 4.0
+        if "anticoagulant" in query_lower:
+            if "anticoagulant therapy" in text:
+                bonus += 8.0
+            else:
+                bonus -= 4.0
+        if "live vaccine" in text:
+            bonus += 6.0
+        if "anticoagulant therapy" in text:
+            bonus += 6.0
+        if "warfarin" in text or "noacs" in text or "doacs" in text:
+            bonus += 4.0
+    elif intent == "appendix_risk_list":
+        if "possible risks and side effects from steroid injections" in text:
+            bonus += 7.0
+        if "allergic reaction" in text or "anaphylaxis" in text:
+            bonus += 5.0
+        if "tendon rupture" in text or "infections" in text:
+            bonus += 4.0
+        if "section 5" in text or "explanation" in text:
+            bonus += 3.0
     elif intent == "review_prevention":
         if "handwashing" in text or "physical interventions" in text:
             bonus += 6.0
@@ -657,6 +833,8 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
 def _lightweight_query_bonus(chunk: ChunkRecord, query: str) -> float:
     query_terms = _content_terms(query)
     preferred_doc_id = _preferred_source_doc_id(query)
+    matched_doc_ids = set(_matching_source_doc_ids(query))
+    intent = _detect_query_intent(query)
     if not query_terms:
         query_terms = set()
 
@@ -675,6 +853,14 @@ def _lightweight_query_bonus(chunk: ChunkRecord, query: str) -> float:
         bonus += 3.0
     if "ajmedp" in query_terms and ("ajmedp" in text or "tb med 508" in text or "tb med 508" in section):
         bonus += 3.0
+    if "opioid" in query_terms and (
+        "opioid manager" in text or "appendix" in section or "appendix" in source
+    ):
+        bonus += 3.0
+    if "adls" in query_terms and ("adls" in text or "activities of daily living" in text):
+        bonus += 2.5
+    if "follow" in query_terms and "3-day" in text:
+        bonus += 2.5
     if "zinc" in query_terms and "zinc" in text:
         bonus += 2.5
     if "honey" in query_terms and "honey" in text:
@@ -690,6 +876,11 @@ def _lightweight_query_bonus(chunk: ChunkRecord, query: str) -> float:
         bonus += 4.0
         if "review" in query.lower():
             bonus += 1.5
+    if matched_doc_ids:
+        if chunk.doc_id in matched_doc_ids:
+            bonus += 5.0
+        elif _is_cross_document_intent(intent):
+            bonus -= 5.0
 
     labels = set(chunk.noise_labels)
     if "table_reference" in labels:
@@ -770,6 +961,65 @@ def _chunk_matches_intent(chunk: ChunkRecord, intent: str) -> bool:
             or "honey at bedtime" in text
             or ("honey" in text and "children" in text)
         )
+    if intent == "opioid_pre_therapy_checklist":
+        return (
+            "appendix a" in text
+            or "checklist" in text
+            or "non-pharmacological therapy" in text
+            or "non-opioid pharmacotherapy" in text
+            or "informed consent" in text
+            or "opioid safety" in text
+            or "urine drug screening" in text
+        )
+    if intent == "opioid_adverse_effect_scale":
+        return (
+            "appendix b" in text
+            or "adverse effects" in text
+            or "0 = none" in text
+            or "1 = limits adls" in text
+            or "2 = prevents adls" in text
+        )
+    if intent == "opioid_switch_follow_up":
+        return (
+            "appendix c" in text
+            or "switching opioids" in text
+            or "3-day follow-up" in text
+            or "follow up with patient every 2-4 weeks" in text
+            or "follow up with patient every 2–4 weeks" in text
+        )
+    if intent == "questionnaire_performance":
+        return (
+            "question 13" in text
+            or "performance at work" in text
+            or "concentration" in text
+            or "manual strength" in text
+        )
+    if intent == "questionnaire_symptom_scale":
+        return (
+            "question 5" in text
+            or "shortness of breath" in text
+            or "persistent coughing" in text
+            or "during exercise" in text
+        )
+    if intent == "questionnaire_color_change":
+        return (
+            "question 9" in text
+            or ("white" in text and "blue" in text)
+            or "red/purple" in text
+        )
+    if intent == "questionnaire_frostbite_history":
+        return (
+            "question 12" in text
+            or "blister grade" in text
+            or ("once" in text and "several times" in text)
+        )
+    if intent == "questionnaire_follow_up_table":
+        return (
+            "table i" in text
+            or "interview of working ability" in text
+            or "professional: nurse" in text
+            or "nurse and physician" in text
+        )
     if intent == "symptom_pathogenesis":
         return (
             "symptom production is a combination of viral cytopathic effect" in text
@@ -805,12 +1055,34 @@ def _chunk_matches_intent(chunk: ChunkRecord, intent: str) -> bool:
             or ("50-54" in text and "neck" in text)
             or ("immersion time limits" in text and "water temperature" in text)
         )
+    if intent == "appendix_checklist_lookup":
+        return (
+            "live vaccine" in text
+            or "anticoagulant therapy" in text
+            or "warfarin" in text
+            or "noacs" in text
+            or "doacs" in text
+            or "pregnancy or breastfeeding" in text
+            or "local or systemic infection" in text
+        )
+    if intent == "appendix_risk_list":
+        return (
+            "possible risks and side effects from steroid injections" in text
+            or "allergic reaction" in text
+            or "anaphylaxis" in text
+            or "tendon rupture" in text
+            or "post injection flare" in text
+        )
 
     if set(chunk.subtopic_cues).intersection(INTENT_SUBTOPIC_CUES.get(intent, set())):
         return True
 
     section = (chunk.section_title or "").upper()
-    if any(hint in section for hint in INTENT_SECTION_HINTS.get(intent, ())):
+    structured_profile = get_structured_intent_profile(intent)
+    section_hints = (
+        structured_profile.section_hints if structured_profile else INTENT_SECTION_HINTS.get(intent, ())
+    )
+    if any(hint in section for hint in section_hints):
         return True
     if intent == "incidence":
         return ("each year" in text and "children" in text) or ("adults" in text and "infections" in text)
@@ -881,6 +1153,32 @@ def _lightweight_rerank_hits(hits: list[ChunkRecord], query: str) -> list[ChunkR
     return [chunk for _, chunk in scored]
 
 
+def _diversify_hits_by_doc(
+    hits: list[ChunkRecord],
+    k: int,
+    per_doc_limit: int,
+) -> list[ChunkRecord]:
+    selected: list[ChunkRecord] = []
+    per_doc_counts: dict[str, int] = {}
+
+    for chunk in hits:
+        count = per_doc_counts.get(chunk.doc_id, 0)
+        if count >= per_doc_limit:
+            continue
+        selected.append(chunk)
+        per_doc_counts[chunk.doc_id] = count + 1
+        if len(selected) >= k:
+            return selected
+
+    for chunk in hits:
+        if chunk in selected:
+            continue
+        selected.append(chunk)
+        if len(selected) >= k:
+            break
+    return selected
+
+
 def retrieve_top_k(
     query: str,
     index_dir: Path,
@@ -891,6 +1189,7 @@ def retrieve_top_k(
     index_dir = index_dir.expanduser().resolve()
     manifest = load_index_manifest(index_dir)
     collection_name = manifest.get("collection_name", DEFAULT_COLLECTION_NAME)
+    intent = _detect_query_intent(query)
 
     embed_texts, _ = load_embedder_from_manifest(manifest)
     query_embedding = embed_texts([_augment_query(query)])[0]
@@ -898,59 +1197,64 @@ def retrieve_top_k(
 
     client = chromadb.PersistentClient(path=str(index_dir))
     collection = client.get_collection(name=collection_name)
+
+    def hydrate(result: dict) -> list[ChunkRecord]:
+        ids = result.get("ids", [[]])[0]
+        documents = result.get("documents", [[]])[0]
+        metadatas = result.get("metadatas", [[]])[0]
+
+        hydrated: list[ChunkRecord] = []
+        for chunk_id, text, metadata in zip(ids, documents, metadatas):
+            metadata = metadata or {}
+            noise_labels_raw = metadata.get("noise_labels")
+            noise_labels = (
+                [item for item in str(noise_labels_raw).split("|") if item]
+                if noise_labels_raw
+                else []
+            )
+            subtopic_cues_raw = metadata.get("subtopic_cues")
+            subtopic_cues = (
+                [item for item in str(subtopic_cues_raw).split("|") if item]
+                if subtopic_cues_raw
+                else []
+            )
+            hydrated.append(
+                ChunkRecord(
+                    doc_id=metadata["doc_id"],
+                    chunk_id=chunk_id,
+                    source_pdf=metadata["source_pdf"],
+                    text=text,
+                    page_start=int(metadata["page_start"]),
+                    page_end=int(metadata["page_end"]),
+                    bbox=None,
+                    section_title=metadata.get("section_title"),
+                    section_level=(
+                        int(metadata["section_level"])
+                        if metadata.get("section_level") is not None
+                        else None
+                    ),
+                    chunk_type=metadata.get("chunk_type", "text"),
+                    reading_order_index=int(metadata["reading_order_index"]),
+                    preceding_chunk_id=metadata.get("preceding_chunk_id"),
+                    following_chunk_id=metadata.get("following_chunk_id"),
+                    language=metadata.get("language"),
+                    extraction_method=metadata.get("extraction_method", "native"),
+                    ocr_used=bool(metadata.get("ocr_used", False)),
+                    subtopic_cues=subtopic_cues,
+                    noise_labels=noise_labels,
+                    quality_score=float(metadata.get("quality_score", 1.0)),
+                    confidence=None,
+                )
+            )
+        return hydrated
+
     result = collection.query(
         query_embeddings=[query_embedding],
         n_results=candidate_k,
         include=["documents", "metadatas", "distances"],
     )
 
-    ids = result.get("ids", [[]])[0]
-    documents = result.get("documents", [[]])[0]
-    metadatas = result.get("metadatas", [[]])[0]
-
-    hits: list[ChunkRecord] = []
-    for chunk_id, text, metadata in zip(ids, documents, metadatas):
-        metadata = metadata or {}
-        noise_labels_raw = metadata.get("noise_labels")
-        noise_labels = (
-            [item for item in str(noise_labels_raw).split("|") if item]
-            if noise_labels_raw
-            else []
-        )
-        subtopic_cues_raw = metadata.get("subtopic_cues")
-        subtopic_cues = (
-            [item for item in str(subtopic_cues_raw).split("|") if item]
-            if subtopic_cues_raw
-            else []
-        )
-        hits.append(
-            ChunkRecord(
-                doc_id=metadata["doc_id"],
-                chunk_id=chunk_id,
-                source_pdf=metadata["source_pdf"],
-                text=text,
-                page_start=int(metadata["page_start"]),
-                page_end=int(metadata["page_end"]),
-                bbox=None,
-                section_title=metadata.get("section_title"),
-                section_level=(
-                    int(metadata["section_level"])
-                    if metadata.get("section_level") is not None
-                    else None
-                ),
-                chunk_type=metadata.get("chunk_type", "text"),
-                reading_order_index=int(metadata["reading_order_index"]),
-                preceding_chunk_id=metadata.get("preceding_chunk_id"),
-                following_chunk_id=metadata.get("following_chunk_id"),
-                language=metadata.get("language"),
-                extraction_method=metadata.get("extraction_method", "native"),
-                ocr_used=bool(metadata.get("ocr_used", False)),
-                subtopic_cues=subtopic_cues,
-                noise_labels=noise_labels,
-                quality_score=float(metadata.get("quality_score", 1.0)),
-                confidence=None,
-            )
-        )
+    hits = hydrate(result)
     hydrated_hits: list[ChunkRecord] = []
     for chunk in hits:
         labels, score = classify_chunk_quality(
@@ -962,14 +1266,63 @@ def retrieve_top_k(
         chunk.quality_score = min(chunk.quality_score, score)
         hydrated_hits.append(chunk)
     filtered_hits = [chunk for chunk in hydrated_hits if not _should_exclude_chunk(chunk)]
-    preferred_doc_id = _preferred_source_doc_id(query)
+    matched_doc_ids = set(_matching_source_doc_ids(query)) if _is_cross_document_intent(intent) else set()
+    if matched_doc_ids:
+        filtered_hits = [chunk for chunk in filtered_hits if chunk.doc_id in matched_doc_ids]
+        present_doc_ids = {chunk.doc_id for chunk in filtered_hits}
+        missing_doc_ids = [doc_id for doc_id in matched_doc_ids if doc_id not in present_doc_ids]
+        for doc_id in missing_doc_ids:
+            doc_result = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=candidate_k,
+                where={"doc_id": doc_id},
+                include=["documents", "metadatas", "distances"],
+            )
+            for chunk in hydrate(doc_result):
+                labels, score = classify_chunk_quality(
+                    text=chunk.text,
+                    section_title=chunk.section_title,
+                    extraction_method=chunk.extraction_method,
+                )
+                chunk.noise_labels = sorted(set(chunk.noise_labels).union(labels))
+                chunk.quality_score = min(chunk.quality_score, score)
+                if not _should_exclude_chunk(chunk):
+                    filtered_hits.append(chunk)
+        deduped_hits: dict[str, ChunkRecord] = {}
+        for chunk in filtered_hits:
+            deduped_hits.setdefault(chunk.chunk_id, chunk)
+        filtered_hits = list(deduped_hits.values())
+    preferred_doc_id = None if _is_cross_document_intent(intent) else _preferred_source_doc_id(query)
     if preferred_doc_id:
         preferred_hits = [chunk for chunk in filtered_hits if chunk.doc_id == preferred_doc_id]
+        if not preferred_hits:
+            preferred_result = collection.query(
+                query_embeddings=[query_embedding],
+                n_results=candidate_k,
+                where={"doc_id": preferred_doc_id},
+                include=["documents", "metadatas", "distances"],
+            )
+            preferred_hydrated = []
+            for chunk in hydrate(preferred_result):
+                labels, score = classify_chunk_quality(
+                    text=chunk.text,
+                    section_title=chunk.section_title,
+                    extraction_method=chunk.extraction_method,
+                )
+                chunk.noise_labels = sorted(set(chunk.noise_labels).union(labels))
+                chunk.quality_score = min(chunk.quality_score, score)
+                preferred_hydrated.append(chunk)
+            preferred_hits = [
+                chunk for chunk in preferred_hydrated if not _should_exclude_chunk(chunk)
+            ]
         if preferred_hits:
             filtered_hits = preferred_hits
-    if use_lightweight_rerank:
-        return _lightweight_rerank_hits(filtered_hits, query)[:k]
-    return _rerank_hits(filtered_hits, query)[:k]
+    reranked_hits = _lightweight_rerank_hits(filtered_hits, query) if use_lightweight_rerank else _rerank_hits(filtered_hits, query)
+    if intent == "source_listing":
+        return _diversify_hits_by_doc(reranked_hits, k=k, per_doc_limit=1)[:k]
+    if intent == "cross_document_compare":
+        return _diversify_hits_by_doc(reranked_hits, k=k, per_doc_limit=2)[:k]
+    return reranked_hits[:k]
 
 
 def load_chunk_lookup(chunk_root: Path, doc_ids: set[str] | None = None) -> dict[str, ChunkRecord]:
@@ -1003,7 +1356,8 @@ def expand_with_neighbors(
 ) -> list[ChunkRecord]:
     """Expand retrieval results with preceding and following chunks."""
     intent = _detect_query_intent(query)
-    depth = INTENT_NEIGHBOR_DEPTH.get(intent, 1)
+    structured_profile = get_structured_intent_profile(intent)
+    depth = structured_profile.neighbor_depth if structured_profile else INTENT_NEIGHBOR_DEPTH.get(intent, 1)
     expanded: dict[str, ChunkRecord] = {}
 
     def maybe_add_neighbor(

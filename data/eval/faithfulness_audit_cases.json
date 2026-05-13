@@ -4,6 +4,12 @@
   "ct_follow_up_improvement",
   "cmaj_nontraditional_treatments",
   "cmaj_zinc_prevention",
+  "compare_vitamin_c_vs_echinacea_prevention",
   "wat_antibiotics_review",
-  "ajmedp_immersion_neck_limit"
+  "ajmedp_immersion_neck_limit",
+  "health_questionnaire_question5_contexts",
+  "health_questionnaire_table1_sensitivity",
+  "pre_injection_checklist_side_effects",
+  "opioid_manager_appendix_b_adverse_scale",
+  "opioid_manager_appendix_c_follow_up_timing"
 ]

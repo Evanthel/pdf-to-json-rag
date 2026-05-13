@@ -1524,3 +1524,91 @@ Interpretation:
 - the new `table_heavy` and `source_anchored_technical` slices are clean on the current benchmark
 - `pdfplumber` still stays deferred because the current table-heavy document does not expose a true table/text extraction miss
 - the current lightweight reranking pass and sampled faithfulness audit remain sufficient on this benchmark
+
+## v1.9 Tasks 1-5
+
+`v1.9` broadened the benchmark again, but this time with structured-form pressure rather than another review-heavy or purely table-heavy document.
+
+### Broader Benchmark Work
+
+This pass included:
+
+- adding `Health-check_questionnaire_for_subjects_expose_to_.pdf` as the eighth benchmark document
+- extracting it through the current native-text path, chunking it, and rebuilding the shared index across eight documents
+- expanding the benchmark from 30 to 36 cases
+- adding new source-anchored questionnaire, form/grid, numeric-option, appendix-like, and negative abstention cases
+
+### Structured-Form Work
+
+This pass also included:
+
+- adding a narrow structured-form assist path for flagged questionnaire/table blocks instead of reviving a broader table dependency
+- normalizing questionnaire items so grid-like questions are rewritten into cleaner source-anchored answerable chunks
+- normalizing the late follow-up `Table I` rows into more readable row summaries
+- tightening source-aware retrieval with a constrained fallback pass when anchored queries drift away from the intended document
+- tightening answer compression and row-specific answer selection for source-anchored questionnaire/table cases
+
+### Deferred-Feature Decision Check
+
+The new questionnaire benchmark was useful because it created a different kind of pressure from the table-heavy technical manual:
+
+- it exposed structured-form / source-locking issues rather than a true table-extraction miss
+- the narrow structured-form assist path was enough to recover those issues on the current benchmark
+- `pdfplumber` still did not need to return
+- cross-encoder reranking still did not need to return
+- `LLM-as-a-judge` still did not need to return
+
+### Updated Evaluation Check
+
+After the full `v1.9` pass, the benchmark stood at:
+
+- average `precision@5`: `0.305`
+- average `recall@5`: `1.0`
+- `MRR`: `1.0`
+- average answer keyword coverage: `1.0`
+- negative-case success rate: `1.0`
+- warning-case count: `0`
+
+Interpretation:
+
+- the benchmark is warning-free again across eight indexed documents and 36 cases
+- the new `form_grid` and `source_anchored_form` slices are clean on the current benchmark
+- the current manual/table + questionnaire benchmark still does not justify reviving `pdfplumber`
+- the current lightweight reranking pass and sampled faithfulness audit remain sufficient on this broader benchmark
+
+## v1.10-v1.11
+
+These iterations broadened and then stabilized the structured-form path instead of only adding one more benchmark source.
+
+What changed:
+
+- added the opioid appendix family as a ninth benchmark source
+- added new source-anchored checklist, legend, and follow-up schedule cases
+- refactored the form path into reusable pattern families instead of document-specific rewrites
+- added deterministic regression checks for high-risk source-anchored form cases
+
+Outcome:
+
+- the benchmark stayed warning-free at 41 cases
+- the form/grid path became more maintainable
+- the project gained earlier regression signals than global benchmark reruns alone
+
+## v1.12-v1.13
+
+These iterations shifted focus from rule sprawl and source-anchored inspection toward explicit cross-document behavior.
+
+What changed:
+
+- moved structured intent metadata into a shared declarative config
+- added `answer_trace` to structured outputs and debug reports
+- added an appendix-heavy checklist source and generalized the checklist path without a new per-document branch
+- added cross-document intents for source listing and source comparison
+- wired multi-source document matching into retrieval for cross-document queries
+- added a dedicated `cross_document_core` regression shard and expanded the full eval set
+
+Outcome:
+
+- the benchmark now spans 48 cases across 11 indexed documents
+- it remains warning-free
+- the pipeline can now answer both single-document evidence questions and multi-file source-discovery / comparison questions
+- the project direction is now closer to the original goal of a general PDF-to-JSON RAG pipeline rather than a benchmark tied only to one medical question family

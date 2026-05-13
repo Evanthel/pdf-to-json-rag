@@ -208,15 +208,85 @@ Completed scope:
 
 All five milestones are now complete in the current local implementation. The benchmark now spans 30 cases across seven indexed documents, remains warning-free, and includes an explicit table-heavy/manual slice that still does not justify reviving the heavier deferred features.
 
-## 6.9. v1.9 Plan
+## 6.9. v1.9 Milestones
 
-The next iteration should broaden the benchmark again, but this time with form/grid-heavy pressure rather than another review or prose-heavy document.
+The ninth post-MVP iteration separated structured-form pressure from table-heavy/manual pressure and used that broader benchmark to re-check whether any heavier deferred feature really needs to return.
 
-1. Add an eighth benchmark document that is more questionnaire-, form-, or grid-heavy than the current technical manual, so table-like pressure is separated from structured-form pressure.
-2. Add benchmark cases and slices for form/grid extraction, appendix-heavy sections, numeric lookups, and source-anchored technical answers on that new document.
-3. Tighten answer compression for dense technical/table answers so the benchmark-clean path is also shorter and easier to inspect.
-4. If the new form/grid benchmark exposes real cell-boundary or field-label extraction misses, prototype a narrow structured-table/form assist path and compare it only on those flagged slices.
-5. Revisit cross-encoder reranking or LLM-as-a-judge only if the expanded eight-document benchmark reopens concrete retrieval or faithfulness warnings.
+Completed scope:
+
+1. Added an eighth benchmark document built around a health-check questionnaire that is more form/grid-heavy than the existing technical manual.
+2. Added benchmark cases and slices for source-anchored form questions, grid-style response options, numeric option lookups, and a late-table / appendix-like follow-up case.
+3. Tightened answer compression for dense source-anchored questionnaire/table answers so the benchmark-clean path is shorter and easier to inspect.
+4. Prototyped a narrow structured-form assist path for flagged questionnaire/table blocks instead of reviving a broader table-extraction dependency.
+5. Re-checked cross-encoder reranking, `pdfplumber`, and LLM-as-a-judge on the expanded eight-document benchmark and kept them deferred after the final warning-free rerun.
+
+All five milestones are now complete in the current local implementation. The benchmark now spans 36 cases across eight indexed documents, remains warning-free, and includes a dedicated `form_grid` / `source_anchored_form` slice that still does not justify reviving the heavier deferred features.
+
+## 6.10. v1.10 Milestones
+
+The tenth post-MVP iteration focused on stress-testing and generalizing structured-form behavior across another appendix/checklist-heavy document family.
+
+Completed scope:
+
+1. Added a ninth benchmark document (`CEP_OpioidManager_Appendix2017.pdf`) to extend the form/grid slice beyond a single questionnaire-style source.
+2. Expanded the benchmark with new source-anchored opioid-appendix cases for checklist-field retrieval, adverse-effect scale lookup, follow-up timing extraction, and a new unsupported-entity negative case.
+3. Reworked the structured-form assist path into a cleaner per-document-family dispatch, then added a narrow opioid-appendix normalization path instead of another one-off retrieval-only patch.
+4. Added intent and source-locking support for the opioid appendix family in retrieval/answering/evaluation so row/field-style queries remain anchored to the correct source and section family.
+5. Re-checked deferred items on the broader nine-document benchmark and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge deferred after a warning-free rerun.
+
+All five milestones are now complete in the current local implementation. The benchmark now spans 41 cases across nine indexed documents, remains warning-free, and keeps the heavier deferred features out of scope.
+
+## 6.11. v1.11 Milestones
+
+The eleventh post-MVP iteration focused on making the form/appendix path more maintainable and adding stronger quality gates without introducing heavyweight model components.
+
+Completed scope:
+
+1. Replaced part of the document-specific structured-form rewrites with a reusable pattern layer (`field-row`, `legend-scale`, `follow-up-schedule`) and kept dispatch per document family.
+2. Added concise structured answer templates for checklist/legend/follow-up intents so source-anchored form answers are shorter while remaining grounded.
+3. Added form-family slice checks (`checklist_fields`, `legend_lookup`, `follow_up_schedule`) with explicit per-slice stability thresholds.
+4. Added a deterministic regression suite (`evaluate-regression`) for high-risk source-anchored form cases as a fast pre-check before full benchmark reruns.
+5. Re-checked deferred features after the expanded nine-document benchmark and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge deferred.
+
+All five milestones are now complete in the current local implementation. The benchmark remains warning-free at 41 cases across nine indexed documents, and slice-stability checks plus regression gating now provide earlier failure signals than global warning counts alone.
+
+## 6.12. v1.12 Milestones
+
+The twelfth post-MVP iteration focused on reducing rule sprawl, improving inspectability, and checking whether the structured-form path still generalizes to another appendix family.
+
+Completed scope:
+
+1. Moved structured form and appendix intent metadata into a shared declarative config so retrieval and answering read from one source of truth.
+2. Added `answer_trace` metadata for structured answers so matched templates, cues, and evidence can be inspected directly in debug output.
+3. Added regression shards to the CLI for faster local pre-checks on cross-document, form-grid, source-anchored review, and technical/manual cases.
+4. Added an additional appendix-heavy checklist source and generalized the existing structured-form path to cover it without another per-document special case.
+5. Re-checked the deferred list and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge out of scope because the current local architecture still resolves the new cases cleanly.
+
+All five milestones are now complete in the current local implementation. The benchmark remained warning-free while the structured-form path became more declarative and easier to inspect.
+
+## 6.13. v1.13 Milestones
+
+The thirteenth post-MVP iteration shifted from single-document question answering toward explicit cross-document behavior.
+
+Completed scope:
+
+1. Added cross-document query intents for source listing and source comparison instead of treating all queries like single-document retrieval.
+2. Added multi-source document matching from the query and wired it into retrieval so cross-document intents focus on the intended source families.
+3. Tightened cross-document reranking to prefer conclusion, prevention, and null-effect evidence over introduction, methods, or inclusion-criteria chunks.
+4. Added a dedicated regression shard for cross-document behavior and used it to stabilize the new multi-file path before rerunning the full benchmark.
+5. Expanded the evaluation set with source-listing, comparison, and unsupported-entity cross-document cases, then synchronized the gold targets to the current chunk layout.
+
+All five milestones are now complete in the current local implementation. The benchmark now spans 48 cases across 11 indexed documents and remains warning-free while covering both single-document and cross-document grounded behavior.
+
+## 6.14. v1.14 Plan
+
+The next iteration should push the project toward a more domain-agnostic document pipeline instead of continuing to grow only the medical benchmark.
+
+1. Add at least one clearly non-medical benchmark document family and verify that current chunking, retrieval, and answering rules do not silently depend on medical vocabulary.
+2. Separate document-family matching from domain vocabulary more cleanly so source-aware behavior can scale beyond the current review/manual/checklist benchmark set.
+3. Add a lightweight document-level answer mode for questions like “what does this file cover?” or “which file is most relevant for X?” that sits between source listing and detailed evidence assembly.
+4. Expand evaluation so cross-document cases can score at the document level when the user intent is source discovery rather than exact chunk retrieval.
+5. Re-check deferred items only if the broader, more domain-diverse benchmark exposes failures that the current chunking-first plus lightweight-rerank architecture cannot absorb.
 
 
 ## 7. Explicitly Deferred
