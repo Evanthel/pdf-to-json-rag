@@ -24,6 +24,16 @@ OCR_AUTHOR_LINE_RE = re.compile(
     r"\b(m\.d\.|ph\.d\.|b\.s\.|m\.s\.)\b",
     re.IGNORECASE,
 )
+OPAQUE_STEM_RE = re.compile(r"^(?:[a-f0-9]{24,}|[A-Z0-9]{24,}|[A-Za-z0-9]{32,64})$")
+SUMMARY_CUE_STOP_PREFIXES = (
+    "contents",
+    "table of contents",
+    "list of figures",
+    "list of tables",
+    "index",
+    "bibliography",
+    "references",
+)
 
 
 @dataclass
@@ -62,6 +72,11 @@ def _slugify_doc_id(value: str) -> str:
     return slug or "document"
 
 
+def _looks_like_opaque_stem(value: str) -> bool:
+    compact = value.strip()
+    return bool(OPAQUE_STEM_RE.fullmatch(compact))
+
+
 def _normalize_bbox(
     x0: float,
     y0: float,
@@ -86,6 +101,114 @@ def _guess_title_from_blocks(blocks: list[ExtractedBlock]) -> str | None:
     return None
 
 
+def _derive_summary_cues(
+    title: str | None,
+    toc: list[str],
+    blocks: list[ExtractedBlock],
+) -> list[str]:
+    cues: list[str] = []
+    seen: set[str] = set()
+
+    def maybe_add(value: str) -> None:
+        cue = re.sub(r"\s+", " ", value).strip()
+        if not cue:
+            return
+        cue_lower = cue.lower()
+        if cue_lower.startswith(SUMMARY_CUE_STOP_PREFIXES):
+            return
+        if len(cue) < 4:
+            return
+        if cue in seen:
+            return
+        seen.add(cue)
+        cues.append(cue)
+
+    if title:
+        maybe_add(title)
+
+    chapter_like = re.compile(
+        r"^(chapter\s+\d+[:\s-].+|introduction|foreword|conclusion|part\s+\d+[:\s-].+)$",
+        re.IGNORECASE,
+    )
+    for item in toc:
+        compact = re.sub(r"\.{2,}\s*\d+$", "", item).strip()
+        if chapter_like.match(compact):
+            maybe_add(compact)
+        elif len(cues) < 8 and compact and compact[0].isupper():
+            maybe_add(compact)
+        if len(cues) >= 10:
+            break
+
+    if len(cues) < 6:
+        for block in blocks[:40]:
+            first_line = block.text.splitlines()[0].strip()
+            if chapter_like.match(first_line):
+                maybe_add(first_line)
+            elif (
+                4 <= len(first_line) <= 80
+                and first_line.upper() == first_line
+                and re.search(r"[A-Z]{3,}", first_line)
+                and not re.fullmatch(r"\d+", first_line)
+            ):
+                maybe_add(first_line)
+            if len(cues) >= 8:
+                break
+    return cues[:10]
+
+
+def _derive_discovery_terms(
+    title: str | None,
+    toc: list[str],
+    summary_cues: list[str],
+    blocks: list[ExtractedBlock],
+) -> list[str]:
+    terms: list[str] = []
+    seen: set[str] = set()
+    stop = {
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "into",
+        "that",
+        "this",
+        "your",
+        "about",
+        "what",
+        "when",
+        "where",
+        "which",
+        "chapter",
+        "introduction",
+        "foreword",
+        "part",
+        "guide",
+        "guidance",
+        "note",
+    }
+
+    def add_text(value: str) -> None:
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", value.lower()):
+            if token in stop or token in seen:
+                continue
+            seen.add(token)
+            terms.append(token)
+
+    for value in filter(None, [title, *summary_cues, *toc[:8]]):
+        add_text(value)
+        if len(terms) >= 20:
+            break
+
+    if len(terms) < 12:
+        for block in blocks[:30]:
+            add_text(block.text.splitlines()[0].strip())
+            if len(terms) >= 20:
+                break
+
+    return terms[:20]
+
+
 def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
     """Extract page blocks and document metadata from a native-text PDF.
 
@@ -97,7 +220,6 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
-    doc_id = _slugify_doc_id(pdf_path.stem)
     blocks: list[ExtractedBlock] = []
     pages: list[ExtractedPage] = []
     reading_order_index = 0
@@ -113,6 +235,13 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
             for entry in pdf_doc.get_toc(simple=True)
             if len(entry) >= 2 and entry[1].strip()
         ]
+        metadata_title = metadata.get("title")
+        preferred_doc_id_source = (
+            metadata_title
+            if metadata_title and _looks_like_opaque_stem(pdf_path.stem)
+            else pdf_path.stem
+        )
+        doc_id = _slugify_doc_id(preferred_doc_id_source)
 
         for page_num, page in enumerate(pdf_doc):
             page_width = float(page.rect.width) or 1.0
@@ -207,12 +336,24 @@ def build_document_record_from_native_extraction(
     """Create the initial document-level JSON record from native extraction."""
     pages_requiring_ocr = sum(1 for page in extraction.pages if page.needs_ocr)
     pages_processed_with_ocr = sum(1 for page in extraction.pages if page.ocr_used)
+    summary_cues = _derive_summary_cues(
+        title=extraction.title,
+        toc=extraction.toc,
+        blocks=extraction.blocks,
+    )
     return DocumentRecord(
         doc_id=extraction.doc_id,
         source_pdf=extraction.source_pdf,
         page_count=extraction.page_count,
         title=extraction.title,
         toc=extraction.toc,
+        summary_cues=summary_cues,
+        discovery_terms=_derive_discovery_terms(
+            title=extraction.title,
+            toc=extraction.toc,
+            summary_cues=summary_cues,
+            blocks=extraction.blocks,
+        ),
         extraction_summary={
             "native_blocks": len(extraction.blocks),
             "pages_requiring_ocr": pages_requiring_ocr,

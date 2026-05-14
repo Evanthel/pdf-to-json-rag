@@ -13,6 +13,7 @@ from .indexing import (
 )
 from .intent_config import (
     detect_structured_intent,
+    get_document_profile,
     get_structured_intent_profile,
     matching_source_doc_ids as configured_matching_source_doc_ids,
     preferred_source_doc_id as configured_source_doc_id,
@@ -58,6 +59,9 @@ INTENT_CANDIDATE_K = {
     "generic": (4, 15),
     "source_listing": (8, 30),
     "cross_document_compare": (8, 30),
+    "document_overview": (6, 24),
+    "document_routing": (8, 30),
+    "source_justification": (8, 30),
     "symptom_pathogenesis": (6, 20),
     "hypothermia_predisposition": (6, 24),
     "hypothermia_symptoms": (6, 24),
@@ -85,6 +89,9 @@ INTENT_NEIGHBOR_DEPTH = {
     "generic": 1,
     "source_listing": 0,
     "cross_document_compare": 0,
+    "document_overview": 0,
+    "document_routing": 0,
+    "source_justification": 0,
     "symptom_pathogenesis": 1,
     "hypothermia_predisposition": 1,
     "hypothermia_symptoms": 1,
@@ -111,6 +118,9 @@ INTENT_NEIGHBOR_DEPTH = {
 INTENT_SECTION_HINTS = {
     "source_listing": (),
     "cross_document_compare": (),
+    "document_overview": ("CONTENTS", "FOREWORD", "CHAPTER", "INTRODUCTION"),
+    "document_routing": ("CONTENTS", "FOREWORD", "CHAPTER", "INTRODUCTION"),
+    "source_justification": ("CONTENTS", "FOREWORD", "CHAPTER", "INTRODUCTION"),
     "symptom_pathogenesis": ("ABSTRACT", "INTRODUCTION", "REVIEW"),
     "hypothermia_predisposition": ("TB MED 508", "HYPOTHERMIA", "GERMANY", "ENDOCRINE", "IATROGENIC"),
     "hypothermia_symptoms": ("TB MED 508", "HYPOTHERMIA"),
@@ -197,8 +207,34 @@ def _detect_query_intent(query: str) -> str:
     structured_intent = detect_structured_intent(query, terms)
     if structured_intent:
         return structured_intent
+    metadata_matches = configured_matching_source_doc_ids(query, allow_topical=True)
+    if (
+        ("what does" in query_lower and "cover" in query_lower)
+        or ("what is" in query_lower and "about" in query_lower)
+    ) and configured_source_doc_id(query):
+        return "document_overview"
+    if (
+        ("which file" in query_lower or "which document" in query_lower or "which source" in query_lower)
+        and (
+            "most relevant" in query_lower
+            or "best source" in query_lower
+            or "best document" in query_lower
+        )
+    ):
+        return "document_routing"
+    if query_lower.startswith("why") and (
+        "most relevant source" in query_lower
+        or "most relevant file" in query_lower
+        or "best source" in query_lower
+        or "best file" in query_lower
+        or "best document" in query_lower
+        or "best match" in query_lower
+    ):
+        return "source_justification"
     if "which sources" in query_lower or "which documents" in query_lower:
         return "source_listing"
+    if "compare" in terms and len(metadata_matches) >= 2:
+        return "cross_document_compare"
     if "compare" in terms and len(terms.intersection(TREATMENT_ENTITY_TERMS)) >= 2:
         return "cross_document_compare"
     if "hypothermia" in terms and {"predisposing", "predispose", "factors", "categories"}.intersection(terms):
@@ -271,11 +307,28 @@ def _detect_query_intent(query: str) -> str:
 
 
 def _preferred_source_doc_id(query: str) -> str | None:
-    return configured_source_doc_id(query)
+    intent = _detect_query_intent(query)
+    if intent in {"source_listing", "cross_document_compare", "document_routing"}:
+        return None
+    return configured_source_doc_id(query, allow_topical=(intent == "source_justification"))
 
 
 def _matching_source_doc_ids(query: str) -> list[str]:
-    return configured_matching_source_doc_ids(query)
+    intent = _detect_query_intent(query)
+    allow_topical = intent in {
+        "source_listing",
+        "document_routing",
+        "source_justification",
+        "cross_document_compare",
+    }
+    matches = configured_matching_source_doc_ids(query, allow_topical=allow_topical)
+    query_lower = query.lower()
+    if intent == "source_justification" and matches:
+        return matches[:1]
+    if intent == "document_routing" and matches:
+        if "which file or files" not in query_lower and "which files" not in query_lower:
+            return matches[:1]
+    return matches
 
 
 def _augment_query(query: str) -> str:
@@ -291,6 +344,18 @@ def _augment_query(query: str) -> str:
         "cross_document_compare": (
             "compare sources across documents benchmark evidence conclusions prevention "
             "incidence treatment source contrast"
+        ),
+        "document_overview": (
+            "document overview table of contents foreword chapter topics covers about "
+            "scope summary subject matter"
+        ),
+        "document_routing": (
+            "most relevant file source document benchmark route source discovery "
+            "best match topic coverage"
+        ),
+        "source_justification": (
+            "best source best match why this file source discovery document cues "
+            "topic coverage section summary benchmark"
         ),
         "review_prevention": (
             "review summary prevention best evidence handwashing physical interventions zinc supplements"
@@ -370,7 +435,12 @@ def _candidate_pool_size(query: str, k: int) -> int:
 
 
 def _is_cross_document_intent(intent: str) -> bool:
-    return intent in {"source_listing", "cross_document_compare"}
+    return intent in {
+        "source_listing",
+        "cross_document_compare",
+        "document_routing",
+        "source_justification",
+    }
 
 
 def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
@@ -387,7 +457,7 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
     bonus -= (1.0 - chunk.quality_score) * 6.0
     bonus -= len(labels.intersection(SOFT_NOISE_LABELS)) * 0.75
 
-    if intent in {"source_listing", "cross_document_compare"}:
+    if intent in {"source_listing", "cross_document_compare", "document_routing"}:
         if matched_doc_ids:
             if chunk.doc_id in matched_doc_ids:
                 bonus += 6.0
@@ -409,6 +479,49 @@ def _heuristic_hit_bonus(chunk: ChunkRecord, query: str) -> float:
             bonus -= 3.5
         if "our meta-analysis had only one cold incidence study" in text:
             bonus -= 2.0
+    if intent == "document_overview":
+        preferred_doc_id = _preferred_source_doc_id(query)
+        if preferred_doc_id:
+            if chunk.doc_id == preferred_doc_id:
+                bonus += 8.0
+            else:
+                bonus -= 8.0
+        if section.startswith("CONTENTS") or section.startswith("FOREWORD") or section.startswith("CHAPTER"):
+            bonus += 8.0
+        if section.startswith("INTRODUCTION"):
+            bonus += 3.0
+        if section.startswith("BIBLIOGRAPHY") or section.startswith("INDEX"):
+            bonus -= 8.0
+        if "contents" in text or "chapter" in text or "machine learning" in text:
+            bonus += 2.0
+    if intent == "document_routing":
+        if matched_doc_ids:
+            if chunk.doc_id in matched_doc_ids:
+                bonus += 8.0
+            else:
+                bonus -= 8.0
+        profile = get_document_profile(chunk.doc_id)
+        if profile:
+            topical_overlap = len(profile.topical_terms.intersection(_query_terms(query)))
+            bonus += topical_overlap * 0.75
+        if section.startswith("CONTENTS") or section.startswith("FOREWORD") or section.startswith("CHAPTER"):
+            bonus += 3.0
+        if section.startswith("BIBLIOGRAPHY") or section.startswith("INDEX"):
+            bonus -= 6.0
+    if intent == "source_justification":
+        if matched_doc_ids:
+            if chunk.doc_id in matched_doc_ids:
+                bonus += 8.0
+            else:
+                bonus -= 8.0
+        profile = get_document_profile(chunk.doc_id)
+        if profile:
+            topical_overlap = len(profile.topical_terms.intersection(_query_terms(query)))
+            bonus += topical_overlap * 0.5
+        if section.startswith("CONTENTS") or section.startswith("FOREWORD") or section.startswith("CHAPTER"):
+            bonus += 3.0
+        if section.startswith("BIBLIOGRAPHY") or section.startswith("INDEX"):
+            bonus -= 6.0
 
     if intent == "definition":
         if section.startswith("DEFINITION"):
@@ -867,6 +980,16 @@ def _lightweight_query_bonus(chunk: ChunkRecord, query: str) -> float:
         bonus += 2.5
     if "handwashing" in query_terms and "handwashing" in text:
         bonus += 4.0
+    if intent == "document_overview":
+        if section.startswith("contents") or section.startswith("foreword") or section.startswith("chapter"):
+            bonus += 5.0
+        if section.startswith("bibliography") or section.startswith("index"):
+            bonus -= 5.0
+    if intent in {"document_routing", "source_justification"}:
+        if matched_doc_ids and chunk.doc_id in matched_doc_ids:
+            bonus += 4.0
+        if section.startswith("contents") or section.startswith("chapter"):
+            bonus += 2.0
     if "nontraditional" in query_terms and "nontraditional" in text:
         bonus += 4.0
     if "prevent" in query_terms or "preventing" in query_terms or "prevention" in query_terms:
@@ -1322,6 +1445,8 @@ def retrieve_top_k(
         return _diversify_hits_by_doc(reranked_hits, k=k, per_doc_limit=1)[:k]
     if intent == "cross_document_compare":
         return _diversify_hits_by_doc(reranked_hits, k=k, per_doc_limit=2)[:k]
+    if intent in {"document_routing", "source_justification"}:
+        return _diversify_hits_by_doc(reranked_hits, k=k, per_doc_limit=1)[:k]
     return reranked_hits[:k]
 
 

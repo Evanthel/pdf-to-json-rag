@@ -773,5 +773,353 @@
       "source_listing"
     ],
     "notes": "The source-listing path should abstain when no benchmark source supports the requested entity."
+  },
+  {
+    "case_id": "lbdl_document_overview",
+    "case_type": "grounded",
+    "query": "What does The Little Book of Deep Learning cover?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "lbdl"
+    ],
+    "expected_keywords": [
+      "The Little Book of Deep Learning",
+      "Machine Learning",
+      "Foundations"
+    ],
+    "case_tags": [
+      "document_overview",
+      "document_discovery",
+      "non_medical",
+      "deep_learning_book"
+    ],
+    "notes": "This should answer at the document level using chapter or overview sections from the deep-learning book rather than medical content."
+  },
+  {
+    "case_id": "lbdl_document_routing_backpropagation",
+    "case_type": "grounded",
+    "query": "Which file in the benchmark is most relevant for backpropagation and gradient descent?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "lbdl"
+    ],
+    "expected_keywords": [
+      "The Little Book of Deep Learning",
+      "backpropagation",
+      "gradient descent"
+    ],
+    "case_tags": [
+      "document_routing",
+      "document_discovery",
+      "non_medical",
+      "deep_learning_book"
+    ],
+    "notes": "This should route to the deep-learning book as the most relevant file for backpropagation and gradient-descent concepts."
+  },
+  {
+    "case_id": "source_listing_deep_learning_transformers",
+    "case_type": "grounded",
+    "query": "Which sources in the benchmark discuss deep learning, transformers, or gradient descent?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "lbdl"
+    ],
+    "expected_keywords": [
+      "The Little Book of Deep Learning"
+    ],
+    "case_tags": [
+      "cross_document",
+      "source_listing",
+      "document_discovery",
+      "non_medical",
+      "deep_learning_book"
+    ],
+    "notes": "This should list the non-medical deep-learning book as the relevant benchmark source for transformers and gradient-descent topics."
+  },
+  {
+    "case_id": "negative_document_routing_lease_clauses",
+    "case_type": "negative",
+    "query": "Which file in the benchmark is most relevant for lease clauses and rent escalation?",
+    "relevant_chunk_ids": [],
+    "expected_keywords": [],
+    "case_tags": [
+      "document_routing",
+      "document_discovery",
+      "non_medical"
+    ],
+    "notes": "The document-routing path should abstain when the benchmark has no file about lease clauses or rent escalation."
+  },
+  {
+    "case_id": "ocha_incident_document_overview",
+    "case_type": "grounded",
+    "query": "What does the Data Incident Management guidance note cover?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "guidance-note-data-incident-management"
+    ],
+    "expected_keywords": [
+      "Data Incident Management",
+      "KEY TAKEAWAYS"
+    ],
+    "case_tags": [
+      "document_overview",
+      "document_discovery",
+      "non_medical",
+      "humanitarian_data_guidance"
+    ],
+    "notes": "This should summarize the data-incident guidance note at the document level instead of drifting into unrelated benchmark sources."
+  },
+  {
+    "case_id": "ocha_document_routing_cyber_threats",
+    "case_type": "grounded",
+    "query": "Which file in the benchmark is most relevant for cyber threats affecting humanitarian organizations?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "guidance-note-on-the-implications-of-cyber-threats-for-humanitarians"
+    ],
+    "expected_keywords": [
+      "Guidance Note on the Implications of Cyber Threats for Humanitarians",
+      "cyber",
+      "humanitarian"
+    ],
+    "case_tags": [
+      "document_routing",
+      "document_discovery",
+      "non_medical",
+      "humanitarian_data_guidance"
+    ],
+    "notes": "This should route to the cyber-threats guidance note rather than a medical, manual, or review-style source."
+  },
+  {
+    "case_id": "ocha_document_routing_donor_sharing",
+    "case_type": "grounded",
+    "query": "Which file in the benchmark is most relevant for responsible data sharing with donors?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "guidance-note-responsible-data-sharing-with-donors"
+    ],
+    "expected_keywords": [
+      "Guidance Note: Responsible Data Sharing with Donors",
+      "donors",
+      "data sharing"
+    ],
+    "case_tags": [
+      "document_routing",
+      "document_discovery",
+      "non_medical",
+      "humanitarian_data_guidance"
+    ],
+    "notes": "This should route to the donor-data-sharing guidance note instead of a generic data or checklist source."
+  },
+  {
+    "case_id": "source_listing_nonmedical_learning_and_incident_response",
+    "case_type": "grounded",
+    "query": "Which sources in the benchmark discuss deep learning or data incident response?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "guidance-note-data-incident-management",
+      "lbdl"
+    ],
+    "expected_keywords": [
+      "Guidance Note: Data Incident Management",
+      "The Little Book of Deep Learning"
+    ],
+    "case_tags": [
+      "cross_document",
+      "source_listing",
+      "document_discovery",
+      "non_medical",
+      "mixed_domain"
+    ],
+    "notes": "This should list both a non-medical technical book and the humanitarian data-incident note when the query spans both domains."
+  },
+  {
+    "case_id": "source_listing_humanitarian_data_governance",
+    "case_type": "grounded",
+    "query": "Which sources in the benchmark discuss donor data sharing or cyber threats for humanitarians?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "guidance-note-responsible-data-sharing-with-donors",
+      "guidance-note-on-the-implications-of-cyber-threats-for-humanitarians"
+    ],
+    "expected_keywords": [
+      "Guidance Note: Responsible Data Sharing with Donors",
+      "Guidance Note on the Implications of Cyber Threats for Humanitarians"
+    ],
+    "case_tags": [
+      "cross_document",
+      "source_listing",
+      "document_discovery",
+      "non_medical",
+      "mixed_domain",
+      "humanitarian_data_guidance"
+    ],
+    "notes": "This should list multiple humanitarian-data guidance notes when the query spans donor sharing and cyber risk."
+  },
+  {
+    "case_id": "ambiguous_document_routing_humanitarian_data_risk",
+    "case_type": "grounded",
+    "query": "Which file or files in the benchmark are most relevant for humanitarian data incidents or cyber threats?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "guidance-note-data-incident-management",
+      "guidance-note-on-the-implications-of-cyber-threats-for-humanitarians"
+    ],
+    "expected_keywords": [
+      "Guidance Note: Data Incident Management",
+      "Guidance Note on the Implications of Cyber Threats for Humanitarians"
+    ],
+    "case_tags": [
+      "document_routing",
+      "document_discovery",
+      "non_medical",
+      "mixed_domain",
+      "ambiguous_routing",
+      "humanitarian_data_guidance"
+    ],
+    "notes": "This should surface more than one humanitarian-data guidance note instead of forcing a single-file answer."
+  },
+  {
+    "case_id": "model_report_niger_routing",
+    "case_type": "grounded",
+    "query": "Which file in the benchmark is most relevant for anticipatory action triggers for drought in Niger?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "niger-aa-trigger-for-drought-model-report"
+    ],
+    "expected_keywords": [
+      "Niger AA Trigger for Drought - Model Report",
+      "anticipatory",
+      "drought",
+      "Niger"
+    ],
+    "case_tags": [
+      "document_routing",
+      "document_discovery",
+      "non_medical",
+      "model_report_family",
+      "source_anchored_report"
+    ],
+    "notes": "This should route to the Niger drought model report rather than a generic humanitarian guidance note or another drought report."
+  },
+  {
+    "case_id": "model_report_niger_justification",
+    "case_type": "grounded",
+    "query": "Why is the best source for drought anticipatory action in Niger the strongest match?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "niger-aa-trigger-for-drought-model-report"
+    ],
+    "expected_keywords": [
+      "Niger AA Trigger for Drought - Model Report",
+      "drought",
+      "Niger",
+      "MODEL REPORT"
+    ],
+    "case_tags": [
+      "document_discovery",
+      "source_justification",
+      "non_medical",
+      "model_report_family",
+      "source_anchored_report"
+    ],
+    "notes": "This should justify the Niger model report using matched document cues instead of a chunk-level sentence dump."
+  },
+  {
+    "case_id": "model_report_philippines_routing",
+    "case_type": "grounded",
+    "query": "Which source in the benchmark is most relevant for typhoon impact predictions in the Philippines?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "510-philippines-typhoon-model-report"
+    ],
+    "expected_keywords": [
+      "510 Philippines Typhoon Model Report",
+      "typhoon",
+      "Philippines"
+    ],
+    "case_tags": [
+      "document_routing",
+      "document_discovery",
+      "non_medical",
+      "model_report_family",
+      "source_anchored_report"
+    ],
+    "notes": "This should route to the Philippines typhoon model report and avoid drifting into humanitarian data-governance notes."
+  },
+  {
+    "case_id": "source_listing_humanitarian_model_reports",
+    "case_type": "grounded",
+    "query": "Which sources in the benchmark discuss predictive analytics for humanitarian response to drought or typhoons?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "niger-aa-trigger-for-drought-model-report",
+      "model-report-chad-drought-anticipatory-action-trigger",
+      "model-report-bfa-aa",
+      "510-philippines-typhoon-model-report"
+    ],
+    "expected_keywords": [
+      "Niger AA Trigger for Drought - Model Report",
+      "Model Report - Chad Drought Anticipatory Action trigger",
+      "Model Report BFA AA",
+      "510 Philippines Typhoon Model Report"
+    ],
+    "case_tags": [
+      "cross_document",
+      "source_listing",
+      "document_discovery",
+      "non_medical",
+      "mixed_domain",
+      "model_report_family"
+    ],
+    "notes": "This should list several humanitarian model reports without explicitly naming the source family."
+  },
+  {
+    "case_id": "compare_niger_chad_model_reports",
+    "case_type": "grounded",
+    "query": "Compare what the benchmark says about drought anticipatory action triggers in Niger and Chad.",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "niger-aa-trigger-for-drought-model-report",
+      "model-report-chad-drought-anticipatory-action-trigger"
+    ],
+    "expected_keywords": [
+      "Niger AA Trigger for Drought - Model Report",
+      "Model Report - Chad Drought Anticipatory Action trigger"
+    ],
+    "case_tags": [
+      "cross_document",
+      "document_discovery",
+      "non_medical",
+      "model_report_family",
+      "source_anchored_report"
+    ],
+    "notes": "This should compare the Niger and Chad drought trigger reports directly, without slipping into unrelated review or guidance sources."
+  },
+  {
+    "case_id": "ambiguous_document_routing_humanitarian_anticipatory_action",
+    "case_type": "grounded",
+    "query": "Which file or files in the benchmark are most relevant for humanitarian anticipatory action triggers for drought or typhoon response?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "niger-aa-trigger-for-drought-model-report",
+      "model-report-chad-drought-anticipatory-action-trigger",
+      "model-report-bfa-aa",
+      "510-philippines-typhoon-model-report"
+    ],
+    "expected_keywords": [
+      "Niger AA Trigger for Drought - Model Report",
+      "Model Report - Chad Drought Anticipatory Action trigger",
+      "510 Philippines Typhoon Model Report"
+    ],
+    "case_tags": [
+      "document_routing",
+      "document_discovery",
+      "non_medical",
+      "mixed_domain",
+      "ambiguous_routing",
+      "model_report_family"
+    ],
+    "notes": "This should surface more than one model report family source for an intentionally broad humanitarian anticipatory-action query."
   }
 ]

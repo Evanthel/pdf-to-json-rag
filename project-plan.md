@@ -278,15 +278,71 @@ Completed scope:
 
 All five milestones are now complete in the current local implementation. The benchmark now spans 48 cases across 11 indexed documents and remains warning-free while covering both single-document and cross-document grounded behavior.
 
-## 6.14. v1.14 Plan
+## 6.14. v1.14 Milestones
 
-The next iteration should push the project toward a more domain-agnostic document pipeline instead of continuing to grow only the medical benchmark.
+The fourteenth post-MVP iteration pushed the benchmark and answer path toward more domain-agnostic document discovery instead of only adding more medical evidence cases.
 
-1. Add at least one clearly non-medical benchmark document family and verify that current chunking, retrieval, and answering rules do not silently depend on medical vocabulary.
-2. Separate document-family matching from domain vocabulary more cleanly so source-aware behavior can scale beyond the current review/manual/checklist benchmark set.
-3. Add a lightweight document-level answer mode for questions like “what does this file cover?” or “which file is most relevant for X?” that sits between source listing and detailed evidence assembly.
-4. Expand evaluation so cross-document cases can score at the document level when the user intent is source discovery rather than exact chunk retrieval.
-5. Re-check deferred items only if the broader, more domain-diverse benchmark exposes failures that the current chunking-first plus lightweight-rerank architecture cannot absorb.
+Completed scope:
+
+1. Added a clearly non-medical benchmark source (`The Little Book of Deep Learning`) and folded it into the shared local index.
+2. Split document-family matching from domain vocabulary more cleanly by introducing reusable document profiles with aliases and topical terms.
+3. Added lightweight document-level answer modes for overview and routing questions such as “what does this file cover?” and “which file is most relevant for X?”.
+4. Expanded evaluation so document-discovery cases can score at the document level instead of pretending every source-discovery query is a chunk-retrieval task.
+5. Re-checked deferred features on the broader, more domain-diverse benchmark and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge deferred after a warning-free rerun.
+
+All five milestones are now complete in the current local implementation. The benchmark now spans 52 cases across 12 indexed documents, remains warning-free, and covers both evidence answering and document-discovery behavior on a non-medical source family.
+
+## 6.15. v1.15 Milestones
+
+The fifteenth post-MVP iteration made document discovery less dependent on a single good non-medical source and pushed more of that behavior into reusable metadata instead of live top-k heuristics.
+
+Completed scope:
+
+1. Added a second non-medical document family with a very different structure from the deep-learning book.
+2. Moved document-overview cues into extraction-time `summary_cues` metadata so overview answers rely less on runtime chunk guessing.
+3. Added ambiguity-aware routing so some queries can intentionally surface more than one relevant source instead of forcing a single-file answer.
+4. Expanded evaluation and regression coverage for non-medical document discovery, mixed-domain source listing, and ambiguous routing behavior.
+5. Re-checked deferred features on the broader document-discovery benchmark and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge deferred after the final warning-free rerun.
+
+All five milestones are now complete in the current local implementation. The benchmark now spans 56 cases across 13 indexed documents, remains warning-free, and handles both document-level overviews and multi-source routing on mixed-domain content.
+
+## 6.16. v1.16 Milestones
+
+The sixteenth post-MVP iteration generalized document discovery further with a public-safe guidance-note family and moved more source selection toward document metadata instead of profile-only matching.
+
+Completed scope:
+
+1. Added a third clearly non-medical source family built from open humanitarian data guidance notes with a different structure from the two existing books.
+2. Improved extraction-time metadata by deriving cleaner `doc_id` values for opaque source filenames and adding reusable `discovery_terms` for document selection.
+3. Improved mixed-domain routing and source listing by ranking shortlisted sources with document metadata rather than only live top-k order and hardcoded profile terms.
+4. Expanded evaluation and regression coverage with new overview, routing, source-listing, and ambiguous multi-source cases for the humanitarian-data family.
+5. Re-checked deferred features on the broader discovery benchmark and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge deferred after the final warning-free rerun.
+
+All five milestones are now complete in the current local implementation. The benchmark now spans 58 cases across 15 indexed documents, remains warning-free, and pushes the project further toward domain-agnostic document discovery rather than domain-specific evidence lookup.
+
+## 6.17. v1.17 Milestones
+
+The seventeenth post-MVP iteration broadened document discovery again while reducing dependence on hand-written source profiles.
+
+Completed scope:
+
+1. Added a fourth public-safe non-medical source family built from short humanitarian model reports with a different structure from books, manuals, and guidance notes.
+2. Tightened source matching so document routing relies more on extraction-time `discovery_terms`, titles, and summary cues, while filtering out generic routing noise.
+3. Added a clearer `source_justification` answer mode for “why this source?” queries, surfacing matched document cues and section families directly.
+4. Expanded evaluation and regression coverage with harder mixed-domain routing, source-listing, source-justification, and comparison queries that do not explicitly name the source family.
+5. Re-checked deferred features on the broader discovery benchmark and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge deferred after the final warning-free rerun.
+
+All five milestones are now complete in the current local implementation. The benchmark now spans 64 cases across 19 indexed documents, remains warning-free, and covers document-level discovery across books, guidance notes, model reports, manuals, forms, and extracted evidence sources.
+
+## 6.18. v1.18 Plan
+
+The next iteration should focus on high-ROI architectural moves, not on expanding the benchmark for its own sake.
+
+1. Add an extraction-time document-facet layer so each document gets reusable metadata such as `document_type`, `document_purpose`, `audience`, `evidence_style`, and `structure_style`.
+2. Refactor document discovery and routing so they depend primarily on extracted facets and metadata summaries instead of growing `DocumentProfile` rules and source-family-specific matching logic.
+3. Upgrade document-overview answers into a single generic path that explains what a document is, what it covers, and how it is meant to be used, instead of mostly stitching together heading-like cues.
+4. Add a compact architecture-focused evaluation slice for document facets, document type, and document purpose, so future iterations can test the new layer without needing a large new batch of PDFs.
+5. Revisit the deferred list only after the facet-driven architecture is in place, and only if it reveals failures that cannot be absorbed by the current local chunking, retrieval, and lightweight reranking stack.
 
 
 ## 7. Explicitly Deferred

@@ -11,5 +11,10 @@
   "health_questionnaire_table1_sensitivity",
   "pre_injection_checklist_side_effects",
   "opioid_manager_appendix_b_adverse_scale",
-  "opioid_manager_appendix_c_follow_up_timing"
+  "opioid_manager_appendix_c_follow_up_timing",
+  "lbdl_document_routing_backpropagation",
+  "ocha_document_routing_cyber_threats",
+  "ocha_document_routing_donor_sharing",
+  "model_report_niger_justification",
+  "compare_niger_chad_model_reports"
 ]

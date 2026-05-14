@@ -1612,3 +1612,78 @@ Outcome:
 - it remains warning-free
 - the pipeline can now answer both single-document evidence questions and multi-file source-discovery / comparison questions
 - the project direction is now closer to the original goal of a general PDF-to-JSON RAG pipeline rather than a benchmark tied only to one medical question family
+
+## v1.14
+
+This iteration pushed the project from cross-document evidence discovery toward document-level discovery on a broader, less domain-bound benchmark.
+
+What changed:
+
+- added `The Little Book of Deep Learning` as the first clearly non-medical benchmark source
+- introduced reusable document profiles with aliases and topical terms instead of relying only on source-family string matching
+- added document-level intents and answer modes for overview and routing queries
+- expanded evaluation so source-discovery cases can score at the document level
+- added a dedicated `document_discovery_core` regression shard
+
+Outcome:
+
+- the benchmark now spans 52 cases across 12 indexed documents
+- it remains warning-free
+- the pipeline can now route to a relevant file and summarize what a file covers, not just answer evidence questions inside one source
+- the non-medical benchmark passed without reviving `pdfplumber`, cross-encoder reranking, or LLM-as-a-judge
+
+## v1.15
+
+This iteration made the document-discovery path less dependent on a single non-medical source and less dependent on live top-k heuristics.
+
+What changed:
+
+- added a second clearly non-medical benchmark family
+- moved document-level overview cues into extraction-time `summary_cues` metadata
+- added ambiguity-aware routing so some queries can return more than one relevant source
+- expanded the `document_discovery_core` regression shard and the full benchmark with mixed-domain overview, routing, and source-listing cases
+
+Outcome:
+
+- the benchmark now spans 56 cases across 13 indexed documents
+- it remains warning-free
+- document overview and routing now rely more on reusable document metadata and less on ad hoc runtime section guessing
+- the project moved another step toward general PDF discovery and retrieval rather than only evidence lookup inside one domain
+
+## v1.16
+
+This iteration generalized document discovery with a public-safe guidance-note family and pushed more source selection into document metadata.
+
+What changed:
+
+- added an open humanitarian-data guidance-note family as a third non-medical source family
+- derived cleaner `doc_id` values from document titles when source filenames are opaque hashes
+- added extraction-time `discovery_terms` metadata for document selection
+- ranked source-listing and routing shortlists with document metadata instead of only live top-k order
+- expanded the benchmark with humanitarian-data overview, routing, source-listing, and ambiguous multi-source cases
+
+Outcome:
+
+- the benchmark now spans 58 cases across 15 indexed documents
+- it remains warning-free
+- `document_discovery_core` regression now passes on a broader mixed-domain set
+- the project is less tied to one-off source profiles and closer to a domain-agnostic PDF discovery and retrieval pipeline
+
+## v1.17
+
+This iteration broadened document discovery again while making source routing less dependent on hand-written source profiles.
+
+What changed:
+
+- added a fourth public-safe non-medical source family built from short humanitarian model reports
+- tightened source matching around extraction-time `discovery_terms`, titles, and summary cues while filtering generic routing tokens
+- added a clearer `source_justification` answer mode for “why this source?” queries
+- expanded the benchmark and `document_discovery_core` regression shard with model-report routing, source-listing, justification, comparison, and ambiguous multi-source cases
+- repaired older mixed-domain discovery regressions that surfaced once the new family was added
+
+Outcome:
+
+- the benchmark now spans 64 cases across 19 indexed documents
+- it is warning-free again after the broader discovery pass
+- `document_discovery_core` regression now passes `16/16`
+- source discovery is now less tied to manually curated topical-profile terms and more grounded in extraction-time document metadata

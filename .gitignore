@@ -31,6 +31,9 @@ env/
 .cache/
 .huggingface/
 
+# Local source PDFs for private benchmarking
+pdf/
+
 # Local data inputs and generated artifacts
 data/input/*
 !data/input/.gitkeep

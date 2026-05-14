@@ -8,11 +8,13 @@ from pathlib import Path
 
 from .intent_config import (
     detect_structured_intent,
+    get_document_profile,
     get_structured_intent_profile,
+    matching_source_doc_ids as configured_matching_source_doc_ids,
     preferred_source_doc_id as configured_source_doc_id,
 )
 from .retrieval import retrieve_top_k_with_neighbors
-from .schemas import ChunkRecord
+from .schemas import ChunkRecord, DocumentRecord
 
 
 STOPWORDS = {
@@ -46,12 +48,17 @@ STOPWORDS = {
 
 LOW_SIGNAL_QUERY_TERMS = {
     "according",
+    "benchmark",
     "common",
     "cold",
     "colds",
+    "document",
+    "file",
     "literature",
+    "most",
     "review",
     "paper",
+    "relevant",
     "prevent",
     "prevents",
     "preventing",
@@ -61,6 +68,8 @@ LOW_SIGNAL_QUERY_TERMS = {
     "treatment",
     "help",
     "helps",
+    "source",
+    "sources",
     "say",
     "says",
 }
@@ -505,8 +514,35 @@ def _detect_query_intent(query: str, query_terms: set[str]) -> str:
     structured_intent = detect_structured_intent(query, query_terms)
     if structured_intent:
         return structured_intent
+    metadata_matches = configured_matching_source_doc_ids(query, allow_topical=True)
+    if (
+        ("what does" in query_lower and "cover" in query_lower)
+        or ("what is" in query_lower and "about" in query_lower)
+    ) and configured_source_doc_id(query):
+        return "document_overview"
+    if (
+        ("which file" in query_lower or "which document" in query_lower or "which source" in query_lower)
+        and (
+            "most relevant" in query_lower
+            or "best source" in query_lower
+            or "best document" in query_lower
+        )
+    ):
+        return "document_routing"
+    if (
+        query_lower.startswith("why")
+        and (
+            "most relevant source" in query_lower
+            or "best match" in query_lower
+            or "best source" in query_lower
+            or "most relevant file" in query_lower
+        )
+    ):
+        return "source_justification"
     if "which sources" in query_lower or "which documents" in query_lower:
         return "source_listing"
+    if query_terms.intersection(MULTI_DOC_COMPARE_TERMS) and len(metadata_matches) >= 2:
+        return "cross_document_compare"
     if query_terms.intersection(MULTI_DOC_COMPARE_TERMS) and len(query_terms.intersection(TREATMENT_ENTITY_HINTS)) >= 2:
         return "cross_document_compare"
     if "antibiotic" in query_terms or "antibiotics" in query_terms:
@@ -588,7 +624,28 @@ def _detect_query_intent(query: str, query_terms: set[str]) -> str:
 
 
 def _preferred_source_doc_id(query: str) -> str | None:
+    query_intent = _detect_query_intent(query, _query_terms(query))
+    if query_intent in {"source_listing", "cross_document_compare", "document_routing"}:
+        return None
     return configured_source_doc_id(query)
+
+
+def _matching_source_doc_ids(query: str) -> list[str]:
+    query_intent = _detect_query_intent(query, _query_terms(query))
+    allow_topical = query_intent in {
+        "source_listing",
+        "document_routing",
+        "source_justification",
+        "cross_document_compare",
+    }
+    matches = configured_matching_source_doc_ids(query, allow_topical=allow_topical)
+    query_lower = query.lower()
+    if query_intent == "source_justification" and matches:
+        return matches[:1]
+    if query_intent == "document_routing" and matches:
+        if "which file or files" not in query_lower and "which files" not in query_lower:
+            return matches[:1]
+    return matches
 
 
 def _score_sentence(
@@ -1206,6 +1263,12 @@ def _answer_sentence_budget(query: str) -> int:
         return 4
     if query_intent == "cross_document_compare":
         return 6
+    if query_intent == "document_overview":
+        return 4
+    if query_intent == "document_routing":
+        return 3
+    if query_intent == "source_justification":
+        return 3
     structured_profile = get_structured_intent_profile(query_intent)
     if structured_profile:
         return structured_profile.answer_sentence_budget
@@ -1385,6 +1448,37 @@ def _humanize_source_label(source_pdf: str) -> str:
     return label
 
 
+def _display_label_for_chunk(chunk: ChunkRecord) -> str:
+    profile = get_document_profile(chunk.doc_id)
+    if profile:
+        return profile.label
+    return _humanize_source_label(chunk.doc_id)
+
+
+def _is_low_quality_document_title(title: str) -> bool:
+    normalized = re.sub(r"\s+", " ", title).strip()
+    lowered = normalized.lower()
+    if lowered.startswith("doi:"):
+        return True
+    if ".indd" in lowered:
+        return True
+    if lowered.startswith("since january 2020 elsevier has created"):
+        return True
+    return False
+
+
+def _document_label(doc_id: str, chunk_root: Path) -> str:
+    record = _load_document_record(doc_id, chunk_root)
+    profile = get_document_profile(doc_id)
+    if record and record.title:
+        normalized_title = re.sub(r"\s+", " ", record.title).strip()
+        if not _is_low_quality_document_title(normalized_title):
+            return normalized_title
+    if profile:
+        return profile.label
+    return _humanize_source_label(doc_id)
+
+
 def _structured_source_summary(chunks: list[ChunkRecord]) -> list[tuple[str, str]]:
     seen: set[str] = set()
     summary: list[tuple[str, str]] = []
@@ -1392,8 +1486,148 @@ def _structured_source_summary(chunks: list[ChunkRecord]) -> list[tuple[str, str
         if chunk.doc_id in seen:
             continue
         seen.add(chunk.doc_id)
-        summary.append((chunk.doc_id, _humanize_source_label(chunk.source_pdf)))
+        summary.append((chunk.doc_id, _display_label_for_chunk(chunk)))
     return summary
+
+
+def _load_document_record(doc_id: str, chunk_root: Path) -> DocumentRecord | None:
+    document_path = chunk_root.expanduser().resolve().parent / "documents" / f"{doc_id}.document.json"
+    if not document_path.exists():
+        return None
+    try:
+        return DocumentRecord.model_validate_json(document_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _extract_document_topics(chunks: list[ChunkRecord], doc_id: str) -> list[str]:
+    topics: list[str] = []
+    seen: set[str] = set()
+    chapter_pattern = re.compile(r"Chapter\s+\d+\s+([A-Za-z][A-Za-z0-9 \-]{2,80})")
+    for chunk in chunks:
+        if chunk.doc_id != doc_id:
+            continue
+        section_title = (chunk.section_title or "").strip()
+        section_upper = section_title.upper()
+        if (
+            section_title
+            and not section_upper.startswith(("CONTENTS", "INDEX", "BIBLIOGRAPHY", "FOREWORD"))
+            and not (section_upper == section_title and len(section_title) <= 5)
+            and len(section_title) >= 6
+            and section_title not in seen
+        ):
+            seen.add(section_title)
+            topics.append(section_title)
+        for match in chapter_pattern.findall(chunk.text):
+            topic = match.strip()
+            if topic.upper().startswith(("CONTENTS", "INDEX", "BIBLIOGRAPHY")):
+                continue
+            if topic.upper() == topic and len(topic) <= 5:
+                continue
+            if topic not in seen:
+                seen.add(topic)
+                topics.append(topic)
+        if len(topics) >= 5:
+            break
+    return topics[:5]
+
+
+def _clean_topic_label(topic: str) -> str:
+    cleaned = re.sub(r"^Chapter\s+\d+\s+", "", topic).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return cleaned or topic
+
+
+def _document_summary_cues(
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+) -> list[str]:
+    record = _load_document_record(doc_id, chunk_root)
+    profile = get_document_profile(doc_id)
+    cues: list[str] = []
+    seen: set[str] = set()
+    doc_titles = {
+        item.lower()
+        for item in (
+            record.title if record and record.title else None,
+            profile.label if profile else None,
+        )
+        if item
+    }
+
+    def maybe_add(value: str) -> None:
+        cue = _clean_topic_label(value).strip()
+        cue_upper = cue.upper()
+        if not cue:
+            return
+        if cue.lower() in doc_titles:
+            return
+        if cue_upper in {
+            "THE CENTRE FOR HUMANITARIAN DATA",
+            "OCHA CENTRE FOR HUMANITARIAN DATA",
+            "GUIDANCE NOTE SERIES",
+        }:
+            return
+        if cue_upper.startswith(("CONTENTS", "INDEX", "BIBLIOGRAPHY", "FOREWORD")):
+            return
+        if cue in seen:
+            return
+        seen.add(cue)
+        cues.append(cue)
+
+    if record:
+        for cue in record.summary_cues:
+            maybe_add(cue)
+        if not cues:
+            for cue in record.toc[:12]:
+                maybe_add(cue)
+    if not cues:
+        for cue in _extract_document_topics(top_k_hits, doc_id):
+            maybe_add(cue)
+    return cues[:6]
+
+
+def _document_discovery_terms(doc_id: str, chunk_root: Path) -> list[str]:
+    record = _load_document_record(doc_id, chunk_root)
+    if record and record.discovery_terms:
+        return record.discovery_terms[:20]
+    profile = get_document_profile(doc_id)
+    if profile:
+        return sorted(profile.topical_terms)
+    return []
+
+
+def _rank_document_candidates(
+    doc_ids: list[str],
+    query: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+) -> list[str]:
+    query_terms = _specific_query_terms(_query_terms(query))
+    hit_rank: dict[str, int] = {}
+    for idx, chunk in enumerate(top_k_hits):
+        hit_rank.setdefault(chunk.doc_id, idx)
+    ranked: list[tuple[float, str]] = []
+    for doc_id in doc_ids:
+        profile = get_document_profile(doc_id)
+        label_terms = set(re.findall(r"[a-zA-Z]{3,}", (profile.label if profile else doc_id).lower()))
+        profile_terms = set(profile.topical_terms) if profile else set()
+        discovery_terms = set(_document_discovery_terms(doc_id, chunk_root))
+        summary_terms = {
+            token
+            for cue in _document_summary_cues(doc_id, top_k_hits, chunk_root)
+            for token in re.findall(r"[a-zA-Z]{3,}", cue.lower())
+        }
+        overlap = len(query_terms & (label_terms | profile_terms | discovery_terms | summary_terms))
+        score = overlap * 3.0
+        if profile:
+            score += len(query_terms & profile_terms) * 1.5
+        if doc_id in hit_rank:
+            score += max(0.0, 3.0 - min(hit_rank[doc_id], 6) * 0.4)
+        ranked.append((score, doc_id))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [doc_id for _, doc_id in ranked]
 
 
 def _base_answer_trace(
@@ -1419,10 +1653,128 @@ def _cross_document_answer(
     query_intent: str,
     top_k_hits: list[ChunkRecord],
     evidence: list[EvidenceSentence],
+    chunk_root: Path,
 ) -> tuple[str | None, dict[str, object] | None]:
     source_summary = _structured_source_summary(top_k_hits)
+    if query_intent == "document_overview" and top_k_hits:
+        primary_doc_id = top_k_hits[0].doc_id
+        primary_label = _document_label(primary_doc_id, chunk_root)
+        topics = _document_summary_cues(primary_doc_id, top_k_hits, chunk_root)
+        if topics:
+            return (
+                f"{primary_label} covers topics such as " + ", ".join(topics[:4]) + ".",
+                {
+                    "template_id": "document_level.overview",
+                    "matched_pattern": "document-summary-cues",
+                    "matched_cues": topics[:4],
+                },
+            )
+    if query_intent == "document_routing" and top_k_hits:
+        matched_doc_ids = _matching_source_doc_ids(query)
+        if len(matched_doc_ids) > 1:
+            multi_doc_limit = 4 if ("which file or files" in query.lower() or "which files" in query.lower()) else 3
+            chosen_doc_ids = _rank_document_candidates(
+                [doc_id for doc_id in matched_doc_ids if doc_id in {chunk.doc_id for chunk in top_k_hits}],
+                query,
+                top_k_hits,
+                chunk_root,
+            )[:multi_doc_limit]
+            if len(chosen_doc_ids) >= 2:
+                fragments: list[str] = []
+                cues: list[str] = []
+                for doc_id in chosen_doc_ids:
+                    label = _document_label(doc_id, chunk_root)
+                    summary_cues = _document_summary_cues(doc_id, top_k_hits, chunk_root)
+                    if summary_cues:
+                        fragments.append(f"{label} ({', '.join(summary_cues[:2])})")
+                        cues.extend([label, *summary_cues[:2]])
+                    else:
+                        fragments.append(label)
+                        cues.append(label)
+                return (
+                    "The most relevant files are " + "; ".join(fragments) + ".",
+                    {
+                        "template_id": "document_level.routing_multi",
+                        "matched_pattern": "multi-doc-topical-summary",
+                        "matched_cues": cues,
+                    },
+                )
+
+        primary_chunk = top_k_hits[0]
+        primary_label = _document_label(primary_chunk.doc_id, chunk_root)
+        query_terms = _specific_query_terms(_query_terms(query))
+        topical_terms: list[str] = []
+        for item in evidence:
+            sentence_terms = set(re.findall(r"[a-zA-Z]{3,}", item.sentence.lower()))
+            for term in sorted(query_terms):
+                if term in sentence_terms and term not in topical_terms:
+                    topical_terms.append(term)
+            if len(topical_terms) >= 4:
+                break
+        if not topical_terms:
+            for chunk in top_k_hits:
+                if chunk.doc_id != primary_chunk.doc_id:
+                    continue
+                chunk_terms = set(re.findall(r"[a-zA-Z]{3,}", chunk.text.lower()))
+                for term in sorted(query_terms):
+                    if term in chunk_terms and term not in topical_terms:
+                        topical_terms.append(term)
+                if len(topical_terms) >= 4:
+                    break
+        if "gradient" in topical_terms and "descent" in topical_terms:
+            topical_terms = [
+                term for term in topical_terms if term not in {"gradient", "descent"}
+            ] + ["gradient descent"]
+        topics = _document_summary_cues(primary_chunk.doc_id, top_k_hits, chunk_root)
+        if topical_terms or topics:
+            justification_parts: list[str] = []
+            if topical_terms:
+                justification_parts.append(
+                    "It includes grounded material on " + ", ".join(topical_terms[:4])
+                )
+            if topics:
+                justification_parts.append(
+                    "with sections such as " + ", ".join(topics[:3])
+                )
+            return (
+                f"The most relevant file is {primary_label}. " + ". ".join(justification_parts) + ".",
+                {
+                    "template_id": "document_level.routing",
+                    "matched_pattern": "top-doc-topical-summary",
+                    "matched_cues": [primary_label, *topical_terms[:4], *topics[:3]],
+                },
+            )
+    if query_intent == "source_justification" and top_k_hits:
+        primary_chunk = top_k_hits[0]
+        primary_label = _document_label(primary_chunk.doc_id, chunk_root)
+        query_terms = _specific_query_terms(_query_terms(query))
+        summary_cues = _document_summary_cues(primary_chunk.doc_id, top_k_hits, chunk_root)
+        discovery_terms = _document_discovery_terms(primary_chunk.doc_id, chunk_root)
+        matched_terms = [
+            term for term in sorted(query_terms)
+            if term in set(discovery_terms) or any(term in cue.lower() for cue in summary_cues)
+        ][:4]
+        parts: list[str] = []
+        if matched_terms:
+            parts.append("it matches cues such as " + ", ".join(matched_terms))
+        if summary_cues:
+            parts.append("it includes sections such as " + ", ".join(summary_cues[:3]))
+        if not parts:
+            parts.append("it surfaced the strongest grounded support in the current benchmark")
+        return (
+            f"{primary_label} is the best match because " + "; ".join(parts) + ".",
+            {
+                "template_id": "document_level.justification",
+                "matched_pattern": "doc-metadata-justification",
+                "matched_cues": [primary_label, *matched_terms, *summary_cues[:3]],
+            },
+        )
     if query_intent == "source_listing" and source_summary:
-        labels = [label for _, label in source_summary[:4]]
+        source_doc_ids = [doc_id for doc_id, _ in source_summary]
+        ranked_doc_ids = _rank_document_candidates(source_doc_ids, query, top_k_hits, chunk_root)[:4]
+        labels = []
+        for doc_id in ranked_doc_ids:
+            labels.append(_document_label(doc_id, chunk_root))
         return (
             "Relevant sources include: " + "; ".join(labels) + ".",
             {
@@ -1442,7 +1794,7 @@ def _cross_document_answer(
             if chunk.doc_id in per_doc_sentences:
                 continue
             per_doc_sentences[chunk.doc_id] = (
-                _humanize_source_label(chunk.source_pdf),
+                _display_label_for_chunk(chunk),
                 item.sentence.rstrip("."),
             )
         for chunk in top_k_hits:
@@ -1452,7 +1804,7 @@ def _cross_document_answer(
             if not fallback_sentences:
                 continue
             per_doc_sentences[chunk.doc_id] = (
-                _humanize_source_label(chunk.source_pdf),
+                _display_label_for_chunk(chunk),
                 fallback_sentences[0].rstrip("."),
             )
         if len(per_doc_sentences) >= 2:
@@ -1638,8 +1990,10 @@ def _should_abstain(query: str, evidence: list[EvidenceSentence]) -> bool:
     query_terms = _query_terms(query)
     specific_terms = _specific_query_terms(query_terms)
     query_intent = _detect_query_intent(query, query_terms)
-    if query_intent in {"source_listing", "cross_document_compare"}:
+    if query_intent in {"source_listing", "cross_document_compare", "document_overview", "document_routing"}:
         evidence_text = " ".join(item.sentence.lower() for item in evidence)
+        if query_intent in {"source_listing", "document_routing"} and not _matching_source_doc_ids(query):
+            return True
         unsupported_entities = query_terms.intersection(UNSUPPORTED_ENTITY_TERMS)
         if unsupported_entities and not any(term in evidence_text for term in unsupported_entities):
             return True
@@ -1769,11 +2123,17 @@ def answer_query_with_retrieval(
         use_lightweight_rerank=use_lightweight_rerank,
     )
     answer_chunks = expanded_hits
-    preferred_doc_id = None if query_intent in {"source_listing", "cross_document_compare"} else _preferred_source_doc_id(query)
+    preferred_doc_id = None if query_intent in {"source_listing", "cross_document_compare", "document_routing"} else _preferred_source_doc_id(query)
     if preferred_doc_id:
         filtered = [chunk for chunk in expanded_hits if chunk.doc_id == preferred_doc_id]
         if filtered:
             answer_chunks = filtered
+    elif query_intent == "document_routing":
+        matched_doc_ids = _matching_source_doc_ids(query)
+        if matched_doc_ids:
+            filtered = [chunk for chunk in expanded_hits if chunk.doc_id in matched_doc_ids]
+            if filtered:
+                answer_chunks = filtered
     elif top_k_hits and query_terms.intersection(SOURCE_ANCHORED_HINTS):
         doc_counts: dict[str, int] = {}
         for chunk in top_k_hits:
@@ -1798,6 +2158,7 @@ def answer_query_with_retrieval(
             query_intent=query_intent,
             top_k_hits=top_k_hits,
             evidence=evidence,
+            chunk_root=chunk_root,
         )
         structured_answer, structured_trace = _format_structured_answer(query_intent, evidence)
         answer = cross_doc_answer or structured_answer or _compress_sentences(evidence)

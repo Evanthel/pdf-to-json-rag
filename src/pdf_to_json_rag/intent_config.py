@@ -3,6 +3,62 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from functools import lru_cache
+from pathlib import Path
+import re
+
+MATCH_STOPWORDS = {
+    "about",
+    "action",
+    "actions",
+    "and",
+    "are",
+    "best",
+    "benchmark",
+    "book",
+    "books",
+    "compare",
+    "covers",
+    "data",
+    "document",
+    "documents",
+    "file",
+    "files",
+    "for",
+    "from",
+    "guidance",
+    "humanitarian",
+    "impact",
+    "impacts",
+    "in",
+    "is",
+    "management",
+    "model",
+    "most",
+    "note",
+    "notes",
+    "or",
+    "predictive",
+    "relevant",
+    "report",
+    "response",
+    "review",
+    "risk",
+    "risks",
+    "source",
+    "sources",
+    "technical",
+    "that",
+    "the",
+    "this",
+    "trigger",
+    "triggers",
+    "what",
+    "which",
+    "why",
+    "with",
+}
 
 
 @dataclass(frozen=True)
@@ -20,29 +76,215 @@ class StructuredIntentProfile:
     answer_sentence_budget: int = 1
 
 
-SOURCE_DOC_ANCHORS = {
-    "ajmedp": "ajmedp-4-2-srd-eda-v1-e-2561",
-    "tb med 508": "ajmedp-4-2-srd-eda-v1-e-2561",
-    "health-check questionnaire": "health-check-questionnaire-for-subjects-expose-to",
-    "questionnaire for subjects exposed to cold": "health-check-questionnaire-for-subjects-expose-to",
-    "subjects exposed to cold": "health-check-questionnaire-for-subjects-expose-to",
-    "opioid manager appendix": "cep-opioidmanager-appendix2017",
-    "opioid manager appendices": "cep-opioidmanager-appendix2017",
-    "appendix a checklist": "cep-opioidmanager-appendix2017",
-    "appendix b": "cep-opioidmanager-appendix2017",
-    "appendix c": "cep-opioidmanager-appendix2017",
-    "switching opioids": "cep-opioidmanager-appendix2017",
-    "pre injection checklist": "appendix-2-examples-of-pre-injection-check-lists-final",
-    "pre injection check list": "appendix-2-examples-of-pre-injection-check-lists-final",
-    "appendix 2 examples of pre injection check lists": "appendix-2-examples-of-pre-injection-check-lists-final",
-    "cmaj": "prevention-and-treatment-of-the-common-cold",
-    "literature review": "the-common-cold-a-review-of-the-literature",
-    "wat review": "the-common-cold-a-review-of-the-literature",
-    "dennis wat": "the-common-cold-a-review-of-the-literature",
-    "echinacea": "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold",
-    "vitamin c": "vitamin-c-for-preventing-and-treating-the-common-cold",
-    "ct study": "ct-study-of-the-common-cold-scanned",
+@dataclass(frozen=True)
+class DocumentProfile:
+    doc_id: str
+    label: str
+    aliases: tuple[str, ...]
+    topical_terms: frozenset[str] = frozenset()
+
+
+DOCUMENT_PROFILES = {
+    "ajmedp-4-2-srd-eda-v1-e-2561": DocumentProfile(
+        doc_id="ajmedp-4-2-srd-eda-v1-e-2561",
+        label="AJMedP-4-2 SRD EDA V1 E 2561",
+        aliases=("ajmedp", "tb med 508"),
+        topical_terms=frozenset({"hypothermia", "frostbite", "immersion", "manual"}),
+    ),
+    "health-check-questionnaire-for-subjects-expose-to": DocumentProfile(
+        doc_id="health-check-questionnaire-for-subjects-expose-to",
+        label="Health-check questionnaire for subjects exposed to cold",
+        aliases=(
+            "health-check questionnaire",
+            "questionnaire for subjects exposed to cold",
+            "subjects exposed to cold",
+        ),
+        topical_terms=frozenset({"questionnaire", "cold", "frostbite", "performance", "symptoms"}),
+    ),
+    "cep-opioidmanager-appendix2017": DocumentProfile(
+        doc_id="cep-opioidmanager-appendix2017",
+        label="CEP OpioidManager Appendix 2017",
+        aliases=(
+            "opioid manager appendix",
+            "opioid manager appendices",
+            "appendix a checklist",
+            "appendix b",
+            "appendix c",
+            "switching opioids",
+        ),
+        topical_terms=frozenset({"opioid", "checklist", "monitoring", "follow-up", "appendix"}),
+    ),
+    "appendix-2-examples-of-pre-injection-check-lists-final": DocumentProfile(
+        doc_id="appendix-2-examples-of-pre-injection-check-lists-final",
+        label="Appendix 2 examples of pre injection check lists",
+        aliases=(
+            "pre injection checklist",
+            "pre injection check list",
+            "appendix 2 examples of pre injection check lists",
+        ),
+        topical_terms=frozenset({"checklist", "steroid", "injection", "anticoagulant", "vaccine"}),
+    ),
+    "prevention-and-treatment-of-the-common-cold": DocumentProfile(
+        doc_id="prevention-and-treatment-of-the-common-cold",
+        label="Prevention and treatment of the common cold",
+        aliases=("cmaj",),
+        topical_terms=frozenset({"zinc", "honey", "handwashing", "interventions", "prevention"}),
+    ),
+    "the-common-cold-a-review-of-the-literature": DocumentProfile(
+        doc_id="the-common-cold-a-review-of-the-literature",
+        label="The common cold: a review of the literature",
+        aliases=("literature review", "wat review", "dennis wat"),
+        topical_terms=frozenset({"review", "rhinovirus", "antibiotics", "symptoms", "pathogenesis"}),
+    ),
+    "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold": DocumentProfile(
+        doc_id="evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold",
+        label="Evaluation of echinacea for the prevention and treatment of the common cold",
+        aliases=("echinacea",),
+        topical_terms=frozenset({"echinacea", "incidence", "duration", "prevention"}),
+    ),
+    "vitamin-c-for-preventing-and-treating-the-common-cold": DocumentProfile(
+        doc_id="vitamin-c-for-preventing-and-treating-the-common-cold",
+        label="Vitamin C for Preventing and Treating the Common Cold",
+        aliases=("vitamin c",),
+        topical_terms=frozenset({"vitamin", "prophylaxis", "duration", "normal", "stress"}),
+    ),
+    "ct-study-of-the-common-cold-scanned": DocumentProfile(
+        doc_id="ct-study-of-the-common-cold-scanned",
+        label="CT study of the common cold",
+        aliases=("ct study",),
+        topical_terms=frozenset({"ct", "sinus", "abnormalities", "follow-up"}),
+    ),
+    "lbdl": DocumentProfile(
+        doc_id="lbdl",
+        label="The Little Book of Deep Learning",
+        aliases=("lbdl", "the little book of deep learning", "françois fleuret", "francois fleuret"),
+        topical_terms=frozenset(
+            {
+                "deep",
+                "learning",
+                "backpropagation",
+                "gradient",
+                "descent",
+                "transformers",
+                "attention",
+                "language",
+                "classification",
+                "denoising",
+                "architectures",
+            }
+        ),
+    ),
+    "guidance-note-data-incident-management": DocumentProfile(
+        doc_id="guidance-note-data-incident-management",
+        label="Guidance Note: Data Incident Management",
+        aliases=(
+            "data incident management",
+            "incident management guidance",
+            "humanitarian data incident management",
+        ),
+        topical_terms=frozenset(
+            {
+                "data",
+                "incident",
+                "management",
+                "breach",
+                "response",
+                "humanitarian",
+                "sensitive",
+                "disclosure",
+            }
+        ),
+    ),
+    "guidance-note-responsible-data-sharing-with-donors": DocumentProfile(
+        doc_id="guidance-note-responsible-data-sharing-with-donors",
+        label="Guidance Note: Responsible Data Sharing with Donors",
+        aliases=(
+            "responsible data sharing with donors",
+            "data sharing with donors",
+            "donor data sharing",
+        ),
+        topical_terms=frozenset(
+            {
+                "donors",
+                "donor",
+                "sharing",
+                "responsible",
+                "data",
+                "financial",
+                "sensitive",
+                "disclosure",
+            }
+        ),
+    ),
+    "guidance-note-on-the-implications-of-cyber-threats-for-humanitarians": DocumentProfile(
+        doc_id="guidance-note-on-the-implications-of-cyber-threats-for-humanitarians",
+        label="Guidance Note on the Implications of Cyber Threats for Humanitarians",
+        aliases=(
+            "cyber threats for humanitarians",
+            "cyber threats guidance",
+            "humanitarian cyber threats",
+        ),
+        topical_terms=frozenset(
+            {
+                "cyber",
+                "threats",
+                "humanitarians",
+                "humanitarian",
+                "security",
+                "digital",
+                "risks",
+                "attacks",
+            }
+        ),
+    ),
 }
+
+SOURCE_DOC_ANCHORS = {
+    alias: profile.doc_id
+    for profile in DOCUMENT_PROFILES.values()
+    for alias in profile.aliases
+}
+
+
+@lru_cache(maxsize=1)
+def _document_metadata_index() -> dict[str, dict[str, object]]:
+    documents_dir = Path(__file__).resolve().parents[2] / "data" / "documents"
+    index: dict[str, dict[str, object]] = {}
+    if not documents_dir.exists():
+        return index
+    for path in documents_dir.glob("*.document.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        doc_id = payload.get("doc_id")
+        if not isinstance(doc_id, str) or not doc_id:
+            continue
+        title = payload.get("title") if isinstance(payload.get("title"), str) else ""
+        summary_cues = [item for item in payload.get("summary_cues", []) if isinstance(item, str)]
+        discovery_terms = [item for item in payload.get("discovery_terms", []) if isinstance(item, str)]
+        index[doc_id] = {
+            "title": title,
+            "summary_cues": summary_cues,
+            "discovery_terms": discovery_terms,
+        }
+    return index
+
+
+def _metadata_anchor_matches(query_lower: str) -> list[str]:
+    matches: list[str] = []
+    for doc_id, meta in _document_metadata_index().items():
+        phrases = []
+        title = meta.get("title") or ""
+        if title:
+            phrases.append(title.lower())
+        phrases.extend(cue.lower() for cue in meta.get("summary_cues", [])[:3])
+        for phrase in phrases:
+            compact = re.sub(r"\s+", " ", phrase).strip()
+            if len(compact) >= 12 and compact in query_lower and doc_id not in matches:
+                matches.append(doc_id)
+                break
+    return matches
 
 
 STRUCTURED_INTENT_PROFILES = {
@@ -301,21 +543,76 @@ def get_structured_intent_profile(intent: str) -> StructuredIntentProfile | None
     return STRUCTURED_INTENT_PROFILES.get(intent)
 
 
-def preferred_source_doc_id(query: str) -> str | None:
-    query_lower = query.lower()
-    for anchor, doc_id in SOURCE_DOC_ANCHORS.items():
-        if anchor in query_lower:
-            return doc_id
-    return None
+def get_document_profile(doc_id: str) -> DocumentProfile | None:
+    return DOCUMENT_PROFILES.get(doc_id)
 
 
-def matching_source_doc_ids(query: str) -> list[str]:
+def preferred_source_doc_id(query: str, allow_topical: bool = False) -> str | None:
+    matches = matching_source_doc_ids(query, allow_topical=allow_topical)
+    return matches[0] if matches else None
+
+
+def _filtered_terms(text: str, min_len: int = 2) -> set[str]:
+    return {
+        term
+        for term in re.findall(r"[a-zA-Z]{%d,}" % min_len, text.lower())
+        if term not in MATCH_STOPWORDS
+    }
+
+
+def matching_source_doc_ids(query: str, allow_topical: bool = False) -> list[str]:
     query_lower = query.lower()
+    query_terms = _filtered_terms(query_lower, min_len=2)
+    query_terms |= {
+        term[:-1]
+        for term in list(query_terms)
+        if len(term) > 4 and term.endswith("s")
+    }
     seen: list[str] = []
     for anchor, doc_id in SOURCE_DOC_ANCHORS.items():
         if anchor in query_lower and doc_id not in seen:
             seen.append(doc_id)
-    return seen
+    for doc_id in _metadata_anchor_matches(query_lower):
+        if doc_id not in seen:
+            seen.append(doc_id)
+    if seen or not allow_topical:
+        return seen
+
+    topical_matches: list[tuple[int, str]] = []
+    candidate_doc_ids = set(DOCUMENT_PROFILES.keys()) | set(_document_metadata_index().keys())
+    for doc_id in candidate_doc_ids:
+        profile = DOCUMENT_PROFILES.get(doc_id)
+        meta = _document_metadata_index().get(doc_id, {})
+        profile_terms = (
+            {term for term in profile.topical_terms if term not in MATCH_STOPWORDS}
+            if profile
+            else set()
+        )
+        title_terms = _filtered_terms(str(meta.get("title", "")), min_len=3)
+        cue_terms = {
+            token
+            for cue in meta.get("summary_cues", [])[:6]
+            for token in _filtered_terms(cue, min_len=3)
+        }
+        discovery_terms = {
+            str(term).lower()
+            for term in meta.get("discovery_terms", [])
+            if str(term).lower() not in MATCH_STOPWORDS
+        }
+        profile_overlap = len(profile_terms.intersection(query_terms))
+        title_overlap = len(title_terms.intersection(query_terms))
+        cue_overlap = len(cue_terms.intersection(query_terms))
+        discovery_overlap = len(discovery_terms.intersection(query_terms))
+        score = (
+            title_overlap * 4
+            + discovery_overlap * 3
+            + cue_overlap * 2
+            + profile_overlap * 2
+        )
+        if score >= 3 and (title_overlap or discovery_overlap or cue_overlap or profile_overlap >= 2):
+            topical_matches.append((score, doc_id))
+    topical_matches.sort(key=lambda item: (-item[0], item[1]))
+    return [doc_id for _, doc_id in topical_matches]
 
 
 def detect_structured_intent(query: str, query_terms: set[str]) -> str | None:

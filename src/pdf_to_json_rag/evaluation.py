@@ -34,8 +34,24 @@ DEFAULT_REGRESSION_CASE_IDS = [
     "opioid_manager_appendix_a_optimized",
     "opioid_manager_appendix_b_adverse_scale",
     "opioid_manager_appendix_c_follow_up_timing",
+    "lbdl_document_overview",
+    "lbdl_document_routing_backpropagation",
+    "source_listing_deep_learning_transformers",
+    "ocha_incident_document_overview",
+    "ocha_document_routing_cyber_threats",
+    "ocha_document_routing_donor_sharing",
+    "source_listing_nonmedical_learning_and_incident_response",
+    "source_listing_humanitarian_data_governance",
+    "ambiguous_document_routing_humanitarian_data_risk",
+    "model_report_niger_routing",
+    "model_report_niger_justification",
+    "model_report_philippines_routing",
+    "source_listing_humanitarian_model_reports",
+    "compare_niger_chad_model_reports",
+    "ambiguous_document_routing_humanitarian_anticipatory_action",
     "negative_health_questionnaire_aspirin_frostbite",
     "negative_opioid_manager_gadolinium_monitoring",
+    "negative_document_routing_lease_clauses",
 ]
 DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
     "cross_document_core": [
@@ -61,12 +77,40 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "ajmedp_frostbite_severe_zone",
         "ajmedp_immersion_neck_limit",
     ],
+    "document_discovery_core": [
+        "lbdl_document_overview",
+        "lbdl_document_routing_backpropagation",
+        "source_listing_deep_learning_transformers",
+        "ocha_incident_document_overview",
+        "ocha_document_routing_cyber_threats",
+        "ocha_document_routing_donor_sharing",
+        "source_listing_nonmedical_learning_and_incident_response",
+        "source_listing_humanitarian_data_governance",
+        "ambiguous_document_routing_humanitarian_data_risk",
+        "model_report_niger_routing",
+        "model_report_niger_justification",
+        "model_report_philippines_routing",
+        "source_listing_humanitarian_model_reports",
+        "compare_niger_chad_model_reports",
+        "ambiguous_document_routing_humanitarian_anticipatory_action",
+        "negative_document_routing_lease_clauses",
+    ],
+    "model_report_core": [
+        "model_report_niger_routing",
+        "model_report_niger_justification",
+        "model_report_philippines_routing",
+        "source_listing_humanitarian_model_reports",
+        "compare_niger_chad_model_reports",
+        "ambiguous_document_routing_humanitarian_anticipatory_action",
+    ],
 }
 SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
     "checklist_fields": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
     "legend_lookup": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
     "follow_up_schedule": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
     "form_grid": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
+    "document_discovery": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
+    "model_report_family": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
 }
 DEFAULT_EVAL_CASES = [
     {
@@ -329,6 +373,17 @@ def reciprocal_rank(retrieved: list[str], relevant: set[str]) -> float:
     return 0.0
 
 
+def _ordered_unique(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        ordered.append(value)
+    return ordered
+
+
 def inspect_chunk_sample(chunks: list[ChunkRecord], sample_size: int = 5) -> list[ChunkRecord]:
     """Return a small chunk sample for manual quality review."""
     return chunks[:sample_size]
@@ -492,6 +547,20 @@ def _case_slice_labels(case: dict) -> list[str]:
         labels.extend(["pre_injection_checklist", "form_grid", "appendix_like"])
     elif case_id.startswith("ajmedp_") or "ajmedp" in query_lower or "tb med 508" in query_lower:
         labels.extend(["ajmedp_manual", "technical_manual", "table_heavy"])
+    elif (
+        case_id.startswith("lbdl_")
+        or "little book of deep learning" in query_lower
+        or "backpropagation" in query_lower
+    ):
+        labels.extend(["deep_learning_book", "non_medical", "document_discovery"])
+    elif (
+        case_id.startswith("ocha_")
+        or "data incident management" in query_lower
+        or "responsible data sharing with donors" in query_lower
+        or "cyber threats for humanitarians" in query_lower
+        or "humanitarian data incident" in query_lower
+    ):
+        labels.extend(["humanitarian_data_guidance", "non_medical", "document_discovery"])
     elif case_id.startswith("wat_") or "literature review" in query_lower or "dennis wat" in query_lower:
         labels.extend(["wat_review", "review_heavy"])
     elif case_id.startswith("cmaj_") or "cmaj" in query_lower:
@@ -592,7 +661,9 @@ def _debug_case_record(
         "expected_keywords": case.get("expected_keywords", []),
         "matched_keywords": answer_result.get("matched_keywords", []),
         "retrieval": {
+            "evaluation_level": retrieval_result.get("evaluation_level", "chunk"),
             "top_k_ids": retrieval_result["retrieved_ids"],
+            "top_k_doc_ids": retrieval_result.get("retrieved_doc_ids", []),
             "precision_at_k": retrieval_result.get("precision_at_k"),
             "recall_at_k": retrieval_result.get("recall_at_k"),
             "reciprocal_rank": retrieval_result.get("reciprocal_rank"),
@@ -711,23 +782,42 @@ def evaluate_retrieval_case(
         use_lightweight_rerank=use_lightweight_rerank,
     )
     retrieved_ids = [chunk.chunk_id for chunk in hits]
+    retrieved_doc_ids = _ordered_unique([chunk.doc_id for chunk in hits])
     relevant = set(case["relevant_chunk_ids"])
+    relevant_doc_ids = set(case.get("relevant_doc_ids", []))
     case_type = case.get("case_type", "grounded")
+    evaluation_level = "document" if relevant_doc_ids else "chunk"
     if case_type == "negative":
         return {
             "case_id": case["case_id"],
             "case_type": case_type,
             "query": case["query"],
+            "evaluation_level": evaluation_level,
             "retrieved_ids": retrieved_ids,
+            "retrieved_doc_ids": retrieved_doc_ids,
             "precision_at_k": None,
             "recall_at_k": None,
             "reciprocal_rank": None,
+        }
+    if relevant_doc_ids:
+        return {
+            "case_id": case["case_id"],
+            "case_type": case_type,
+            "query": case["query"],
+            "evaluation_level": "document",
+            "retrieved_ids": retrieved_ids,
+            "retrieved_doc_ids": retrieved_doc_ids,
+            "precision_at_k": precision_at_k(retrieved_doc_ids, relevant_doc_ids, k),
+            "recall_at_k": recall_at_k(retrieved_doc_ids, relevant_doc_ids, k),
+            "reciprocal_rank": reciprocal_rank(retrieved_doc_ids, relevant_doc_ids),
         }
     return {
         "case_id": case["case_id"],
         "case_type": case_type,
         "query": case["query"],
+        "evaluation_level": "chunk",
         "retrieved_ids": retrieved_ids,
+        "retrieved_doc_ids": retrieved_doc_ids,
         "precision_at_k": precision_at_k(retrieved_ids, relevant, k),
         "recall_at_k": recall_at_k(retrieved_ids, relevant, k),
         "reciprocal_rank": reciprocal_rank(retrieved_ids, relevant),
@@ -930,21 +1020,40 @@ def run_mvp_evaluation(
                 "case_id": case["case_id"],
                 "case_type": case_type,
                 "query": case["query"],
+                "evaluation_level": "document" if case.get("relevant_doc_ids") else "chunk",
                 "retrieved_ids": retrieved_ids,
+                "retrieved_doc_ids": _ordered_unique([chunk.doc_id for chunk in grounded_answer.top_k_hits]),
                 "precision_at_k": None,
                 "recall_at_k": None,
                 "reciprocal_rank": None,
             }
         else:
-            retrieval_result = {
-                "case_id": case["case_id"],
-                "case_type": case_type,
-                "query": case["query"],
-                "retrieved_ids": retrieved_ids,
-                "precision_at_k": precision_at_k(retrieved_ids, relevant, k),
-                "recall_at_k": recall_at_k(retrieved_ids, relevant, k),
-                "reciprocal_rank": reciprocal_rank(retrieved_ids, relevant),
-            }
+            relevant_doc_ids = set(case.get("relevant_doc_ids", []))
+            retrieved_doc_ids = _ordered_unique([chunk.doc_id for chunk in grounded_answer.top_k_hits])
+            if relevant_doc_ids:
+                retrieval_result = {
+                    "case_id": case["case_id"],
+                    "case_type": case_type,
+                    "query": case["query"],
+                    "evaluation_level": "document",
+                    "retrieved_ids": retrieved_ids,
+                    "retrieved_doc_ids": retrieved_doc_ids,
+                    "precision_at_k": precision_at_k(retrieved_doc_ids, relevant_doc_ids, k),
+                    "recall_at_k": recall_at_k(retrieved_doc_ids, relevant_doc_ids, k),
+                    "reciprocal_rank": reciprocal_rank(retrieved_doc_ids, relevant_doc_ids),
+                }
+            else:
+                retrieval_result = {
+                    "case_id": case["case_id"],
+                    "case_type": case_type,
+                    "query": case["query"],
+                    "evaluation_level": "chunk",
+                    "retrieved_ids": retrieved_ids,
+                    "retrieved_doc_ids": retrieved_doc_ids,
+                    "precision_at_k": precision_at_k(retrieved_ids, relevant, k),
+                    "recall_at_k": recall_at_k(retrieved_ids, relevant, k),
+                    "reciprocal_rank": reciprocal_rank(retrieved_ids, relevant),
+                }
 
         keyword_eval = _keyword_matches(
             grounded_answer.answer,

@@ -42,6 +42,8 @@ class DocumentRecord(BaseModel):
     page_count: int
     title: str | None = None
     toc: list[str] = Field(default_factory=list)
+    summary_cues: list[str] = Field(default_factory=list)
+    discovery_terms: list[str] = Field(default_factory=list)
     detected_language: str | None = None
     extraction_summary: dict[str, str | int | bool | None] = Field(default_factory=dict)
     chunks: list[ChunkRecord] = Field(default_factory=list)
