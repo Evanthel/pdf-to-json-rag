@@ -35,15 +35,18 @@ DEFAULT_REGRESSION_CASE_IDS = [
     "opioid_manager_appendix_b_adverse_scale",
     "opioid_manager_appendix_c_follow_up_timing",
     "lbdl_document_overview",
+    "lbdl_document_type",
     "lbdl_document_routing_backpropagation",
     "source_listing_deep_learning_transformers",
     "ocha_incident_document_overview",
+    "ocha_incident_document_purpose",
     "ocha_document_routing_cyber_threats",
     "ocha_document_routing_donor_sharing",
     "source_listing_nonmedical_learning_and_incident_response",
     "source_listing_humanitarian_data_governance",
     "ambiguous_document_routing_humanitarian_data_risk",
     "model_report_niger_routing",
+    "model_report_niger_document_type",
     "model_report_niger_justification",
     "model_report_philippines_routing",
     "source_listing_humanitarian_model_reports",
@@ -79,15 +82,18 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
     ],
     "document_discovery_core": [
         "lbdl_document_overview",
+        "lbdl_document_type",
         "lbdl_document_routing_backpropagation",
         "source_listing_deep_learning_transformers",
         "ocha_incident_document_overview",
+        "ocha_incident_document_purpose",
         "ocha_document_routing_cyber_threats",
         "ocha_document_routing_donor_sharing",
         "source_listing_nonmedical_learning_and_incident_response",
         "source_listing_humanitarian_data_governance",
         "ambiguous_document_routing_humanitarian_data_risk",
         "model_report_niger_routing",
+        "model_report_niger_document_type",
         "model_report_niger_justification",
         "model_report_philippines_routing",
         "source_listing_humanitarian_model_reports",
@@ -97,11 +103,34 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
     ],
     "model_report_core": [
         "model_report_niger_routing",
+        "model_report_niger_document_type",
         "model_report_niger_justification",
         "model_report_philippines_routing",
         "source_listing_humanitarian_model_reports",
         "compare_niger_chad_model_reports",
         "ambiguous_document_routing_humanitarian_anticipatory_action",
+    ],
+    "document_facets_core": [
+        "lbdl_document_type",
+        "ocha_incident_document_purpose",
+        "model_report_niger_document_type",
+    ],
+    "query_planning_core": [
+        "lbdl_document_overview",
+        "lbdl_document_type",
+        "lbdl_document_routing_backpropagation",
+        "ocha_incident_document_purpose",
+        "source_listing_humanitarian_model_reports",
+        "compare_niger_chad_model_reports",
+        "model_report_niger_justification",
+    ],
+    "answer_modes_core": [
+        "symptoms",
+        "lbdl_document_overview",
+        "lbdl_document_routing_backpropagation",
+        "source_listing_humanitarian_model_reports",
+        "compare_niger_chad_model_reports",
+        "model_report_niger_justification",
     ],
 }
 SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
@@ -110,6 +139,13 @@ SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
     "follow_up_schedule": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
     "form_grid": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
     "document_discovery": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
+    "document_facets": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
+    "query_planning": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
+    "document_inventory": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
+    "inventory_summary": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
+    "answer_mode_document_level": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
+    "answer_mode_cross_document": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
+    "answer_mode_grounded_evidence": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
     "model_report_family": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
 }
 DEFAULT_EVAL_CASES = [
@@ -508,6 +544,44 @@ def _case_slice_labels(case: dict) -> list[str]:
     labels = ["ocr_derived" if case_id.startswith("ct_") else "native_text"]
     labels.append(case_type)
 
+    discovery_like = any(
+        tag in case.get("case_tags", [])
+        for tag in (
+            "document_overview",
+            "document_routing",
+            "source_listing",
+            "source_justification",
+            "cross_document",
+            "document_facets",
+        )
+    )
+    if discovery_like:
+        labels.append("query_planning")
+    if any(
+        tag in case.get("case_tags", [])
+        for tag in (
+            "document_discovery",
+            "document_overview",
+            "document_routing",
+            "source_listing",
+            "source_justification",
+            "cross_document",
+            "document_facets",
+            "ambiguous_routing",
+        )
+    ):
+        labels.append("document_inventory")
+    if any(
+        tag in case.get("case_tags", [])
+        for tag in (
+            "document_overview",
+            "document_routing",
+            "source_listing",
+            "source_justification",
+        )
+    ):
+        labels.append("inventory_summary")
+
     is_treatment = (
         case_id == "antibiotics"
         or case_id.startswith("compare_vitamin_c")
@@ -578,6 +652,7 @@ def _preferred_source_doc_id_from_query(query: str) -> str | None:
 
 def _result_slice_labels(grounded_answer: GroundedAnswer, base_labels: list[str]) -> list[str]:
     labels = set(base_labels)
+    answer_mode = grounded_answer.answer_trace.get("answer_mode")
     top_doc_ids = {chunk.doc_id for chunk in grounded_answer.top_k_hits}
     expanded_noise = {
         noise
@@ -593,6 +668,12 @@ def _result_slice_labels(grounded_answer: GroundedAnswer, base_labels: list[str]
             labels.add("cross_document_mixing")
     if expanded_noise.intersection({"table_reference", "table_like_section", "reference_tail"}):
         labels.add("table_adjacent")
+    if answer_mode in {"document_overview", "document_routing", "source_justification"}:
+        labels.add("answer_mode_document_level")
+    elif answer_mode == "cross_document_compare" or answer_mode == "source_listing":
+        labels.add("answer_mode_cross_document")
+    elif answer_mode == "grounded_evidence":
+        labels.add("answer_mode_grounded_evidence")
     return sorted(labels)
 
 

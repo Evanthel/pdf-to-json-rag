@@ -222,127 +222,63 @@ Completed scope:
 
 All five milestones are now complete in the current local implementation. The benchmark now spans 36 cases across eight indexed documents, remains warning-free, and includes a dedicated `form_grid` / `source_anchored_form` slice that still does not justify reviving the heavier deferred features.
 
-## 6.10. v1.10 Milestones
+## 6.10-6.12. Structured-form Hardening
 
-The tenth post-MVP iteration focused on stress-testing and generalizing structured-form behavior across another appendix/checklist-heavy document family.
-
-Completed scope:
-
-1. Added a ninth benchmark document (`CEP_OpioidManager_Appendix2017.pdf`) to extend the form/grid slice beyond a single questionnaire-style source.
-2. Expanded the benchmark with new source-anchored opioid-appendix cases for checklist-field retrieval, adverse-effect scale lookup, follow-up timing extraction, and a new unsupported-entity negative case.
-3. Reworked the structured-form assist path into a cleaner per-document-family dispatch, then added a narrow opioid-appendix normalization path instead of another one-off retrieval-only patch.
-4. Added intent and source-locking support for the opioid appendix family in retrieval/answering/evaluation so row/field-style queries remain anchored to the correct source and section family.
-5. Re-checked deferred items on the broader nine-document benchmark and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge deferred after a warning-free rerun.
-
-All five milestones are now complete in the current local implementation. The benchmark now spans 41 cases across nine indexed documents, remains warning-free, and keeps the heavier deferred features out of scope.
-
-## 6.11. v1.11 Milestones
-
-The eleventh post-MVP iteration focused on making the form/appendix path more maintainable and adding stronger quality gates without introducing heavyweight model components.
+These iterations consolidated the form/checklist path instead of growing more one-off fixes.
 
 Completed scope:
 
-1. Replaced part of the document-specific structured-form rewrites with a reusable pattern layer (`field-row`, `legend-scale`, `follow-up-schedule`) and kept dispatch per document family.
-2. Added concise structured answer templates for checklist/legend/follow-up intents so source-anchored form answers are shorter while remaining grounded.
-3. Added form-family slice checks (`checklist_fields`, `legend_lookup`, `follow_up_schedule`) with explicit per-slice stability thresholds.
-4. Added a deterministic regression suite (`evaluate-regression`) for high-risk source-anchored form cases as a fast pre-check before full benchmark reruns.
-5. Re-checked deferred features after the expanded nine-document benchmark and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge deferred.
+1. Added opioid-appendix and related checklist-style cases to prove the path generalizes beyond a single questionnaire source.
+2. Reworked the assist logic into reusable pattern families and shared declarative intent metadata.
+3. Added deterministic regression shards and stronger slice-stability checks for high-risk structured-form cases.
 
-All five milestones are now complete in the current local implementation. The benchmark remains warning-free at 41 cases across nine indexed documents, and slice-stability checks plus regression gating now provide earlier failure signals than global warning counts alone.
+Outcome:
 
-## 6.12. v1.12 Milestones
+- the structured-form path became shorter, more inspectable, and less document-specific
+- the benchmark stayed warning-free while `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge remained deferred
 
-The twelfth post-MVP iteration focused on reducing rule sprawl, improving inspectability, and checking whether the structured-form path still generalizes to another appendix family.
+## 6.13-6.17. Document Discovery Expansion
 
-Completed scope:
-
-1. Moved structured form and appendix intent metadata into a shared declarative config so retrieval and answering read from one source of truth.
-2. Added `answer_trace` metadata for structured answers so matched templates, cues, and evidence can be inspected directly in debug output.
-3. Added regression shards to the CLI for faster local pre-checks on cross-document, form-grid, source-anchored review, and technical/manual cases.
-4. Added an additional appendix-heavy checklist source and generalized the existing structured-form path to cover it without another per-document special case.
-5. Re-checked the deferred list and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge out of scope because the current local architecture still resolves the new cases cleanly.
-
-All five milestones are now complete in the current local implementation. The benchmark remained warning-free while the structured-form path became more declarative and easier to inspect.
-
-## 6.13. v1.13 Milestones
-
-The thirteenth post-MVP iteration shifted from single-document question answering toward explicit cross-document behavior.
+These iterations moved the project from single-document evidence lookup toward multi-source discovery and routing.
 
 Completed scope:
 
-1. Added cross-document query intents for source listing and source comparison instead of treating all queries like single-document retrieval.
-2. Added multi-source document matching from the query and wired it into retrieval so cross-document intents focus on the intended source families.
-3. Tightened cross-document reranking to prefer conclusion, prevention, and null-effect evidence over introduction, methods, or inclusion-criteria chunks.
-4. Added a dedicated regression shard for cross-document behavior and used it to stabilize the new multi-file path before rerunning the full benchmark.
-5. Expanded the evaluation set with source-listing, comparison, and unsupported-entity cross-document cases, then synchronized the gold targets to the current chunk layout.
+1. Added cross-document intents for source listing, comparison, and justification.
+2. Added several non-medical, public-safe source families so routing no longer depended on one domain or one benchmark style.
+3. Pushed more discovery behavior into extraction-time metadata such as `summary_cues`, `discovery_terms`, and cleaner source labels.
+4. Expanded evaluation with mixed-domain routing, ambiguous multi-source cases, and dedicated discovery regressions.
 
-All five milestones are now complete in the current local implementation. The benchmark now spans 48 cases across 11 indexed documents and remains warning-free while covering both single-document and cross-document grounded behavior.
+Outcome:
 
-## 6.14. v1.14 Milestones
+- the benchmark expanded from 48 to 64 cases and stayed warning-free
+- the system learned document overview, routing, source listing, and source justification instead of only chunk-level evidence lookup
 
-The fourteenth post-MVP iteration pushed the benchmark and answer path toward more domain-agnostic document discovery instead of only adding more medical evidence cases.
+## 6.18-6.20. Discovery Architecture Hardening
 
-Completed scope:
-
-1. Added a clearly non-medical benchmark source (`The Little Book of Deep Learning`) and folded it into the shared local index.
-2. Split document-family matching from domain vocabulary more cleanly by introducing reusable document profiles with aliases and topical terms.
-3. Added lightweight document-level answer modes for overview and routing questions such as “what does this file cover?” and “which file is most relevant for X?”.
-4. Expanded evaluation so document-discovery cases can score at the document level instead of pretending every source-discovery query is a chunk-retrieval task.
-5. Re-checked deferred features on the broader, more domain-diverse benchmark and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge deferred after a warning-free rerun.
-
-All five milestones are now complete in the current local implementation. The benchmark now spans 52 cases across 12 indexed documents, remains warning-free, and covers both evidence answering and document-discovery behavior on a non-medical source family.
-
-## 6.15. v1.15 Milestones
-
-The fifteenth post-MVP iteration made document discovery less dependent on a single good non-medical source and pushed more of that behavior into reusable metadata instead of live top-k heuristics.
+These iterations shifted the project away from benchmark growth and toward a more explicit document-intelligence layer.
 
 Completed scope:
 
-1. Added a second non-medical document family with a very different structure from the deep-learning book.
-2. Moved document-overview cues into extraction-time `summary_cues` metadata so overview answers rely less on runtime chunk guessing.
-3. Added ambiguity-aware routing so some queries can intentionally surface more than one relevant source instead of forcing a single-file answer.
-4. Expanded evaluation and regression coverage for non-medical document discovery, mixed-domain source listing, and ambiguous routing behavior.
-5. Re-checked deferred features on the broader document-discovery benchmark and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge deferred after the final warning-free rerun.
+1. Added extraction-time document facets plus reusable metadata summaries for type, purpose, audience, evidence style, and structure style.
+2. Built a document inventory and query-planning layer so discovery and routing can shortlist candidate files before chunk retrieval.
+3. Added an explicit answer-mode layer for overview, routing, source-listing, source-justification, comparison, and evidence lookup.
+4. Improved comparison and routing answers so they can explain differences in purpose, audience, structure style, and evidence style across mixed-domain sources.
+5. Added compact architecture-focused regressions and slices such as `document_facets_core`, `query_planning_core`, and `answer_modes_core`.
 
-All five milestones are now complete in the current local implementation. The benchmark now spans 56 cases across 13 indexed documents, remains warning-free, and handles both document-level overviews and multi-source routing on mixed-domain content.
+Outcome:
 
-## 6.16. v1.16 Milestones
+- the benchmark remains warning-free at 67 cases across 19 indexed documents
+- the project now has a stable facet-driven, inventory-first, query-planned path for document overview, routing, source justification, and cross-document comparison
 
-The sixteenth post-MVP iteration generalized document discovery further with a public-safe guidance-note family and moved more source selection toward document metadata instead of profile-only matching.
+## 6.21. v1.21 Plan
 
-Completed scope:
+The next iteration should keep improving the document-intelligence layer itself rather than adding more benchmark families.
 
-1. Added a third clearly non-medical source family built from open humanitarian data guidance notes with a different structure from the two existing books.
-2. Improved extraction-time metadata by deriving cleaner `doc_id` values for opaque source filenames and adding reusable `discovery_terms` for document selection.
-3. Improved mixed-domain routing and source listing by ranking shortlisted sources with document metadata rather than only live top-k order and hardcoded profile terms.
-4. Expanded evaluation and regression coverage with new overview, routing, source-listing, and ambiguous multi-source cases for the humanitarian-data family.
-5. Re-checked deferred features on the broader discovery benchmark and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge deferred after the final warning-free rerun.
-
-All five milestones are now complete in the current local implementation. The benchmark now spans 58 cases across 15 indexed documents, remains warning-free, and pushes the project further toward domain-agnostic document discovery rather than domain-specific evidence lookup.
-
-## 6.17. v1.17 Milestones
-
-The seventeenth post-MVP iteration broadened document discovery again while reducing dependence on hand-written source profiles.
-
-Completed scope:
-
-1. Added a fourth public-safe non-medical source family built from short humanitarian model reports with a different structure from books, manuals, and guidance notes.
-2. Tightened source matching so document routing relies more on extraction-time `discovery_terms`, titles, and summary cues, while filtering out generic routing noise.
-3. Added a clearer `source_justification` answer mode for “why this source?” queries, surfacing matched document cues and section families directly.
-4. Expanded evaluation and regression coverage with harder mixed-domain routing, source-listing, source-justification, and comparison queries that do not explicitly name the source family.
-5. Re-checked deferred features on the broader discovery benchmark and kept `pdfplumber`, cross-encoder reranking, and LLM-as-a-judge deferred after the final warning-free rerun.
-
-All five milestones are now complete in the current local implementation. The benchmark now spans 64 cases across 19 indexed documents, remains warning-free, and covers document-level discovery across books, guidance notes, model reports, manuals, forms, and extracted evidence sources.
-
-## 6.18. v1.18 Plan
-
-The next iteration should focus on high-ROI architectural moves, not on expanding the benchmark for its own sake.
-
-1. Add an extraction-time document-facet layer so each document gets reusable metadata such as `document_type`, `document_purpose`, `audience`, `evidence_style`, and `structure_style`.
-2. Refactor document discovery and routing so they depend primarily on extracted facets and metadata summaries instead of growing `DocumentProfile` rules and source-family-specific matching logic.
-3. Upgrade document-overview answers into a single generic path that explains what a document is, what it covers, and how it is meant to be used, instead of mostly stitching together heading-like cues.
-4. Add a compact architecture-focused evaluation slice for document facets, document type, and document purpose, so future iterations can test the new layer without needing a large new batch of PDFs.
-5. Revisit the deferred list only after the facet-driven architecture is in place, and only if it reveals failures that cannot be absorbed by the current local chunking, retrieval, and lightweight reranking stack.
+1. Add a compact document-family classifier layer so books, guidance notes, model reports, manuals, forms, and clinical references can be reasoned about through one shared abstraction.
+2. Normalize answer contracts for evidence lookup, overview, routing, and comparison into a smaller shared schema so downstream evaluation depends less on free-form wording.
+3. Add document-level coverage and conflict signals so comparison answers can say whether sources complement, overlap, or diverge.
+4. Add a compact evaluation slice for document-family reasoning and answer-contract stability without introducing another new source family.
+5. Revisit deferred features only if the document-family and answer-contract passes reveal failures that the current local retrieval and lightweight reranking stack cannot absorb.
 
 
 ## 7. Explicitly Deferred

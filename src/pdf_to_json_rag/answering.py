@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from .document_facets import derive_document_facets
+from .document_inventory import build_inventory_summary, get_inventory_entry
 from .intent_config import (
     detect_structured_intent,
     get_document_profile,
@@ -13,6 +15,7 @@ from .intent_config import (
     matching_source_doc_ids as configured_matching_source_doc_ids,
     preferred_source_doc_id as configured_source_doc_id,
 )
+from .query_planning import plan_query
 from .retrieval import retrieve_top_k_with_neighbors
 from .schemas import ChunkRecord, DocumentRecord
 
@@ -489,6 +492,10 @@ def _query_terms(query: str) -> set[str]:
     return terms
 
 
+def _planned_answer_mode(query: str) -> str:
+    return plan_query(query).answer_mode
+
+
 def _normalized_sentence_surface(text: str) -> str:
     normalized = _normalize_text(text).lower()
     normalized = re.sub(r"[^a-z0-9\s]+", " ", normalized)
@@ -510,39 +517,13 @@ def _split_sentences(text: str) -> list[str]:
 
 
 def _detect_query_intent(query: str, query_terms: set[str]) -> str:
+    plan = plan_query(query)
+    if plan.query_class != "evidence_lookup":
+        return plan.query_intent
     query_lower = query.lower()
     structured_intent = detect_structured_intent(query, query_terms)
     if structured_intent:
         return structured_intent
-    metadata_matches = configured_matching_source_doc_ids(query, allow_topical=True)
-    if (
-        ("what does" in query_lower and "cover" in query_lower)
-        or ("what is" in query_lower and "about" in query_lower)
-    ) and configured_source_doc_id(query):
-        return "document_overview"
-    if (
-        ("which file" in query_lower or "which document" in query_lower or "which source" in query_lower)
-        and (
-            "most relevant" in query_lower
-            or "best source" in query_lower
-            or "best document" in query_lower
-        )
-    ):
-        return "document_routing"
-    if (
-        query_lower.startswith("why")
-        and (
-            "most relevant source" in query_lower
-            or "best match" in query_lower
-            or "best source" in query_lower
-            or "most relevant file" in query_lower
-        )
-    ):
-        return "source_justification"
-    if "which sources" in query_lower or "which documents" in query_lower:
-        return "source_listing"
-    if query_terms.intersection(MULTI_DOC_COMPARE_TERMS) and len(metadata_matches) >= 2:
-        return "cross_document_compare"
     if query_terms.intersection(MULTI_DOC_COMPARE_TERMS) and len(query_terms.intersection(TREATMENT_ENTITY_HINTS)) >= 2:
         return "cross_document_compare"
     if "antibiotic" in query_terms or "antibiotics" in query_terms:
@@ -624,23 +605,35 @@ def _detect_query_intent(query: str, query_terms: set[str]) -> str:
 
 
 def _preferred_source_doc_id(query: str) -> str | None:
+    plan = plan_query(query)
+    if plan.query_class != "evidence_lookup":
+        return plan.preferred_doc_id
     query_intent = _detect_query_intent(query, _query_terms(query))
     if query_intent in {"source_listing", "cross_document_compare", "document_routing"}:
         return None
-    return configured_source_doc_id(query)
+    return configured_source_doc_id(
+        query,
+        allow_topical=(query_intent in {"source_justification", "document_overview"}),
+    )
 
 
 def _matching_source_doc_ids(query: str) -> list[str]:
+    plan = plan_query(query)
+    if plan.query_class != "evidence_lookup":
+        return list(plan.matched_doc_ids)
     query_intent = _detect_query_intent(query, _query_terms(query))
     allow_topical = query_intent in {
         "source_listing",
         "document_routing",
         "source_justification",
+        "document_overview",
         "cross_document_compare",
     }
     matches = configured_matching_source_doc_ids(query, allow_topical=allow_topical)
     query_lower = query.lower()
     if query_intent == "source_justification" and matches:
+        return matches[:1]
+    if query_intent == "document_overview" and matches:
         return matches[:1]
     if query_intent == "document_routing" and matches:
         if "which file or files" not in query_lower and "which files" not in query_lower:
@@ -1598,6 +1591,159 @@ def _document_discovery_terms(doc_id: str, chunk_root: Path) -> list[str]:
     return []
 
 
+def _document_facets(doc_id: str, chunk_root: Path) -> dict[str, str | list[str]]:
+    record = _load_document_record(doc_id, chunk_root)
+    if not record:
+        return {
+            "document_type": "",
+            "document_purpose": "",
+            "audience": "",
+            "evidence_style": "",
+            "structure_style": "",
+            "facet_terms": [],
+        }
+    if not any(
+        [
+            record.document_type,
+            record.document_purpose,
+            record.audience,
+            record.evidence_style,
+            record.structure_style,
+            record.facet_terms,
+        ]
+    ):
+        return derive_document_facets(
+            source_pdf=record.source_pdf,
+            title=record.title,
+            toc=record.toc,
+            summary_cues=record.summary_cues,
+            leading_block_lines=[],
+            metadata_values=[],
+            page_count=record.page_count,
+        )
+    return {
+        "document_type": record.document_type or "",
+        "document_purpose": record.document_purpose or "",
+        "audience": record.audience or "",
+        "evidence_style": record.evidence_style or "",
+        "structure_style": record.structure_style or "",
+        "facet_terms": record.facet_terms[:10],
+    }
+
+
+def _document_facet_tokens(doc_id: str, chunk_root: Path) -> set[str]:
+    facets = _document_facets(doc_id, chunk_root)
+    tokens: set[str] = set()
+    for key in ("document_type", "document_purpose", "audience", "evidence_style", "structure_style"):
+        tokens.update(re.findall(r"[a-zA-Z]{3,}", str(facets.get(key, "")).lower()))
+    for item in facets.get("facet_terms", []):
+        if isinstance(item, str):
+            tokens.update(re.findall(r"[a-zA-Z]{3,}", item.lower()))
+    return tokens
+
+
+def _document_overview_fragments(doc_id: str, top_k_hits: list[ChunkRecord], chunk_root: Path) -> list[str]:
+    facets = _document_facets(doc_id, chunk_root)
+    fragments: list[str] = []
+    document_type = facets.get("document_type")
+    document_purpose = facets.get("document_purpose")
+    audience = facets.get("audience")
+    topics = _document_summary_cues(doc_id, top_k_hits, chunk_root)
+
+    if document_type:
+        fragments.append(f"it is a {document_type.replace('_', ' ')}")
+    if document_purpose:
+        fragments.append(f"its main purpose is {str(document_purpose).replace('_', ' ')}")
+    if audience and audience != "general_professional":
+        fragments.append(f"it appears aimed at {str(audience).replace('_', ' ')}")
+    if topics:
+        fragments.append("it covers topics such as " + ", ".join(topics[:4]))
+    return fragments
+
+
+def _document_profile_summary(doc_id: str, chunk_root: Path) -> str:
+    facets = _document_facets(doc_id, chunk_root)
+    purpose = str(facets.get("document_purpose", "")).replace("_", " ")
+    evidence_style = str(facets.get("evidence_style", "")).replace("_", " ")
+    audience = str(facets.get("audience", "")).replace("_", " ")
+    structure_style = str(facets.get("structure_style", "")).replace("_", " ")
+    parts: list[str] = []
+    if purpose:
+        parts.append(purpose)
+    if evidence_style:
+        parts.append(evidence_style)
+    if audience and audience != "general professional":
+        parts.append(f"for {audience}")
+    if structure_style:
+        parts.append(structure_style)
+    if parts:
+        return "; ".join(parts)
+    return "general reference"
+
+
+def _document_difference_summary(doc_ids: list[str], chunk_root: Path) -> str | None:
+    if len(doc_ids) < 2:
+        return None
+    first = _document_facets(doc_ids[0], chunk_root)
+    second = _document_facets(doc_ids[1], chunk_root)
+    first_purpose = str(first.get("document_purpose", "")).replace("_", " ")
+    second_purpose = str(second.get("document_purpose", "")).replace("_", " ")
+    first_style = str(first.get("evidence_style", "")).replace("_", " ")
+    second_style = str(second.get("evidence_style", "")).replace("_", " ")
+    first_audience = str(first.get("audience", "")).replace("_", " ")
+    second_audience = str(second.get("audience", "")).replace("_", " ")
+    first_structure = str(first.get("structure_style", "")).replace("_", " ")
+    second_structure = str(second.get("structure_style", "")).replace("_", " ")
+
+    differences: list[str] = []
+    if first_purpose and second_purpose and first_purpose != second_purpose:
+        differences.append(f"their purposes differ ({first_purpose} vs {second_purpose})")
+    if first_style and second_style and first_style != second_style:
+        differences.append(f"their evidence styles differ ({first_style} vs {second_style})")
+    if (
+        first_audience
+        and second_audience
+        and first_audience != second_audience
+        and "general professional" not in {first_audience, second_audience}
+    ):
+        differences.append(f"their audiences differ ({first_audience} vs {second_audience})")
+    if first_structure and second_structure and first_structure != second_structure:
+        differences.append(f"their structures differ ({first_structure} vs {second_structure})")
+    if not differences:
+        return None
+    return "Both are relevant, but " + " and ".join(differences) + "."
+
+
+def _document_inventory_summary(
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+    *,
+    include_label: bool = False,
+) -> str:
+    entry = get_inventory_entry(doc_id)
+    label = _document_label(doc_id, chunk_root)
+    if entry and entry.inventory_summary:
+        summary = entry.inventory_summary.strip()
+    else:
+        facets = _document_facets(doc_id, chunk_root)
+        summary = build_inventory_summary(
+            title=label,
+            document_type=str(facets.get("document_type", "")),
+            document_purpose=str(facets.get("document_purpose", "")),
+            audience=str(facets.get("audience", "")),
+            evidence_style=str(facets.get("evidence_style", "")),
+            structure_style=str(facets.get("structure_style", "")),
+            summary_cues=_document_summary_cues(doc_id, top_k_hits, chunk_root),
+        )
+    prefix = f"{label} | "
+    if not include_label and summary.startswith(prefix):
+        return summary[len(prefix):]
+    if include_label:
+        return summary if summary.startswith(prefix) else f"{label} | {summary}"
+    return summary
+
+
 def _rank_document_candidates(
     doc_ids: list[str],
     query: str,
@@ -1614,15 +1760,17 @@ def _rank_document_candidates(
         label_terms = set(re.findall(r"[a-zA-Z]{3,}", (profile.label if profile else doc_id).lower()))
         profile_terms = set(profile.topical_terms) if profile else set()
         discovery_terms = set(_document_discovery_terms(doc_id, chunk_root))
+        facet_terms = _document_facet_tokens(doc_id, chunk_root)
         summary_terms = {
             token
             for cue in _document_summary_cues(doc_id, top_k_hits, chunk_root)
             for token in re.findall(r"[a-zA-Z]{3,}", cue.lower())
         }
-        overlap = len(query_terms & (label_terms | profile_terms | discovery_terms | summary_terms))
+        overlap = len(query_terms & (label_terms | profile_terms | discovery_terms | summary_terms | facet_terms))
         score = overlap * 3.0
+        score += len(query_terms & facet_terms) * 2.0
         if profile:
-            score += len(query_terms & profile_terms) * 1.5
+            score += len(query_terms & profile_terms) * 0.75
         if doc_id in hit_rank:
             score += max(0.0, 3.0 - min(hit_rank[doc_id], 6) * 0.4)
         ranked.append((score, doc_id))
@@ -1638,9 +1786,14 @@ def _base_answer_trace(
     matched_pattern: str | None = None,
     matched_cues: list[str] | None = None,
 ) -> dict[str, object]:
+    plan = plan_query(query)
     return {
+        "query_class": plan.query_class,
+        "answer_mode": plan.answer_mode,
         "query_intent": query_intent,
         "source_doc_id": _preferred_source_doc_id(query),
+        "inventory_doc_ids": list(plan.inventory_doc_ids),
+        "matched_doc_ids": list(plan.matched_doc_ids),
         "template_id": template_id,
         "matched_pattern": matched_pattern,
         "matched_cues": matched_cues or [],
@@ -1648,28 +1801,50 @@ def _base_answer_trace(
     }
 
 
-def _cross_document_answer(
+def _document_mode_answer(
     query: str,
     query_intent: str,
     top_k_hits: list[ChunkRecord],
     evidence: list[EvidenceSentence],
     chunk_root: Path,
 ) -> tuple[str | None, dict[str, object] | None]:
+    answer_mode = _planned_answer_mode(query)
     source_summary = _structured_source_summary(top_k_hits)
-    if query_intent == "document_overview" and top_k_hits:
-        primary_doc_id = top_k_hits[0].doc_id
+    if answer_mode == "document_overview" and top_k_hits:
+        primary_doc_id = _preferred_source_doc_id(query) or top_k_hits[0].doc_id
         primary_label = _document_label(primary_doc_id, chunk_root)
-        topics = _document_summary_cues(primary_doc_id, top_k_hits, chunk_root)
-        if topics:
+        inventory_summary = _document_inventory_summary(primary_doc_id, top_k_hits, chunk_root)
+        overview_fragments = _document_overview_fragments(primary_doc_id, top_k_hits, chunk_root)
+        if inventory_summary:
+            extra_fragments = [
+                fragment
+                for fragment in overview_fragments
+                if fragment.startswith("it covers topics such as ")
+            ]
+            answer = f"{primary_label}: {inventory_summary}."
+            if extra_fragments:
+                answer += " " + " ".join(
+                    fragment[:1].upper() + fragment[1:] + "."
+                    for fragment in extra_fragments
+                )
             return (
-                f"{primary_label} covers topics such as " + ", ".join(topics[:4]) + ".",
+                answer,
                 {
                     "template_id": "document_level.overview",
-                    "matched_pattern": "document-summary-cues",
-                    "matched_cues": topics[:4],
+                    "matched_pattern": "inventory-summary-facets",
+                    "matched_cues": [inventory_summary, *overview_fragments],
                 },
             )
-    if query_intent == "document_routing" and top_k_hits:
+        if overview_fragments:
+            return (
+                f"{primary_label}: " + "; ".join(overview_fragments) + ".",
+                {
+                    "template_id": "document_level.overview",
+                    "matched_pattern": "document-facets-and-summary-cues",
+                    "matched_cues": overview_fragments,
+                },
+            )
+    if answer_mode == "document_routing" and top_k_hits:
         matched_doc_ids = _matching_source_doc_ids(query)
         if len(matched_doc_ids) > 1:
             multi_doc_limit = 4 if ("which file or files" in query.lower() or "which files" in query.lower()) else 3
@@ -1684,18 +1859,14 @@ def _cross_document_answer(
                 cues: list[str] = []
                 for doc_id in chosen_doc_ids:
                     label = _document_label(doc_id, chunk_root)
-                    summary_cues = _document_summary_cues(doc_id, top_k_hits, chunk_root)
-                    if summary_cues:
-                        fragments.append(f"{label} ({', '.join(summary_cues[:2])})")
-                        cues.extend([label, *summary_cues[:2]])
-                    else:
-                        fragments.append(label)
-                        cues.append(label)
+                    inventory_summary = _document_inventory_summary(doc_id, top_k_hits, chunk_root)
+                    fragments.append(f"{label} ({inventory_summary})")
+                    cues.extend([label, inventory_summary])
                 return (
                     "The most relevant files are " + "; ".join(fragments) + ".",
                     {
                         "template_id": "document_level.routing_multi",
-                        "matched_pattern": "multi-doc-topical-summary",
+                        "matched_pattern": "inventory-ranked-multi-doc-summary",
                         "matched_cues": cues,
                     },
                 )
@@ -1728,6 +1899,9 @@ def _cross_document_answer(
         topics = _document_summary_cues(primary_chunk.doc_id, top_k_hits, chunk_root)
         if topical_terms or topics:
             justification_parts: list[str] = []
+            inventory_summary = _document_inventory_summary(primary_chunk.doc_id, top_k_hits, chunk_root)
+            if inventory_summary:
+                justification_parts.append(inventory_summary)
             if topical_terms:
                 justification_parts.append(
                     "It includes grounded material on " + ", ".join(topical_terms[:4])
@@ -1741,22 +1915,39 @@ def _cross_document_answer(
                 {
                     "template_id": "document_level.routing",
                     "matched_pattern": "top-doc-topical-summary",
-                    "matched_cues": [primary_label, *topical_terms[:4], *topics[:3]],
+                    "matched_cues": [primary_label, inventory_summary, *topical_terms[:4], *topics[:3]],
                 },
             )
-    if query_intent == "source_justification" and top_k_hits:
+    if answer_mode == "source_justification" and top_k_hits:
         primary_chunk = top_k_hits[0]
         primary_label = _document_label(primary_chunk.doc_id, chunk_root)
         query_terms = _specific_query_terms(_query_terms(query))
         summary_cues = _document_summary_cues(primary_chunk.doc_id, top_k_hits, chunk_root)
         discovery_terms = _document_discovery_terms(primary_chunk.doc_id, chunk_root)
+        facets = _document_facets(primary_chunk.doc_id, chunk_root)
+        facet_tokens = _document_facet_tokens(primary_chunk.doc_id, chunk_root)
         matched_terms = [
             term for term in sorted(query_terms)
-            if term in set(discovery_terms) or any(term in cue.lower() for cue in summary_cues)
+            if (
+                term in set(discovery_terms)
+                or term in facet_tokens
+                or any(term in cue.lower() for cue in summary_cues)
+            )
         ][:4]
         parts: list[str] = []
+        inventory_summary = _document_inventory_summary(primary_chunk.doc_id, top_k_hits, chunk_root)
+        if inventory_summary:
+            parts.append(inventory_summary)
         if matched_terms:
             parts.append("it matches cues such as " + ", ".join(matched_terms))
+        if facets.get("document_type") or facets.get("document_purpose"):
+            facet_parts = [
+                str(value).replace("_", " ")
+                for value in (facets.get("document_type"), facets.get("document_purpose"))
+                if value
+            ]
+            if facet_parts:
+                parts.append("it is classified as " + " / ".join(facet_parts))
         if summary_cues:
             parts.append("it includes sections such as " + ", ".join(summary_cues[:3]))
         if not parts:
@@ -1766,25 +1957,25 @@ def _cross_document_answer(
             {
                 "template_id": "document_level.justification",
                 "matched_pattern": "doc-metadata-justification",
-                "matched_cues": [primary_label, *matched_terms, *summary_cues[:3]],
+                "matched_cues": [primary_label, inventory_summary, *matched_terms, *summary_cues[:3]],
             },
         )
-    if query_intent == "source_listing" and source_summary:
+    if answer_mode == "source_listing" and source_summary:
         source_doc_ids = [doc_id for doc_id, _ in source_summary]
         ranked_doc_ids = _rank_document_candidates(source_doc_ids, query, top_k_hits, chunk_root)[:4]
         labels = []
         for doc_id in ranked_doc_ids:
-            labels.append(_document_label(doc_id, chunk_root))
+            labels.append(f"{_document_label(doc_id, chunk_root)} ({_document_inventory_summary(doc_id, top_k_hits, chunk_root)})")
         return (
             "Relevant sources include: " + "; ".join(labels) + ".",
             {
                 "template_id": "cross_doc.source_listing",
-                "matched_pattern": "doc-diverse-topk",
+                "matched_pattern": "inventory-ranked-doc-diverse-topk",
                 "matched_cues": labels,
             },
         )
 
-    if query_intent == "cross_document_compare" and evidence:
+    if answer_mode == "cross_document_compare" and evidence:
         chunk_lookup = {chunk.chunk_id: chunk for chunk in top_k_hits}
         per_doc_sentences: dict[str, tuple[str, str]] = {}
         for item in evidence:
@@ -1808,16 +1999,21 @@ def _cross_document_answer(
                 fallback_sentences[0].rstrip("."),
             )
         if len(per_doc_sentences) >= 2:
+            doc_ids = list(per_doc_sentences.keys())[:3]
             fragments = [
-                f"{label}: {sentence}."
-                for label, sentence in list(per_doc_sentences.values())[:3]
+                f"{label}: {_document_inventory_summary(doc_id, top_k_hits, chunk_root)}. Evidence: {sentence}."
+                for doc_id, (label, sentence) in list(per_doc_sentences.items())[:3]
             ]
+            difference_summary = _document_difference_summary(doc_ids, chunk_root)
+            if difference_summary:
+                fragments.append(difference_summary)
             return (
                 " ".join(fragments),
                 {
                     "template_id": "cross_doc.compare",
-                    "matched_pattern": "doc-diverse-evidence",
-                    "matched_cues": [label for label, _ in list(per_doc_sentences.values())[:3]],
+                    "matched_pattern": "doc-diverse-evidence-plus-facets",
+                    "matched_cues": [label for label, _ in list(per_doc_sentences.values())[:3]]
+                    + [_document_profile_summary(doc_id, chunk_root) for doc_id in doc_ids],
                 },
             )
     return None, None
@@ -2153,7 +2349,7 @@ def answer_query_with_retrieval(
         answer = NO_GROUNDED_ANSWER
         answer_trace = _base_answer_trace(query=query, query_intent=query_intent, evidence=evidence)
     else:
-        cross_doc_answer, cross_doc_trace = _cross_document_answer(
+        mode_answer, mode_trace = _document_mode_answer(
             query=query,
             query_intent=query_intent,
             top_k_hits=top_k_hits,
@@ -2161,8 +2357,8 @@ def answer_query_with_retrieval(
             chunk_root=chunk_root,
         )
         structured_answer, structured_trace = _format_structured_answer(query_intent, evidence)
-        answer = cross_doc_answer or structured_answer or _compress_sentences(evidence)
-        trace_source = cross_doc_trace or structured_trace
+        answer = mode_answer or structured_answer or _compress_sentences(evidence)
+        trace_source = mode_trace or structured_trace
         answer_trace = _base_answer_trace(
             query=query,
             query_intent=query_intent,

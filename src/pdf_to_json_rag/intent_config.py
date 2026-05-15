@@ -8,6 +8,8 @@ from functools import lru_cache
 from pathlib import Path
 import re
 
+from .document_facets import derive_document_facets, facet_token_terms
+
 MATCH_STOPWORDS = {
     "about",
     "action",
@@ -263,10 +265,28 @@ def _document_metadata_index() -> dict[str, dict[str, object]]:
         title = payload.get("title") if isinstance(payload.get("title"), str) else ""
         summary_cues = [item for item in payload.get("summary_cues", []) if isinstance(item, str)]
         discovery_terms = [item for item in payload.get("discovery_terms", []) if isinstance(item, str)]
+        derived_facets = derive_document_facets(
+            source_pdf=payload.get("source_pdf", ""),
+            title=title,
+            toc=[item for item in payload.get("toc", []) if isinstance(item, str)],
+            summary_cues=summary_cues,
+            leading_block_lines=[],
+            metadata_values=[],
+            page_count=payload.get("page_count", 0) if isinstance(payload.get("page_count"), int) else 0,
+        )
+        facet_terms = [item for item in payload.get("facet_terms", []) if isinstance(item, str)] or list(
+            derived_facets["facet_terms"]
+        )
         index[doc_id] = {
             "title": title,
             "summary_cues": summary_cues,
             "discovery_terms": discovery_terms,
+            "document_type": payload.get("document_type") if isinstance(payload.get("document_type"), str) else derived_facets["document_type"],
+            "document_purpose": payload.get("document_purpose") if isinstance(payload.get("document_purpose"), str) else derived_facets["document_purpose"],
+            "audience": payload.get("audience") if isinstance(payload.get("audience"), str) else derived_facets["audience"],
+            "evidence_style": payload.get("evidence_style") if isinstance(payload.get("evidence_style"), str) else derived_facets["evidence_style"],
+            "structure_style": payload.get("structure_style") if isinstance(payload.get("structure_style"), str) else derived_facets["structure_style"],
+            "facet_terms": facet_terms,
         }
     return index
 
@@ -599,17 +619,39 @@ def matching_source_doc_ids(query: str, allow_topical: bool = False) -> list[str
             for term in meta.get("discovery_terms", [])
             if str(term).lower() not in MATCH_STOPWORDS
         }
+        facet_terms = {
+            term
+            for term in facet_token_terms(
+                {
+                    "document_type": meta.get("document_type", ""),
+                    "document_purpose": meta.get("document_purpose", ""),
+                    "audience": meta.get("audience", ""),
+                    "evidence_style": meta.get("evidence_style", ""),
+                    "structure_style": meta.get("structure_style", ""),
+                    "facet_terms": meta.get("facet_terms", []),
+                }
+            )
+            if term not in MATCH_STOPWORDS
+        }
         profile_overlap = len(profile_terms.intersection(query_terms))
         title_overlap = len(title_terms.intersection(query_terms))
         cue_overlap = len(cue_terms.intersection(query_terms))
         discovery_overlap = len(discovery_terms.intersection(query_terms))
+        facet_overlap = len(facet_terms.intersection(query_terms))
         score = (
             title_overlap * 4
             + discovery_overlap * 3
+            + facet_overlap * 3
             + cue_overlap * 2
-            + profile_overlap * 2
+            + profile_overlap
         )
-        if score >= 3 and (title_overlap or discovery_overlap or cue_overlap or profile_overlap >= 2):
+        if score >= 3 and (
+            title_overlap
+            or discovery_overlap
+            or facet_overlap
+            or cue_overlap
+            or profile_overlap >= 2
+        ):
             topical_matches.append((score, doc_id))
     topical_matches.sort(key=lambda item: (-item[0], item[1]))
     return [doc_id for _, doc_id in topical_matches]

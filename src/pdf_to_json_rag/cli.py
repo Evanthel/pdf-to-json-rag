@@ -80,6 +80,9 @@ def main() -> None:
         print(f"pages: {extraction.page_count}")
         print(f"native_blocks: {len(extraction.blocks)}")
         print(f"pages_requiring_ocr: {document_record.extraction_summary['pages_requiring_ocr']}")
+        print(f"document_type: {document_record.document_type}")
+        print(f"document_purpose: {document_record.document_purpose}")
+        print(f"structure_style: {document_record.structure_style}")
         print(f"saved_native_json: {native_path}")
         print(f"saved_document_json: {document_path}")
         return

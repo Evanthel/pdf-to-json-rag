@@ -13,6 +13,8 @@
   "opioid_manager_appendix_b_adverse_scale",
   "opioid_manager_appendix_c_follow_up_timing",
   "lbdl_document_routing_backpropagation",
+  "lbdl_document_type",
+  "ocha_incident_document_purpose",
   "ocha_document_routing_cyber_threats",
   "ocha_document_routing_donor_sharing",
   "model_report_niger_justification",

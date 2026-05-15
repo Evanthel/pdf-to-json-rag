@@ -44,6 +44,13 @@ class DocumentRecord(BaseModel):
     toc: list[str] = Field(default_factory=list)
     summary_cues: list[str] = Field(default_factory=list)
     discovery_terms: list[str] = Field(default_factory=list)
+    inventory_summary: str | None = None
+    document_type: str | None = None
+    document_purpose: str | None = None
+    audience: str | None = None
+    evidence_style: str | None = None
+    structure_style: str | None = None
+    facet_terms: list[str] = Field(default_factory=list)
     detected_language: str | None = None
     extraction_summary: dict[str, str | int | bool | None] = Field(default_factory=dict)
     chunks: list[ChunkRecord] = Field(default_factory=list)

@@ -17,7 +17,7 @@ This codebase is intentionally separate from that fork. The fork captures the ba
 
 ## Current Status
 
-Current version: `v1.17`
+Current version: `v1.20`
 
 The pipeline currently runs end-to-end across a mixed benchmark of review papers, OCR-derived scans, technical manuals, questionnaires, checklist-style appendices, non-medical books, open guidance notes, and short model-report style documents.
 
@@ -26,14 +26,16 @@ It supports both:
 - single-document grounded evidence questions
 - cross-document queries such as source listing and source comparison
 - document-discovery queries such as “what does this file cover?” and “which file is most relevant for X?”
+- document-facet queries such as “what kind of document is this?” and “what is its purpose?”
 - source-justification queries such as “why is this the best source?”
 - ambiguity-aware routing queries that should surface more than one relevant source
+- query-planned paths that separate evidence lookup, document discovery, cross-document comparison, and document-facet questions before retrieval
 
 Current benchmark snapshot:
 
-- `Cases`: `64`
+- `Cases`: `67`
 - `Indexed sample documents`: `19`
-- `precision@5`: `0.504`
+- `precision@5`: `0.531`
 - `recall@5`: `1.0`
 - `MRR`: `1.0`
 - `avg_keyword_coverage`: `1.0`
@@ -54,6 +56,11 @@ Current benchmark snapshot:
 - Lightweight document-overview, document-routing, and source-justification answers
 - Extraction-time summary cues for document-level overview answers
 - Extraction-time `discovery_terms` for source selection and mixed-domain routing
+- Extraction-time document facets for type, purpose, audience, evidence style, and structure style
+- Reusable inventory summaries derived from extraction-time metadata
+- Query planning that separates evidence lookup, document discovery, cross-document comparison, and document-facet questions
+- Explicit answer modes for overview, routing, source-listing, source-justification, comparison, and evidence lookup
+- Inventory-first document shortlisting before chunk-level retrieval
 - Ambiguity-aware multi-source routing for mixed-domain discovery queries
 - Multi-document evaluation with regression shards, per-case debug snapshots, slice summaries, rerank comparison, and deferred-feature decision checkpoints
 
@@ -62,10 +69,12 @@ Current benchmark snapshot:
 1. Extract a PDF into `*.native.json` and `*.document.json`
 2. Convert extracted blocks into chunk JSON files
 3. Build a persistent local vector index from chunk text and metadata
-4. Retrieve top-k chunks for a query
-5. Expand with adjacent chunks when needed
-6. Assemble a grounded answer from the expanded context, or a source-level / document-level answer for source discovery, comparison, overview, and routing queries
-7. Evaluate the result on the full benchmark or on a smaller regression shard
+4. Plan the query as evidence lookup, document discovery, cross-document, or document-facet behavior
+5. Shortlist candidate documents from inventory metadata when the query needs document-level routing
+6. Retrieve top-k chunks for the shortlisted sources
+7. Expand with adjacent chunks when needed
+8. Assemble a grounded answer from the expanded context, or a source-level / document-level answer for source discovery, comparison, overview, routing, and facet questions
+9. Evaluate the result on the full benchmark or on a smaller regression shard
 
 ## How to Run
 
@@ -123,8 +132,11 @@ PYTHONPATH=src python -m pdf_to_json_rag.cli evaluate-regression --k 5 --shard c
 The saved evaluation report currently includes:
 
 - per-case debug records with top-k retrieval snapshots, expanded-context snapshots, answer previews, answer traces, and evidence snippets
-- document-family and structure slices such as `review_summary`, `table_heavy`, `form_grid`, `appendix_like`, `scanned_ct`, `source_anchored_review`, `source_anchored_technical`, `source_anchored_form`, and `cross_document`
+- document-family and structure slices such as `review_summary`, `table_heavy`, `form_grid`, `appendix_like`, `scanned_ct`, `source_anchored_review`, `source_anchored_technical`, `source_anchored_form`, `cross_document`, and `document_facets`
 - document-discovery slices spanning books, guidance notes, model reports, manuals, and mixed-domain routing cases
+- a compact `document_facets_core` regression shard for document type and document purpose questions
+- a compact `query_planning_core` regression shard for query-class separation, document routing, source listing, and cross-document comparison
+- a compact `answer_modes_core` regression shard for explicit answer-mode separation
 - a retrieval-strategy comparison between the chunking-first baseline and the current lightweight reranking pass
 - a sampled faithfulness audit over selected grounded cases
 - explicit deferred-feature decisions for `pdfplumber`, cross-encoder reranking, and `LLM-as-a-judge`
@@ -132,6 +144,8 @@ The saved evaluation report currently includes:
 On the current benchmark:
 
 - OCR-derived, technical/manual, form/grid, appendix/checklist, cross-document, and document-discovery slices are stable
+- query-planning and document-inventory slices are stable
+- answer-mode separation is stable
 - the lightweight reranking pass is still sufficient
 - `pdfplumber`, cross-encoder reranking, and `LLM-as-a-judge` are still not justified by the observed failure modes
 
@@ -142,6 +156,9 @@ On the current benchmark:
 - Chunking is still heuristic rather than fully semantic
 - Section detection is improved, but still rule-based and fragile on unfamiliar layouts
 - Retrieval still depends on lightweight heuristics, chunk quality labels, and a small lexical reranking pass
+- Document facets are useful, but still heuristic and not yet learned from a richer metadata or classifier layer
+- Query planning and document inventory are explicit now, but still built from heuristic metadata rather than a learned planner or classifier
+- Document-level summaries are reusable now, but still generated from heuristic metadata rather than a stronger summarization/classification layer
 - Structured-form and appendix handling are broader than before, but still validated on a narrow set of questionnaire/checklist examples
 - Cross-document and document-discovery behavior are implemented, but still benchmarked on a modest hand-built set of source-discovery, overview, routing, and comparison queries
 - Grounded answers are extractive, not LLM-synthesized
@@ -210,85 +227,21 @@ These versions pushed the project beyond single-document answering:
 - added cross-document intents for source listing and source comparison
 - wired multi-source document matching into retrieval and stabilized it with a dedicated regression shard
 
-Current `v1.13` benchmark state:
+### v1.14-v1.17
 
-- `precision@5 = 0.312`
-- `recall@5 = 1.0`
-- `MRR = 1.0`
-- `avg_keyword_coverage = 1.0`
-- `negative_success_rate = 1.0`
-- `warning_case_count = 0`
+These versions expanded the project from single-document answering into broader document discovery:
 
-### v1.14
+- added several public-safe non-medical source families
+- introduced document-level overview, routing, source listing, and source justification
+- pushed more discovery behavior into extraction-time metadata such as `summary_cues`, `discovery_terms`, and cleaner source labels
+- expanded mixed-domain regression coverage without reviving heavier deferred features
 
-This version pushed the pipeline toward document discovery rather than only evidence lookup:
+### v1.18-v1.20
 
-- added a clearly non-medical benchmark source (`The Little Book of Deep Learning`)
-- introduced reusable document profiles with aliases and topical terms
-- added document-level overview and routing answers
-- added document-level scoring in evaluation for source-discovery cases
-- kept heavier deferred features out of scope after the broader benchmark stayed warning-free
+These versions shifted from benchmark growth back to higher-ROI discovery architecture:
 
-Current `v1.14` benchmark state:
-
-- `precision@5 = 0.363`
-- `recall@5 = 1.0`
-- `MRR = 1.0`
-- `avg_keyword_coverage = 1.0`
-- `negative_success_rate = 1.0`
-- `warning_case_count = 0`
-
-### v1.15
-
-This version made document discovery more robust and less dependent on one good non-medical source:
-
-- added a second clearly non-medical source family
-- introduced extraction-time `summary_cues` metadata for document-overview answers
-- added ambiguity-aware routing so some queries can intentionally return more than one relevant source
-- expanded regression and benchmark coverage for mixed-domain source listing and document routing
-
-Current `v1.15` benchmark state:
-
-- `precision@5 = 0.421`
-- `recall@5 = 1.0`
-- `MRR = 1.0`
-- `avg_keyword_coverage = 1.0`
-- `negative_success_rate = 1.0`
-- `warning_case_count = 0`
-
-### v1.16
-
-This version generalized document discovery with a public-safe guidance-note family and moved more source selection into extraction-time metadata:
-
-- added open humanitarian-data guidance notes as a third non-medical source family
-- derived cleaner `doc_id` values from opaque source filenames
-- added extraction-time `discovery_terms` metadata for document selection
-- ranked source-listing and routing shortlists with document metadata instead of only live top-k order
-- expanded regression and benchmark coverage for humanitarian-data overview, routing, and ambiguous multi-source cases
-
-Current `v1.16` benchmark state:
-
-- `precision@5 = 0.446`
-- `recall@5 = 1.0`
-- `MRR = 1.0`
-- `avg_keyword_coverage = 1.0`
-- `negative_success_rate = 1.0`
-- `warning_case_count = 0`
-
-### v1.17
-
-This version broadened document discovery again while reducing dependence on hand-written source-profile terms:
-
-- added a fourth public-safe non-medical source family built from short humanitarian model reports
-- tightened source routing around extraction-time `discovery_terms`, titles, and summary cues
-- added a dedicated source-justification answer mode
-- expanded `document_discovery_core` with harder routing, listing, justification, and comparison queries that do not explicitly name a source family
-
-Current `v1.17` benchmark state:
-
-- `precision@5 = 0.504`
-- `recall@5 = 1.0`
-- `MRR = 1.0`
-- `avg_keyword_coverage = 1.0`
-- `negative_success_rate = 1.0`
-- `warning_case_count = 0`
+- added extraction-time document facets and reusable inventory summaries
+- made overview and routing more facet-driven and less dependent on hand-written source-profile logic
+- added query planning plus an inventory-first shortlist before chunk retrieval
+- added explicit answer modes for discovery vs evidence behavior
+- added compact architecture regressions such as `document_facets_core`, `query_planning_core`, and `answer_modes_core`

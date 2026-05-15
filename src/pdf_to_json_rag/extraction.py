@@ -12,6 +12,8 @@ import fitz
 from PIL import Image
 import pytesseract
 
+from .document_facets import derive_document_facets
+from .document_inventory import build_inventory_summary
 from .schemas import DocumentRecord
 
 
@@ -341,6 +343,15 @@ def build_document_record_from_native_extraction(
         toc=extraction.toc,
         blocks=extraction.blocks,
     )
+    facets = derive_document_facets(
+        source_pdf=extraction.source_pdf,
+        title=extraction.title,
+        toc=extraction.toc,
+        summary_cues=summary_cues,
+        leading_block_lines=[block.text.splitlines()[0].strip() for block in extraction.blocks[:30]],
+        metadata_values=[value for value in extraction.metadata.values() if isinstance(value, str)],
+        page_count=extraction.page_count,
+    )
     return DocumentRecord(
         doc_id=extraction.doc_id,
         source_pdf=extraction.source_pdf,
@@ -354,6 +365,21 @@ def build_document_record_from_native_extraction(
             summary_cues=summary_cues,
             blocks=extraction.blocks,
         ),
+        inventory_summary=build_inventory_summary(
+            title=extraction.title or extraction.doc_id,
+            document_type=facets["document_type"],
+            document_purpose=facets["document_purpose"],
+            audience=facets["audience"],
+            evidence_style=facets["evidence_style"],
+            structure_style=facets["structure_style"],
+            summary_cues=summary_cues,
+        ),
+        document_type=facets["document_type"],
+        document_purpose=facets["document_purpose"],
+        audience=facets["audience"],
+        evidence_style=facets["evidence_style"],
+        structure_style=facets["structure_style"],
+        facet_terms=facets["facet_terms"],
         extraction_summary={
             "native_blocks": len(extraction.blocks),
             "pages_requiring_ocr": pages_requiring_ocr,
