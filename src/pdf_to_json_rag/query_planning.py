@@ -79,6 +79,7 @@ def plan_query(query: str) -> QueryPlan:
             preferred_doc_id=source_doc_id,
         )
 
+    explicit_source_doc_id = configured_source_doc_id(query)
     metadata_matches = list(configured_matching_source_doc_ids(query, allow_topical=True))
     inventory = shortlist_documents(query, limit=6)
     inventory_doc_ids = tuple(entry.doc_id for entry in inventory)
@@ -90,7 +91,7 @@ def plan_query(query: str) -> QueryPlan:
         or ("what type of" in query_lower and ("document" in query_lower or "file" in query_lower or "source" in query_lower))
         or ("what is the purpose of" in query_lower)
     ) and (configured_source_doc_id(query) or metadata_matches or inventory_doc_ids):
-        preferred = configured_source_doc_id(query, allow_topical=True) or (inventory_doc_ids[0] if inventory_doc_ids else None)
+        preferred = explicit_source_doc_id or (inventory_doc_ids[0] if inventory_doc_ids else None)
         matched = (preferred,) if preferred else tuple()
         return QueryPlan(
             query=query,
@@ -111,7 +112,7 @@ def plan_query(query: str) -> QueryPlan:
             or "best document" in query_lower
         )
     ):
-        matched = tuple(metadata_matches) if metadata_matches else inventory_doc_ids
+        matched = tuple(metadata_matches) if explicit_source_doc_id and metadata_matches else inventory_doc_ids
         if matched and not _is_explicit_plural_routing(query_lower):
             matched = matched[:1]
         preferred = matched[0] if matched and not _is_explicit_plural_routing(query_lower) else None
@@ -134,7 +135,7 @@ def plan_query(query: str) -> QueryPlan:
         or "best document" in query_lower
         or "best match" in query_lower
     ):
-        preferred = configured_source_doc_id(query, allow_topical=True) or (inventory_doc_ids[0] if inventory_doc_ids else None)
+        preferred = explicit_source_doc_id or (inventory_doc_ids[0] if inventory_doc_ids else None)
         matched = (preferred,) if preferred else tuple()
         return QueryPlan(
             query=query,

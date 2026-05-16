@@ -270,15 +270,85 @@ Outcome:
 - the benchmark remains warning-free at 67 cases across 19 indexed documents
 - the project now has a stable facet-driven, inventory-first, query-planned path for document overview, routing, source justification, and cross-document comparison
 
-## 6.21. v1.21 Plan
+## 6.21. v1.21 Milestones
 
-The next iteration should keep improving the document-intelligence layer itself rather than adding more benchmark families.
+This iteration hardened the document-intelligence layer itself rather than widening the benchmark.
 
-1. Add a compact document-family classifier layer so books, guidance notes, model reports, manuals, forms, and clinical references can be reasoned about through one shared abstraction.
-2. Normalize answer contracts for evidence lookup, overview, routing, and comparison into a smaller shared schema so downstream evaluation depends less on free-form wording.
-3. Add document-level coverage and conflict signals so comparison answers can say whether sources complement, overlap, or diverge.
-4. Add a compact evaluation slice for document-family reasoning and answer-contract stability without introducing another new source family.
-5. Revisit deferred features only if the document-family and answer-contract passes reveal failures that the current local retrieval and lightweight reranking stack cannot absorb.
+Completed scope:
+
+1. Added a compact document-family classifier layer so books, guidance notes, model reports, manuals, forms, and clinical references can be reasoned about through one shared abstraction.
+2. Normalized answer contracts for evidence lookup, overview, routing, and comparison so downstream evaluation depends less on free-form wording.
+3. Added document-level relationship signals so comparison answers can say whether sources complement, overlap, or diverge.
+4. Added a compact evaluation slice for document-family reasoning and answer-contract stability without introducing another new source family.
+5. Re-checked deferred features and kept the current local retrieval plus lightweight reranking stack because the family/contract pass did not expose failures that justified heavier additions.
+
+Outcome:
+
+- the benchmark remains warning-free at 67 cases across 19 indexed documents
+- `document_family_core`, `query_planning_core`, and `answer_modes_core` all pass
+- document-level and cross-document answers now expose a smaller, more inspectable contract
+
+## 6.22-6.26. Document-Intelligence Consolidation
+
+These five iterations shifted the project toward a publishable tool architecture instead of wider benchmark churn.
+
+Completed scope:
+
+1. Unified facets, family, inventory-summary logic, and coverage reasoning into a shared document-semantics layer.
+2. Strengthened inventory-first routing with coverage-aware, rarity-aware, and distinctive-term shortlist behavior.
+3. Tightened document-level and cross-document answers around reusable answer contracts and clearer relationship reasoning.
+4. Added architecture-facing evaluation slices and regressions for inventory coverage and relationship behavior.
+5. Added user-facing CLI paths for listing documents, inspecting document metadata, planning queries, and exporting JSON answers.
+
+Outcome:
+
+- the benchmark remains stable at 67 cases across 19 indexed sample documents
+- the project now has a more coherent document-intelligence layer instead of scattered metadata heuristics
+- the local CLI is closer to a publishable tool surface rather than just an internal benchmark harness
+
+## 6.27. v1.27 Milestones
+
+This iteration focused on turning the repo into a more publishable local tool surface instead of extending benchmark logic.
+
+Completed scope:
+
+1. Added a package-first entry path through `pyproject.toml`, `python -m pdf_to_json_rag`, and a console-script target.
+2. Unified CLI JSON output contracts across document listing, inspection, planning, retrieval, answering, and evaluation commands.
+3. Added an explicit `run-workflow` path for `extract -> chunk -> index -> inspect -> plan -> answer`.
+4. Added public-safe `examples/` assets so the user-facing workflow is separated from ignored local benchmark PDFs.
+5. Re-validated the core planning and answer-mode regressions after the publication pass and kept heavier deferred features out of scope.
+
+Outcome:
+
+- the project is materially closer to a first public tool release rather than just an internal benchmark harness
+- packaging, JSON contracts, and the end-to-end workflow are now explicit parts of the repo surface
+
+## 6.28. v1.28 Milestones
+
+This iteration focused on first-user release polish instead of deeper retrieval changes.
+
+Completed scope:
+
+1. Added a concise quickstart path that uses the packaged CLI entrypoint consistently in docs and examples.
+2. Added a small automated `smoke-check` path for the packaged workflow, not just benchmark regressions.
+3. Tightened CLI error contracts so common failures now return clearer user-facing diagnostics in both human-readable and JSON modes.
+4. Added public-safe example JSON output shapes for document inspection, planning, and answering.
+5. Re-checked deferred features and kept them out of scope because the release-polish pass exposed no new architectural gap.
+
+Outcome:
+
+- the project now has a packageable CLI, a first-run smoke path, and stable output/error contracts for the user-facing commands
+- the repo is closer to a first public tool release and less dependent on internal benchmark knowledge
+
+## 6.29. v1.29 Plan
+
+The next iteration should focus on public-release hardening rather than benchmark growth.
+
+1. Add a minimal automated tool-facing smoke test that runs against the packaged CLI surface, not only the internal regression harness.
+2. Tighten command help text and argument ergonomics for the public commands (`extract-native`, `chunk-document`, `build-index`, `inspect-document`, `plan-query`, `answer-query`, `smoke-check`).
+3. Add one compact public-safe demo profile so the README quickstart can point to a stable example set instead of only generic placeholders.
+4. Separate user-facing CLI docs from internal evaluation/debug docs more clearly.
+5. Revisit whether any deferred feature is actually required for `v0.1`, and keep them deferred unless the release-hardening pass exposes a concrete user-facing failure.
 
 
 ## 7. Explicitly Deferred

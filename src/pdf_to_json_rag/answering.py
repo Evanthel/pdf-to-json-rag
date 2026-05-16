@@ -6,8 +6,13 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .document_facets import derive_document_facets
+from .answer_contracts import build_answer_contract
 from .document_inventory import build_inventory_summary, get_inventory_entry
+from .document_semantics import (
+    interpret_document_semantics,
+    query_semantic_preferences,
+    relationship_signal,
+)
 from .intent_config import (
     detect_structured_intent,
     get_document_profile,
@@ -1591,43 +1596,56 @@ def _document_discovery_terms(doc_id: str, chunk_root: Path) -> list[str]:
     return []
 
 
-def _document_facets(doc_id: str, chunk_root: Path) -> dict[str, str | list[str]]:
+def _document_semantics(doc_id: str, top_k_hits: list[ChunkRecord], chunk_root: Path):
     record = _load_document_record(doc_id, chunk_root)
-    if not record:
-        return {
-            "document_type": "",
-            "document_purpose": "",
-            "audience": "",
-            "evidence_style": "",
-            "structure_style": "",
-            "facet_terms": [],
-        }
-    if not any(
-        [
-            record.document_type,
-            record.document_purpose,
-            record.audience,
-            record.evidence_style,
-            record.structure_style,
-            record.facet_terms,
-        ]
-    ):
-        return derive_document_facets(
-            source_pdf=record.source_pdf,
-            title=record.title,
-            toc=record.toc,
-            summary_cues=record.summary_cues,
-            leading_block_lines=[],
-            metadata_values=[],
-            page_count=record.page_count,
-        )
+    entry = get_inventory_entry(doc_id)
+    title = (record.title if record and record.title else None) or (entry.title if entry else None) or _document_label(doc_id, chunk_root)
+    toc = record.toc if record else []
+    summary_cues = (
+        list(record.summary_cues)
+        if record and record.summary_cues
+        else list(entry.summary_cues if entry else ())
+    )
+    discovery_terms = (
+        list(record.discovery_terms)
+        if record and record.discovery_terms
+        else list(entry.discovery_terms if entry else ())
+    )
+    if not summary_cues:
+        summary_cues = _document_summary_cues(doc_id, top_k_hits, chunk_root)
+    if not discovery_terms:
+        discovery_terms = _document_discovery_terms(doc_id, chunk_root)
+    return interpret_document_semantics(
+        source_pdf=record.source_pdf if record else "",
+        title=title,
+        toc=toc,
+        summary_cues=summary_cues,
+        discovery_terms=discovery_terms,
+        leading_block_lines=[],
+        metadata_values=[],
+        page_count=record.page_count if record else 0,
+        document_type=(record.document_type if record else None) or (entry.document_type if entry else None),
+        document_purpose=(record.document_purpose if record else None) or (entry.document_purpose if entry else None),
+        audience=(record.audience if record else None) or (entry.audience if entry else None),
+        evidence_style=(record.evidence_style if record else None) or (entry.evidence_style if entry else None),
+        structure_style=(record.structure_style if record else None) or (entry.structure_style if entry else None),
+        facet_terms=(record.facet_terms if record and record.facet_terms else None) or (list(entry.facet_terms) if entry else None),
+        inventory_summary=(record.inventory_summary if record else None) or (entry.inventory_summary if entry else None),
+        document_family=(record.document_family if record else None) or (entry.document_family if entry else None),
+        coverage_terms=(record.coverage_terms if record and record.coverage_terms else None) or (list(entry.coverage_terms) if entry else None),
+        coverage_summary=(record.coverage_summary if record else None) or (entry.coverage_summary if entry else None),
+    )
+
+
+def _document_facets(doc_id: str, chunk_root: Path) -> dict[str, str | list[str]]:
+    semantics = _document_semantics(doc_id, [], chunk_root)
     return {
-        "document_type": record.document_type or "",
-        "document_purpose": record.document_purpose or "",
-        "audience": record.audience or "",
-        "evidence_style": record.evidence_style or "",
-        "structure_style": record.structure_style or "",
-        "facet_terms": record.facet_terms[:10],
+        "document_type": semantics.document_type,
+        "document_purpose": semantics.document_purpose,
+        "audience": semantics.audience,
+        "evidence_style": semantics.evidence_style,
+        "structure_style": semantics.structure_style,
+        "facet_terms": list(semantics.facet_terms[:10]),
     }
 
 
@@ -1643,39 +1661,38 @@ def _document_facet_tokens(doc_id: str, chunk_root: Path) -> set[str]:
 
 
 def _document_overview_fragments(doc_id: str, top_k_hits: list[ChunkRecord], chunk_root: Path) -> list[str]:
-    facets = _document_facets(doc_id, chunk_root)
+    semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
     fragments: list[str] = []
-    document_type = facets.get("document_type")
-    document_purpose = facets.get("document_purpose")
-    audience = facets.get("audience")
-    topics = _document_summary_cues(doc_id, top_k_hits, chunk_root)
+    topics = list(semantics.coverage_terms) or _document_summary_cues(doc_id, top_k_hits, chunk_root)
 
-    if document_type:
-        fragments.append(f"it is a {document_type.replace('_', ' ')}")
-    if document_purpose:
-        fragments.append(f"its main purpose is {str(document_purpose).replace('_', ' ')}")
-    if audience and audience != "general_professional":
-        fragments.append(f"it appears aimed at {str(audience).replace('_', ' ')}")
+    if semantics.document_type:
+        fragments.append(f"it is a {semantics.document_type.replace('_', ' ')}")
+    if semantics.document_family:
+        fragments.append(f"it belongs to the {semantics.document_family.replace('_', ' ')} family")
+    if semantics.document_purpose:
+        fragments.append(f"its main purpose is {semantics.document_purpose.replace('_', ' ')}")
+    if semantics.audience and semantics.audience != "general_professional":
+        fragments.append(f"it appears aimed at {semantics.audience.replace('_', ' ')}")
     if topics:
         fragments.append("it covers topics such as " + ", ".join(topics[:4]))
     return fragments
 
 
 def _document_profile_summary(doc_id: str, chunk_root: Path) -> str:
-    facets = _document_facets(doc_id, chunk_root)
-    purpose = str(facets.get("document_purpose", "")).replace("_", " ")
-    evidence_style = str(facets.get("evidence_style", "")).replace("_", " ")
-    audience = str(facets.get("audience", "")).replace("_", " ")
-    structure_style = str(facets.get("structure_style", "")).replace("_", " ")
+    semantics = _document_semantics(doc_id, [], chunk_root)
     parts: list[str] = []
-    if purpose:
-        parts.append(purpose)
-    if evidence_style:
-        parts.append(evidence_style)
-    if audience and audience != "general professional":
-        parts.append(f"for {audience}")
-    if structure_style:
-        parts.append(structure_style)
+    if semantics.document_purpose:
+        parts.append(semantics.document_purpose.replace("_", " "))
+    if semantics.evidence_style:
+        parts.append(semantics.evidence_style.replace("_", " "))
+    if semantics.audience and semantics.audience != "general_professional":
+        parts.append(f"for {semantics.audience.replace('_', ' ')}")
+    if semantics.structure_style:
+        parts.append(semantics.structure_style.replace("_", " "))
+    if semantics.document_family:
+        parts.append(semantics.document_family.replace("_", " "))
+    if semantics.coverage_terms:
+        parts.append("covering " + ", ".join(semantics.coverage_terms[:3]))
     if parts:
         return "; ".join(parts)
     return "general reference"
@@ -1684,16 +1701,18 @@ def _document_profile_summary(doc_id: str, chunk_root: Path) -> str:
 def _document_difference_summary(doc_ids: list[str], chunk_root: Path) -> str | None:
     if len(doc_ids) < 2:
         return None
-    first = _document_facets(doc_ids[0], chunk_root)
-    second = _document_facets(doc_ids[1], chunk_root)
-    first_purpose = str(first.get("document_purpose", "")).replace("_", " ")
-    second_purpose = str(second.get("document_purpose", "")).replace("_", " ")
-    first_style = str(first.get("evidence_style", "")).replace("_", " ")
-    second_style = str(second.get("evidence_style", "")).replace("_", " ")
-    first_audience = str(first.get("audience", "")).replace("_", " ")
-    second_audience = str(second.get("audience", "")).replace("_", " ")
-    first_structure = str(first.get("structure_style", "")).replace("_", " ")
-    second_structure = str(second.get("structure_style", "")).replace("_", " ")
+    first = _document_semantics(doc_ids[0], [], chunk_root)
+    second = _document_semantics(doc_ids[1], [], chunk_root)
+    first_purpose = first.document_purpose.replace("_", " ")
+    second_purpose = second.document_purpose.replace("_", " ")
+    first_style = first.evidence_style.replace("_", " ")
+    second_style = second.evidence_style.replace("_", " ")
+    first_audience = first.audience.replace("_", " ")
+    second_audience = second.audience.replace("_", " ")
+    first_structure = first.structure_style.replace("_", " ")
+    second_structure = second.structure_style.replace("_", " ")
+    first_family = first.document_family.replace("_", " ")
+    second_family = second.document_family.replace("_", " ")
 
     differences: list[str] = []
     if first_purpose and second_purpose and first_purpose != second_purpose:
@@ -1709,9 +1728,27 @@ def _document_difference_summary(doc_ids: list[str], chunk_root: Path) -> str | 
         differences.append(f"their audiences differ ({first_audience} vs {second_audience})")
     if first_structure and second_structure and first_structure != second_structure:
         differences.append(f"their structures differ ({first_structure} vs {second_structure})")
+    if first_family and second_family and first_family != second_family:
+        differences.append(f"they come from different document families ({first_family} vs {second_family})")
     if not differences:
         return None
     return "Both are relevant, but " + " and ".join(differences) + "."
+
+
+def _document_relationship_signal(doc_ids: list[str], chunk_root: Path) -> tuple[str | None, str | None]:
+    if len(doc_ids) < 2:
+        return None, None
+    first_entry = get_inventory_entry(doc_ids[0])
+    second_entry = get_inventory_entry(doc_ids[1])
+    first = _document_semantics(doc_ids[0], [], chunk_root)
+    second = _document_semantics(doc_ids[1], [], chunk_root)
+    label, sentence, _ = relationship_signal(
+        first=first,
+        second=second,
+        first_topical_terms=set(first_entry.topical_terms) if first_entry else set(),
+        second_topical_terms=set(second_entry.topical_terms) if second_entry else set(),
+    )
+    return label, sentence
 
 
 def _document_inventory_summary(
@@ -1721,21 +1758,17 @@ def _document_inventory_summary(
     *,
     include_label: bool = False,
 ) -> str:
-    entry = get_inventory_entry(doc_id)
     label = _document_label(doc_id, chunk_root)
-    if entry and entry.inventory_summary:
-        summary = entry.inventory_summary.strip()
-    else:
-        facets = _document_facets(doc_id, chunk_root)
-        summary = build_inventory_summary(
-            title=label,
-            document_type=str(facets.get("document_type", "")),
-            document_purpose=str(facets.get("document_purpose", "")),
-            audience=str(facets.get("audience", "")),
-            evidence_style=str(facets.get("evidence_style", "")),
-            structure_style=str(facets.get("structure_style", "")),
-            summary_cues=_document_summary_cues(doc_id, top_k_hits, chunk_root),
-        )
+    semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
+    summary = semantics.inventory_summary.strip() if semantics.inventory_summary else build_inventory_summary(
+        title=label,
+        document_type=semantics.document_type,
+        document_purpose=semantics.document_purpose,
+        audience=semantics.audience,
+        evidence_style=semantics.evidence_style,
+        structure_style=semantics.structure_style,
+        summary_cues=semantics.summary_cues,
+    )
     prefix = f"{label} | "
     if not include_label and summary.startswith(prefix):
         return summary[len(prefix):]
@@ -1751,6 +1784,7 @@ def _rank_document_candidates(
     chunk_root: Path,
 ) -> list[str]:
     query_terms = _specific_query_terms(_query_terms(query))
+    semantic_preferences = query_semantic_preferences(query)
     hit_rank: dict[str, int] = {}
     for idx, chunk in enumerate(top_k_hits):
         hit_rank.setdefault(chunk.doc_id, idx)
@@ -1760,17 +1794,30 @@ def _rank_document_candidates(
         label_terms = set(re.findall(r"[a-zA-Z]{3,}", (profile.label if profile else doc_id).lower()))
         profile_terms = set(profile.topical_terms) if profile else set()
         discovery_terms = set(_document_discovery_terms(doc_id, chunk_root))
+        semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
         facet_terms = _document_facet_tokens(doc_id, chunk_root)
         summary_terms = {
-            token
-            for cue in _document_summary_cues(doc_id, top_k_hits, chunk_root)
-            for token in re.findall(r"[a-zA-Z]{3,}", cue.lower())
+            token for cue in semantics.summary_cues for token in re.findall(r"[a-zA-Z]{3,}", cue.lower())
         }
-        overlap = len(query_terms & (label_terms | profile_terms | discovery_terms | summary_terms | facet_terms))
+        coverage_terms = {
+            token for cue in semantics.coverage_terms for token in re.findall(r"[a-zA-Z]{3,}", cue.lower())
+        }
+        overlap = len(query_terms & (label_terms | profile_terms | discovery_terms | summary_terms | coverage_terms | facet_terms))
         score = overlap * 3.0
         score += len(query_terms & facet_terms) * 2.0
+        score += len(query_terms & coverage_terms) * 2.0
         if profile:
             score += len(query_terms & profile_terms) * 0.75
+        if semantic_preferences["families"]:
+            if semantics.document_family in semantic_preferences["families"]:
+                score += 4.0
+            else:
+                score -= 2.5
+        if semantic_preferences["purposes"]:
+            if semantics.document_purpose in semantic_preferences["purposes"]:
+                score += 3.0
+            else:
+                score -= 1.5
         if doc_id in hit_rank:
             score += max(0.0, 3.0 - min(hit_rank[doc_id], 6) * 0.4)
         ranked.append((score, doc_id))
@@ -1785,6 +1832,7 @@ def _base_answer_trace(
     template_id: str | None = None,
     matched_pattern: str | None = None,
     matched_cues: list[str] | None = None,
+    answer_contract: dict[str, object] | None = None,
 ) -> dict[str, object]:
     plan = plan_query(query)
     return {
@@ -1797,6 +1845,7 @@ def _base_answer_trace(
         "template_id": template_id,
         "matched_pattern": matched_pattern,
         "matched_cues": matched_cues or [],
+        "answer_contract": answer_contract or {},
         "evidence_chunk_ids": [item.chunk_id for item in evidence],
     }
 
@@ -1833,6 +1882,13 @@ def _document_mode_answer(
                     "template_id": "document_level.overview",
                     "matched_pattern": "inventory-summary-facets",
                     "matched_cues": [inventory_summary, *overview_fragments],
+                    "answer_contract": build_answer_contract(
+                        mode="document_overview",
+                        primary_doc_ids=[primary_doc_id],
+                        document_families=[get_inventory_entry(primary_doc_id).document_family if get_inventory_entry(primary_doc_id) else "general_reference"],
+                        summary_type="inventory_summary",
+                        coverage_terms=list(_document_semantics(primary_doc_id, top_k_hits, chunk_root).coverage_terms[:4]),
+                    ),
                 },
             )
         if overview_fragments:
@@ -1868,6 +1924,15 @@ def _document_mode_answer(
                         "template_id": "document_level.routing_multi",
                         "matched_pattern": "inventory-ranked-multi-doc-summary",
                         "matched_cues": cues,
+                        "answer_contract": build_answer_contract(
+                            mode="document_routing",
+                            primary_doc_ids=chosen_doc_ids,
+                            document_families=[
+                                get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"
+                                for doc_id in chosen_doc_ids
+                            ],
+                            summary_type="inventory_summary",
+                        ),
                     },
                 )
 
@@ -1916,6 +1981,14 @@ def _document_mode_answer(
                     "template_id": "document_level.routing",
                     "matched_pattern": "top-doc-topical-summary",
                     "matched_cues": [primary_label, inventory_summary, *topical_terms[:4], *topics[:3]],
+                    "answer_contract": build_answer_contract(
+                        mode="document_routing",
+                        primary_doc_ids=[primary_chunk.doc_id],
+                        document_families=[get_inventory_entry(primary_chunk.doc_id).document_family if get_inventory_entry(primary_chunk.doc_id) else "general_reference"],
+                        summary_type="inventory_summary_plus_topics",
+                        coverage_terms=list(_document_semantics(primary_chunk.doc_id, top_k_hits, chunk_root).coverage_terms[:4]),
+                        matched_terms=topical_terms[:4],
+                    ),
                 },
             )
     if answer_mode == "source_justification" and top_k_hits:
@@ -1958,6 +2031,14 @@ def _document_mode_answer(
                 "template_id": "document_level.justification",
                 "matched_pattern": "doc-metadata-justification",
                 "matched_cues": [primary_label, inventory_summary, *matched_terms, *summary_cues[:3]],
+                "answer_contract": build_answer_contract(
+                    mode="source_justification",
+                    primary_doc_ids=[primary_chunk.doc_id],
+                    document_families=[get_inventory_entry(primary_chunk.doc_id).document_family if get_inventory_entry(primary_chunk.doc_id) else "general_reference"],
+                    summary_type="inventory_summary_plus_cues",
+                    coverage_terms=list(_document_semantics(primary_chunk.doc_id, top_k_hits, chunk_root).coverage_terms[:4]),
+                    matched_terms=matched_terms[:4],
+                ),
             },
         )
     if answer_mode == "source_listing" and source_summary:
@@ -1972,6 +2053,15 @@ def _document_mode_answer(
                 "template_id": "cross_doc.source_listing",
                 "matched_pattern": "inventory-ranked-doc-diverse-topk",
                 "matched_cues": labels,
+                "answer_contract": build_answer_contract(
+                    mode="source_listing",
+                    primary_doc_ids=ranked_doc_ids,
+                    document_families=[
+                        get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"
+                        for doc_id in ranked_doc_ids
+                    ],
+                    summary_type="inventory_summary",
+                ),
             },
         )
 
@@ -2005,8 +2095,11 @@ def _document_mode_answer(
                 for doc_id, (label, sentence) in list(per_doc_sentences.items())[:3]
             ]
             difference_summary = _document_difference_summary(doc_ids, chunk_root)
+            relation_label, relation_summary = _document_relationship_signal(doc_ids, chunk_root)
             if difference_summary:
                 fragments.append(difference_summary)
+            if relation_summary:
+                fragments.append(relation_summary)
             return (
                 " ".join(fragments),
                 {
@@ -2014,6 +2107,15 @@ def _document_mode_answer(
                     "matched_pattern": "doc-diverse-evidence-plus-facets",
                     "matched_cues": [label for label, _ in list(per_doc_sentences.values())[:3]]
                     + [_document_profile_summary(doc_id, chunk_root) for doc_id in doc_ids],
+                    "answer_contract": build_answer_contract(
+                        mode="cross_document_compare",
+                        primary_doc_ids=doc_ids,
+                        document_families=[
+                            get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"
+                            for doc_id in doc_ids
+                        ],
+                        relationship=relation_label,
+                    ),
                 },
             )
     return None, None
@@ -2289,6 +2391,7 @@ def answer_from_chunks(query: str, chunks: list[ChunkRecord]) -> GroundedAnswer:
             template_id=structured_trace.get("template_id") if structured_trace else None,
             matched_pattern=structured_trace.get("matched_pattern") if structured_trace else None,
             matched_cues=structured_trace.get("matched_cues") if structured_trace else None,
+            answer_contract=structured_trace.get("answer_contract") if structured_trace else None,
         )
     return GroundedAnswer(
         query=query,
@@ -2366,6 +2469,7 @@ def answer_query_with_retrieval(
             template_id=trace_source.get("template_id") if trace_source else None,
             matched_pattern=trace_source.get("matched_pattern") if trace_source else None,
             matched_cues=trace_source.get("matched_cues") if trace_source else None,
+            answer_contract=trace_source.get("answer_contract") if trace_source else None,
         )
     return GroundedAnswer(
         query=query,

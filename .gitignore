@@ -54,3 +54,8 @@ data/eval/regression_report.json
 *.log
 tmp/
 temp/
+
+# Packaging artifacts
+build/
+dist/
+*.egg-info/

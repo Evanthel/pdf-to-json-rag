@@ -1,0 +1,36 @@
+{
+  "workflow": [
+    {
+      "step": "extract-native",
+      "command": "pdf-to-json-rag extract-native --pdf /path/to/file.pdf --json"
+    },
+    {
+      "step": "chunk-document",
+      "command": "pdf-to-json-rag chunk-document --doc-id your-doc-id --json"
+    },
+    {
+      "step": "build-index",
+      "command": "pdf-to-json-rag build-index --doc-id your-doc-id --json"
+    },
+    {
+      "step": "inspect-document",
+      "command": "pdf-to-json-rag inspect-document --doc-id your-doc-id --json"
+    },
+    {
+      "step": "plan-query",
+      "command": "pdf-to-json-rag plan-query --query \"What does this file cover?\" --json"
+    },
+    {
+      "step": "answer-query",
+      "command": "pdf-to-json-rag answer-query --query \"What does this file cover?\" --json"
+    },
+    {
+      "step": "run-workflow",
+      "command": "pdf-to-json-rag run-workflow --pdf /path/to/file.pdf --query \"What does this file cover?\" --json"
+    }
+  ],
+  "notes": [
+    "These commands are public-safe examples and do not rely on private benchmark PDFs.",
+    "The JSON output contracts are intended for downstream scripting and tool integration."
+  ]
+}

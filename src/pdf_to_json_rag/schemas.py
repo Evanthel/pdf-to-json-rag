@@ -45,6 +45,9 @@ class DocumentRecord(BaseModel):
     summary_cues: list[str] = Field(default_factory=list)
     discovery_terms: list[str] = Field(default_factory=list)
     inventory_summary: str | None = None
+    coverage_summary: str | None = None
+    coverage_terms: list[str] = Field(default_factory=list)
+    document_family: str | None = None
     document_type: str | None = None
     document_purpose: str | None = None
     audience: str | None = None

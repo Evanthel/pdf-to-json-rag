@@ -6,7 +6,7 @@ This file records the project at a practical level without mirroring every code 
 
 ## Current State
 
-Current implementation level: `v1.20`
+Current implementation level: `v1.28`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
 
@@ -14,7 +14,7 @@ Current benchmark state:
 
 - `Cases`: `67`
 - `Indexed sample documents`: `19`
-- `precision@5`: `0.531`
+- `precision@5`: `0.521`
 - `recall@5`: `1.0`
 - `MRR`: `1.0`
 - `avg_keyword_coverage`: `1.0`
@@ -25,6 +25,9 @@ Current benchmark state:
 Key regression shards currently passing:
 
 - `document_facets_core`
+- `document_family_core`
+- `inventory_coverage_core`
+- `relationship_core`
 - `query_planning_core`
 - `answer_modes_core`
 
@@ -41,7 +44,9 @@ Key regression shards currently passing:
   - `summary_cues`
   - `discovery_terms`
   - document facets
+  - document families
   - inventory summaries
+  - coverage summaries
 
 ### Retrieval and Answering
 
@@ -62,6 +67,9 @@ Key regression shards currently passing:
   - source listing
   - source justification
   - cross-document comparison
+- Lightweight answer contracts for document-level and cross-document answer paths
+- Relationship reasoning for overlap, complement, and divergence
+- Tool-facing CLI inspection paths for listing documents, inspecting a document, planning a query, and exporting JSON answers
 
 ### Evaluation
 
@@ -100,6 +108,36 @@ Key regression shards currently passing:
 - Added explicit answer modes for discovery vs evidence behavior
 - Made comparison/routing answers more document-aware instead of chunk-accidental
 - Added architecture-focused evaluation slices and regressions
+
+### v1.21
+
+- Added a shared document-family layer for books, guidance notes, model reports, manuals, forms, and clinical references
+- Normalized answer contracts for overview, routing, source justification, comparison, and evidence-style paths
+- Added document-level relationship signals for overlap, complement, and divergence
+- Added `document_family_core` plus answer-contract-oriented slice checks
+
+### v1.22 to v1.26
+
+- Consolidated document semantics into a shared metadata interpretation layer for facets, coverage, inventory summaries, and document families
+- Strengthened inventory-first routing with coverage-aware and rarity-aware shortlist scoring
+- Tightened document-level and cross-document answer contracts around reusable answer modes instead of looser answer-time heuristics
+- Added dedicated regression coverage for inventory summaries and relationship reasoning
+- Added CLI inspection and planning paths that move the repo closer to a publishable local tool instead of a benchmark-only codebase
+
+### v1.27
+
+- Added package-first project metadata and module entry points for a cleaner install/run path
+- Unified JSON output contracts across listing, inspection, planning, retrieval, answering, and evaluation commands
+- Added a single end-to-end `run-workflow` path for local smoke usage
+- Added public-safe `examples/` assets so the user-facing flow is separated from ignored local benchmark PDFs
+- Re-validated the planning and answer-mode regressions after the product-surface pass
+
+### v1.28
+
+- Added a packaged `smoke-check` path for first-run validation of `extract -> chunk -> index -> plan -> answer`
+- Tightened CLI error contracts so common failures return stable human-readable and JSON diagnostics
+- Added public-safe trimmed example JSON outputs for inspect / plan / answer command shapes
+- Shifted the docs further toward a first public tool flow instead of the internal benchmark harness
 
 ## Validation Summary
 

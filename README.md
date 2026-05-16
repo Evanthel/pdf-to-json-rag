@@ -17,9 +17,9 @@ This codebase is intentionally separate from that fork. The fork captures the ba
 
 ## Current Status
 
-Current version: `v1.20`
+Current version: `v1.28`
 
-The pipeline currently runs end-to-end across a mixed benchmark of review papers, OCR-derived scans, technical manuals, questionnaires, checklist-style appendices, non-medical books, open guidance notes, and short model-report style documents.
+The pipeline currently runs end-to-end as a local-first tool across a mixed benchmark of review papers, OCR-derived scans, technical manuals, questionnaires, checklist-style appendices, non-medical books, open guidance notes, and short model-report style documents.
 
 It supports both:
 
@@ -27,15 +27,22 @@ It supports both:
 - cross-document queries such as source listing and source comparison
 - document-discovery queries such as “what does this file cover?” and “which file is most relevant for X?”
 - document-facet queries such as “what kind of document is this?” and “what is its purpose?”
+- document-family queries such as “is this a manual, guidance note, model report, or book?”
 - source-justification queries such as “why is this the best source?”
 - ambiguity-aware routing queries that should surface more than one relevant source
 - query-planned paths that separate evidence lookup, document discovery, cross-document comparison, and document-facet questions before retrieval
+- normalized answer contracts for overview, routing, comparison, and evidence-style answers
+- inventory-level coverage summaries and relationship reasoning for document-level and cross-document answers
+- tool-oriented inspection paths such as document listing, document inspection, query planning, and JSON answer output
+- a packaged CLI entry path for `python -m pdf_to_json_rag` and `pdf-to-json-rag`
+- a packaged smoke-check path for first-run validation
+- public-safe example JSON outputs for inspect / plan / answer command shapes
 
 Current benchmark snapshot:
 
 - `Cases`: `67`
 - `Indexed sample documents`: `19`
-- `precision@5`: `0.531`
+- `precision@5`: `0.521`
 - `recall@5`: `1.0`
 - `MRR`: `1.0`
 - `avg_keyword_coverage`: `1.0`
@@ -57,11 +64,20 @@ Current benchmark snapshot:
 - Extraction-time summary cues for document-level overview answers
 - Extraction-time `discovery_terms` for source selection and mixed-domain routing
 - Extraction-time document facets for type, purpose, audience, evidence style, and structure style
+- Shared document-semantics interpretation for facets, coverage summaries, and inventory summaries
 - Reusable inventory summaries derived from extraction-time metadata
+- Reusable coverage summaries and coverage terms for routing and overview behavior
+- Extraction-time document-family classification for books, guidance notes, model reports, manuals, forms, and clinical references
 - Query planning that separates evidence lookup, document discovery, cross-document comparison, and document-facet questions
 - Explicit answer modes for overview, routing, source-listing, source-justification, comparison, and evidence lookup
 - Inventory-first document shortlisting before chunk-level retrieval
+- Lightweight answer contracts that make document-level and cross-document answer paths more inspectable
+- Relationship reasoning for overlap, complement, and divergence between sources
 - Ambiguity-aware multi-source routing for mixed-domain discovery queries
+- Tool-facing CLI paths for listing documents, inspecting document metadata, planning queries, and returning JSON answers
+- A packaged project entry path through `pyproject.toml`, `python -m pdf_to_json_rag`, and the `pdf-to-json-rag` console script
+- A `smoke-check` command that validates the packaged end-to-end workflow path
+- Stable CLI error envelopes for missing inputs, missing index state, and argument errors
 - Multi-document evaluation with regression shards, per-case debug snapshots, slice summaries, rerank comparison, and deferred-feature decision checkpoints
 
 ## Workflow
@@ -81,35 +97,47 @@ Current benchmark snapshot:
 Minimal local flow:
 
 ```bash
-pip install -r requirements.txt
-PYTHONPATH=src python -m pdf_to_json_rag.cli extract-native --pdf /path/to/file.pdf
-PYTHONPATH=src python -m pdf_to_json_rag.cli chunk-document --doc-id your-doc-id
-PYTHONPATH=src python -m pdf_to_json_rag.cli build-index --doc-id your-doc-id
-PYTHONPATH=src python -m pdf_to_json_rag.cli answer-query --query "What are common cold symptoms?"
+pip install -e .
+pdf-to-json-rag init --json
+pdf-to-json-rag extract-native --pdf /path/to/file.pdf --json
+pdf-to-json-rag chunk-document --doc-id your-doc-id --json
+pdf-to-json-rag build-index --doc-id your-doc-id --json
+pdf-to-json-rag answer-query --query "What are common cold symptoms?" --json
 ```
 
 Retrieve without answer assembly:
 
 ```bash
-PYTHONPATH=src python -m pdf_to_json_rag.cli retrieve --query "How are common cold infections transmitted?" --k 5
+pdf-to-json-rag retrieve --query "How are common cold infections transmitted?" --k 5 --json
 ```
 
 Build one local index across multiple extracted documents:
 
 ```bash
-PYTHONPATH=src python -m pdf_to_json_rag.cli build-index --doc-id doc-a,doc-b
+pdf-to-json-rag build-index --doc-id doc-a,doc-b --json
 ```
 
 Run the full benchmark:
 
 ```bash
-PYTHONPATH=src python -m pdf_to_json_rag.cli evaluate-mvp --k 5
+pdf-to-json-rag evaluate-mvp --k 5 --json
 ```
 
 Run a smaller regression shard:
 
 ```bash
-PYTHONPATH=src python -m pdf_to_json_rag.cli evaluate-regression --k 5 --shard cross_document_core
+pdf-to-json-rag evaluate-regression --k 5 --shard cross_document_core --json
+```
+
+Inspect document inventory and planning paths:
+
+```bash
+pdf-to-json-rag list-documents --json
+pdf-to-json-rag inspect-document --doc-id common-cold-clinincal-evidence --json
+pdf-to-json-rag plan-query --query "Which file is most relevant for drought triggers?" --json
+pdf-to-json-rag answer-query --query "What does this file cover?" --json
+pdf-to-json-rag run-workflow --pdf /path/to/file.pdf --query "What does this file cover?" --json
+pdf-to-json-rag smoke-check --pdf /path/to/file.pdf --query "What does this file cover?" --json
 ```
 
 ## Key Files
@@ -124,6 +152,8 @@ PYTHONPATH=src python -m pdf_to_json_rag.cli evaluate-regression --k 5 --shard c
   Hand-built benchmark cases.
 - `data/eval/faithfulness_audit_cases.json`
   Sampled faithfulness-audit set.
+- `examples/`
+  Public-safe workflow assets, example queries, and trimmed example JSON outputs.
 - `data/eval/mvp_eval_report.json`
   Generated locally by the evaluation workflow and ignored by default.
 
@@ -135,8 +165,12 @@ The saved evaluation report currently includes:
 - document-family and structure slices such as `review_summary`, `table_heavy`, `form_grid`, `appendix_like`, `scanned_ct`, `source_anchored_review`, `source_anchored_technical`, `source_anchored_form`, `cross_document`, and `document_facets`
 - document-discovery slices spanning books, guidance notes, model reports, manuals, and mixed-domain routing cases
 - a compact `document_facets_core` regression shard for document type and document purpose questions
+- a compact `inventory_coverage_core` regression shard for inventory-summary and coverage-aware routing behavior
 - a compact `query_planning_core` regression shard for query-class separation, document routing, source listing, and cross-document comparison
 - a compact `answer_modes_core` regression shard for explicit answer-mode separation
+- a compact `document_family_core` regression shard for shared document-family reasoning
+- a compact `relationship_core` regression shard for overlap / complement / divergence reasoning
+- answer-contract slice checks for document-level and comparison-style answer paths
 - a retrieval-strategy comparison between the chunking-first baseline and the current lightweight reranking pass
 - a sampled faithfulness audit over selected grounded cases
 - explicit deferred-feature decisions for `pdfplumber`, cross-encoder reranking, and `LLM-as-a-judge`
@@ -146,6 +180,7 @@ On the current benchmark:
 - OCR-derived, technical/manual, form/grid, appendix/checklist, cross-document, and document-discovery slices are stable
 - query-planning and document-inventory slices are stable
 - answer-mode separation is stable
+- document-family reasoning and answer-contract slices are stable
 - the lightweight reranking pass is still sufficient
 - `pdfplumber`, cross-encoder reranking, and `LLM-as-a-judge` are still not justified by the observed failure modes
 
@@ -157,8 +192,9 @@ On the current benchmark:
 - Section detection is improved, but still rule-based and fragile on unfamiliar layouts
 - Retrieval still depends on lightweight heuristics, chunk quality labels, and a small lexical reranking pass
 - Document facets are useful, but still heuristic and not yet learned from a richer metadata or classifier layer
+- Document-family classification is compact and useful, but still heuristic rather than trained
 - Query planning and document inventory are explicit now, but still built from heuristic metadata rather than a learned planner or classifier
-- Document-level summaries are reusable now, but still generated from heuristic metadata rather than a stronger summarization/classification layer
+- Document-level summaries and answer contracts are reusable now, but still generated from heuristic metadata rather than a stronger summarization/classification layer
 - Structured-form and appendix handling are broader than before, but still validated on a narrow set of questionnaire/checklist examples
 - Cross-document and document-discovery behavior are implemented, but still benchmarked on a modest hand-built set of source-discovery, overview, routing, and comparison queries
 - Grounded answers are extractive, not LLM-synthesized
@@ -245,3 +281,40 @@ These versions shifted from benchmark growth back to higher-ROI discovery archit
 - added query planning plus an inventory-first shortlist before chunk retrieval
 - added explicit answer modes for discovery vs evidence behavior
 - added compact architecture regressions such as `document_facets_core`, `query_planning_core`, and `answer_modes_core`
+
+### v1.21
+
+This version hardened the document-intelligence layer itself instead of widening the benchmark:
+
+- added a compact `document_family` layer shared across books, guidance notes, model reports, manuals, forms, and clinical references
+- normalized document-level answer contracts so overview, routing, comparison, and evidence-style paths are easier to inspect
+- added explicit relationship signals for overlap, complement, and divergence in cross-document answers
+- added `document_family_core` and answer-contract-oriented stability checks without introducing another source family
+
+### v1.22-v1.26
+
+This five-version sprint stopped expanding the benchmark and consolidated the document-intelligence and tool-facing architecture:
+
+- unified facets, family, inventory summary, and coverage reasoning into a shared document-semantics layer
+- improved inventory-first routing with coverage-aware and rarity-aware shortlist scoring
+- made document-level and cross-document answers depend on smaller reusable contracts instead of looser answer-time heuristics
+- added inventory-coverage and relationship regressions plus more reliable slice-stability checks
+- added tool-facing CLI paths for document listing, inspection, query planning, and JSON answer output
+
+### v1.27
+
+This version turned the repo into a more publishable first tool surface:
+
+- added package metadata and module entry points
+- normalized CLI JSON contracts across the main user-facing commands
+- added a single `run-workflow` command for local end-to-end smoke usage
+- added public-safe `examples/` assets that do not depend on ignored local benchmark PDFs
+
+### v1.28
+
+This version focused on first-user release polish:
+
+- added a packaged `smoke-check` workflow for quick validation
+- tightened CLI error contracts into stable human-readable and JSON error paths
+- added trimmed public-safe example JSON outputs for inspect / plan / answer commands
+- aligned the docs around the packaged CLI rather than the internal benchmark harness

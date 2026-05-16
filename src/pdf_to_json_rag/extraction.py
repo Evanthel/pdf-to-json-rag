@@ -12,8 +12,7 @@ import fitz
 from PIL import Image
 import pytesseract
 
-from .document_facets import derive_document_facets
-from .document_inventory import build_inventory_summary
+from .document_semantics import interpret_document_semantics
 from .schemas import DocumentRecord
 
 
@@ -343,11 +342,18 @@ def build_document_record_from_native_extraction(
         toc=extraction.toc,
         blocks=extraction.blocks,
     )
-    facets = derive_document_facets(
-        source_pdf=extraction.source_pdf,
+    discovery_terms = _derive_discovery_terms(
         title=extraction.title,
         toc=extraction.toc,
         summary_cues=summary_cues,
+        blocks=extraction.blocks,
+    )
+    semantics = interpret_document_semantics(
+        source_pdf=extraction.source_pdf,
+        title=extraction.title or extraction.doc_id,
+        toc=extraction.toc,
+        summary_cues=summary_cues,
+        discovery_terms=discovery_terms,
         leading_block_lines=[block.text.splitlines()[0].strip() for block in extraction.blocks[:30]],
         metadata_values=[value for value in extraction.metadata.values() if isinstance(value, str)],
         page_count=extraction.page_count,
@@ -359,27 +365,17 @@ def build_document_record_from_native_extraction(
         title=extraction.title,
         toc=extraction.toc,
         summary_cues=summary_cues,
-        discovery_terms=_derive_discovery_terms(
-            title=extraction.title,
-            toc=extraction.toc,
-            summary_cues=summary_cues,
-            blocks=extraction.blocks,
-        ),
-        inventory_summary=build_inventory_summary(
-            title=extraction.title or extraction.doc_id,
-            document_type=facets["document_type"],
-            document_purpose=facets["document_purpose"],
-            audience=facets["audience"],
-            evidence_style=facets["evidence_style"],
-            structure_style=facets["structure_style"],
-            summary_cues=summary_cues,
-        ),
-        document_type=facets["document_type"],
-        document_purpose=facets["document_purpose"],
-        audience=facets["audience"],
-        evidence_style=facets["evidence_style"],
-        structure_style=facets["structure_style"],
-        facet_terms=facets["facet_terms"],
+        discovery_terms=discovery_terms,
+        inventory_summary=semantics.inventory_summary,
+        coverage_summary=semantics.coverage_summary,
+        coverage_terms=list(semantics.coverage_terms),
+        document_family=semantics.document_family,
+        document_type=semantics.document_type,
+        document_purpose=semantics.document_purpose,
+        audience=semantics.audience,
+        evidence_style=semantics.evidence_style,
+        structure_style=semantics.structure_style,
+        facet_terms=list(semantics.facet_terms),
         extraction_summary={
             "native_blocks": len(extraction.blocks),
             "pages_requiring_ocr": pages_requiring_ocr,

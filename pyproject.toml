@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdf-to-json-rag"
+version = "0.1.0"
+description = "Local-first, domain-agnostic PDF-to-JSON RAG pipeline with structured extraction and document-aware retrieval."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "Piotr Obiegly" }
+]
+dependencies = [
+  "PyMuPDF",
+  "pytesseract",
+  "Pillow",
+  "pydantic",
+  "chromadb",
+  "sentence-transformers",
+  "numpy",
+]
+
+[project.scripts]
+pdf-to-json-rag = "pdf_to_json_rag.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]

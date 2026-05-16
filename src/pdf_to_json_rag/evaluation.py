@@ -132,6 +132,25 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "compare_niger_chad_model_reports",
         "model_report_niger_justification",
     ],
+    "document_family_core": [
+        "lbdl_document_type",
+        "ocha_incident_document_purpose",
+        "model_report_niger_document_type",
+        "health_questionnaire_question5_contexts",
+        "ajmedp_hypothermia_predisposition",
+    ],
+    "inventory_coverage_core": [
+        "lbdl_document_overview",
+        "ocha_incident_document_overview",
+        "model_report_niger_routing",
+        "ocha_document_routing_cyber_threats",
+        "source_listing_humanitarian_data_governance",
+    ],
+    "relationship_core": [
+        "compare_vitamin_c_vs_echinacea_prevention",
+        "compare_niger_chad_model_reports",
+        "source_listing_nonmedical_learning_and_incident_response",
+    ],
 }
 SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
     "checklist_fields": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
@@ -146,6 +165,10 @@ SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
     "answer_mode_document_level": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
     "answer_mode_cross_document": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
     "answer_mode_grounded_evidence": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
+    "answer_contract": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
+    "document_family_reasoning": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
+    "inventory_coverage": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
+    "relationship_reasoning": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
     "model_report_family": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
 }
 DEFAULT_EVAL_CASES = [
@@ -581,6 +604,19 @@ def _case_slice_labels(case: dict) -> list[str]:
         )
     ):
         labels.append("inventory_summary")
+        labels.append("inventory_coverage")
+    if any(
+        tag in case.get("case_tags", [])
+        for tag in (
+            "document_overview",
+            "document_routing",
+            "source_listing",
+            "source_justification",
+            "cross_document",
+            "document_facets",
+        )
+    ):
+        labels.append("document_family_reasoning")
 
     is_treatment = (
         case_id == "antibiotics"
@@ -674,6 +710,13 @@ def _result_slice_labels(grounded_answer: GroundedAnswer, base_labels: list[str]
         labels.add("answer_mode_cross_document")
     elif answer_mode == "grounded_evidence":
         labels.add("answer_mode_grounded_evidence")
+    answer_contract = grounded_answer.answer_trace.get("answer_contract") or {}
+    if answer_contract:
+        labels.add("answer_contract")
+    if answer_contract.get("coverage_terms") or answer_contract.get("summary_type"):
+        labels.add("inventory_coverage")
+    if answer_contract.get("relationship"):
+        labels.add("relationship_reasoning")
     return sorted(labels)
 
 
@@ -984,6 +1027,11 @@ def _evaluate_slice_stability(
 
         failed_metrics: dict[str, dict[str, float]] = {}
         for metric_name, min_value in thresholds.items():
+            if (
+                metric_name == "negative_success_rate"
+                and int(slice_summary.get("negative_case_count", 0)) == 0
+            ):
+                continue
             actual_value = float(slice_summary.get(metric_name, 0.0))
             if actual_value < min_value:
                 failed_metrics[metric_name] = {
