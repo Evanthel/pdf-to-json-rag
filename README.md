@@ -1,6 +1,6 @@
 # PDF-to-JSON RAG
 
-Local-first, domain-agnostic PDF-to-JSON RAG pipeline with structured extraction, source-aware retrieval, and an inspectable multi-document evaluation loop.
+Local-first, domain-agnostic PDF-to-JSON RAG tool for turning PDFs into structured JSON, routing queries across documents, and returning grounded CLI answers.
 
 ## Lineage
 
@@ -17,9 +17,9 @@ This codebase is intentionally separate from that fork. The fork captures the ba
 
 ## Current Status
 
-Current version: `v1.33`
+Current version: `v1.41`
 
-The pipeline currently runs end-to-end as a local-first tool across a mixed benchmark of review papers, OCR-derived scans, technical manuals, questionnaires, checklist-style appendices, non-medical books, open guidance notes, and short model-report style documents.
+The tool currently runs end to end across a mixed benchmark of review papers, OCR-derived scans, technical manuals, questionnaires, checklist-style appendices, non-medical books, open guidance notes, and short model-report style documents.
 
 It supports both:
 
@@ -38,7 +38,8 @@ It supports both:
 - a packaged smoke-check path for first-run validation
 - public-safe example JSON outputs for inspect / plan / answer command shapes
 - an isolated `PDF_TO_JSON_RAG_DATA_DIR` path for testing and local tool use without polluting the repo workspace
-- public release helpers such as `doctor`, `demo-profile`, command aliases, and `--output` JSON export
+- public release helpers such as `doctor`, `demo-profile`, `create-demo-pdf`, `package-check`, `release-check`, command aliases, and `--output` JSON export
+- a recommended first public release tag of `v0.1.0-beta` once `release-check` passes, including the packaged-install gate
 
 Current benchmark snapshot:
 
@@ -70,17 +71,25 @@ Current benchmark snapshot:
 - Reusable inventory summaries derived from extraction-time metadata
 - Reusable coverage summaries and coverage terms for routing and overview behavior
 - Extraction-time document-family classification for books, guidance notes, model reports, manuals, forms, and clinical references
+- Extraction-time block metadata for block kind, token density, line count, and structural flags across native and OCR paths
+- Chunk-level semantic metadata such as semantic terms, content hints, and source block kinds carried into the index
 - Query planning that separates evidence lookup, document discovery, cross-document comparison, and document-facet questions
 - Explicit answer modes for overview, routing, source-listing, source-justification, comparison, and evidence lookup
 - Inventory-first document shortlisting before chunk-level retrieval
+- Retrieval bonuses that align structural references such as `Appendix B`, `Table 3-4`, and `Question 9` with the right chunks
 - Lightweight answer contracts that make document-level and cross-document answer paths more inspectable
+- Coverage-aware evidence selection that prefers complementary support over repeated high-score fragments
 - Relationship reasoning for overlap, complement, and divergence between sources
 - Ambiguity-aware multi-source routing for mixed-domain discovery queries
 - Tool-facing CLI paths for listing documents, inspecting document metadata, planning queries, and returning JSON answers
 - A packaged project entry path through `pyproject.toml`, `python -m pdf_to_json_rag`, and the `pdf-to-json-rag` console script
 - A `smoke-check` command that validates the packaged end-to-end workflow path
+- A `create-demo-pdf` command that generates a public-safe sample PDF for quickstart and smoke checks
+- A `release-check` command that combines public-surface smoke validation with key maintainer regression shards
+- A `package-check` command that builds a wheel and verifies the packaged CLI from a clean temporary install root
+- A `--format text|json` option for the public CLI surface, in addition to `--json`
 - Stable CLI error envelopes for missing inputs, missing index state, and argument errors
-- A `doctor` command that reports install/runtime readiness
+- A `doctor` command that separates required public-tool readiness from optional OCR support and internal benchmark readiness
 - A `demo-profile` command that exposes the public-safe onboarding flow
 - Optional JSON export with `--output /path/to/file.json`
 - Multi-document evaluation with regression shards, per-case debug snapshots, slice summaries, rerank comparison, and deferred-feature decision checkpoints
@@ -107,11 +116,13 @@ pip install -e .
 export PDF_TO_JSON_RAG_DATA_DIR=/tmp/pdf-to-json-rag-data
 pdf-to-json-rag init --json
 pdf-to-json-rag doctor --json
+pdf-to-json-rag package-check --json
 pdf-to-json-rag demo-profile --json
-pdf-to-json-rag extract-native --pdf /path/to/file.pdf --json
+pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
+pdf-to-json-rag extract-native --pdf /tmp/pdf-to-json-rag-demo.pdf --json
 pdf-to-json-rag chunk-document --doc-id your-doc-id --json
 pdf-to-json-rag build-index --doc-id your-doc-id --json
-pdf-to-json-rag answer-query --query "What are common cold symptoms?" --json
+pdf-to-json-rag answer-query --query "What does this file cover?" --json
 ```
 
 Retrieve without answer assembly:
@@ -146,7 +157,8 @@ pdf-to-json-rag inspect-document --doc-id common-cold-clinincal-evidence --json
 pdf-to-json-rag plan-query --query "Which file is most relevant for drought triggers?" --json
 pdf-to-json-rag answer-query --query "What does this file cover?" --json
 pdf-to-json-rag run-workflow --pdf /path/to/file.pdf --query "What does this file cover?" --json
-pdf-to-json-rag smoke-check --pdf /path/to/file.pdf --query "What does this file cover?" --json
+pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
+pdf-to-json-rag release-check --json
 ```
 
 Write JSON output to a file:
@@ -211,11 +223,12 @@ On the current benchmark:
 - OCR grouping rebuilds paragraph-like blocks rather than true layout regions
 - Chunking is still heuristic rather than fully semantic
 - Section detection is improved, but still rule-based and fragile on unfamiliar layouts
-- Retrieval still depends on lightweight heuristics, chunk quality labels, and a small lexical reranking pass
+- Retrieval is stronger than earlier versions, but still depends on heuristic scoring, chunk-quality labels, structural cues, and a lightweight reranking pass rather than a more model-driven reranker
 - Document facets are useful, but still heuristic and not yet learned from a richer metadata or classifier layer
 - Document-family classification is compact and useful, but still heuristic rather than trained
 - Query planning and document inventory are explicit now, but still built from heuristic metadata rather than a learned planner or classifier
 - Document-level summaries and answer contracts are reusable now, but still generated from heuristic metadata rather than a stronger summarization/classification layer
+- Block metadata and chunk semantics improve robustness, but they are still derived from handcrafted rules rather than a richer learned representation
 - Structured-form and appendix handling are broader than before, but still validated on a narrow set of questionnaire/checklist examples
 - Cross-document and document-discovery behavior are implemented, but still benchmarked on a modest hand-built set of source-discovery, overview, routing, and comparison queries
 - Grounded answers are extractive, not LLM-synthesized
@@ -237,115 +250,29 @@ Those reference notebooks were removed from the final repo structure. The curren
 
 ## Version Log
 
-### v1.0-v1.2
+### v1.0-v1.13
 
-These versions established the local-first core:
+- established the local-first extraction, chunking, indexing, grounded-answering, and early evaluation core
+- expanded from single-document evidence lookup to structured-form handling and initial cross-document behavior
 
-- native extraction with `PyMuPDF`
-- OCR fallback through `pytesseract`
-- document and chunk JSON outputs
-- local indexing with `ChromaDB`
-- grounded extractive answering
-- the first multi-document benchmark and retrieval/answer cleanup passes
+### v1.14-v1.21
 
-### v1.3-v1.5
+- shifted the repo toward document discovery, overview, routing, source justification, and comparison
+- added document facets, document families, query planning, answer modes, and document-level answer contracts
 
-These versions focused on structure and retrieval quality:
+### v1.22-v1.28
 
-- added the echinacea document and the first OCR-derived scanned benchmark
-- introduced chunk quality labels, neighbor-expansion gating, and richer debug reports
-- improved OCR-to-chunk handoff
-- pushed chunking-first improvements on mixed review/treatment summaries instead of adding a heavier reranker too early
+- consolidated document semantics and inventory-first routing
+- turned the repo into a packageable CLI tool with `run-workflow`, `smoke-check`, and public-safe example assets
 
-### v1.6-v1.9
+### v1.29-v1.38
 
-These versions broadened the benchmark and turned deferred-feature questions into measured decisions:
+- hardened the public CLI surface with isolated data roots, smoke tests, and release helpers
+- strengthened processing and retrieval with block metadata, chunk semantics, structural alignment, and coverage-aware evidence selection
 
-- added review-heavy, table-heavy, manual, questionnaire, and checklist-style sources
-- introduced richer evaluation slices and retrieval-strategy comparison
-- added a sampled faithfulness audit
-- kept `pdfplumber`, cross-encoder reranking, and `LLM-as-a-judge` deferred because the benchmark still did not justify them
+### v1.39-v1.41
 
-### v1.10-v1.11
-
-These versions made the structured-form path more maintainable:
-
-- added the opioid appendix family as another structured-form benchmark source
-- generalized form logic into reusable pattern families
-- added deterministic regression shards for high-risk source-anchored form cases
-
-### v1.12-v1.13
-
-These versions pushed the project beyond single-document answering:
-
-- moved structured intent metadata into a shared declarative config
-- added structured answer traces to debug output
-- added another appendix-heavy checklist source without another one-off code path
-- added cross-document intents for source listing and source comparison
-- wired multi-source document matching into retrieval and stabilized it with a dedicated regression shard
-
-### v1.14-v1.17
-
-These versions expanded the project from single-document answering into broader document discovery:
-
-- added several public-safe non-medical source families
-- introduced document-level overview, routing, source listing, and source justification
-- pushed more discovery behavior into extraction-time metadata such as `summary_cues`, `discovery_terms`, and cleaner source labels
-- expanded mixed-domain regression coverage without reviving heavier deferred features
-
-### v1.18-v1.20
-
-These versions shifted from benchmark growth back to higher-ROI discovery architecture:
-
-- added extraction-time document facets and reusable inventory summaries
-- made overview and routing more facet-driven and less dependent on hand-written source-profile logic
-- added query planning plus an inventory-first shortlist before chunk retrieval
-- added explicit answer modes for discovery vs evidence behavior
-- added compact architecture regressions such as `document_facets_core`, `query_planning_core`, and `answer_modes_core`
-
-### v1.21
-
-This version hardened the document-intelligence layer itself instead of widening the benchmark:
-
-- added a compact `document_family` layer shared across books, guidance notes, model reports, manuals, forms, and clinical references
-- normalized document-level answer contracts so overview, routing, comparison, and evidence-style paths are easier to inspect
-- added explicit relationship signals for overlap, complement, and divergence in cross-document answers
-- added `document_family_core` and answer-contract-oriented stability checks without introducing another source family
-
-### v1.22-v1.26
-
-This five-version sprint stopped expanding the benchmark and consolidated the document-intelligence and tool-facing architecture:
-
-- unified facets, family, inventory summary, and coverage reasoning into a shared document-semantics layer
-- improved inventory-first routing with coverage-aware and rarity-aware shortlist scoring
-- made document-level and cross-document answers depend on smaller reusable contracts instead of looser answer-time heuristics
-- added inventory-coverage and relationship regressions plus more reliable slice-stability checks
-- added tool-facing CLI paths for document listing, inspection, query planning, and JSON answer output
-
-### v1.27
-
-This version turned the repo into a more publishable first tool surface:
-
-- added package metadata and module entry points
-- normalized CLI JSON contracts across the main user-facing commands
-- added a single `run-workflow` command for local end-to-end smoke usage
-- added public-safe `examples/` assets that do not depend on ignored local benchmark PDFs
-
-### v1.28
-
-This version focused on first-user release polish:
-
-- added a packaged `smoke-check` workflow for quick validation
-- tightened CLI error contracts into stable human-readable and JSON error paths
-- added trimmed public-safe example JSON outputs for inspect / plan / answer commands
-- aligned the docs around the packaged CLI rather than the internal benchmark harness
-
-### v1.29-v1.33
-
-This sprint shifted the repo from “packageable prototype” to “first public local tool candidate”:
-
-- added an isolated `PDF_TO_JSON_RAG_DATA_DIR` path so tool usage and automated tests do not depend on the repo workspace state
-- added automated public-surface CLI smoke tests that generate a tiny PDF and validate the packaged workflow path
-- added user-facing release helpers such as `help`, `doctor`, `demo-profile`, command aliases, and `--output`
-- split public CLI onboarding docs from internal evaluation/debug docs
-- kept the broader benchmark stable while focusing on product surface instead of more document churn
+- made the public quickstart self-contained with `create-demo-pdf`
+- added `release-check` and `package-check` for public-surface and packaged-install validation
+- tightened `doctor`, output formatting, and public release artifacts
+- confirmed the first public release should ship as `v0.1.0-beta`

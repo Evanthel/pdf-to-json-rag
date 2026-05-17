@@ -11,6 +11,7 @@ from pathlib import Path
 import chromadb
 import numpy as np
 
+from .content_metadata import derive_chunk_semantics
 from .schemas import ChunkRecord
 
 
@@ -98,6 +99,25 @@ def load_chunk_records(chunk_dir: Path) -> list[ChunkRecord]:
 
 
 def _chunk_metadata(chunk: ChunkRecord) -> dict[str, str | int | bool | None]:
+    semantic_terms = list(chunk.semantic_terms)
+    content_hints = list(chunk.content_hints)
+    structural_flags = list(chunk.structural_flags)
+    if not semantic_terms or not content_hints:
+        fallback_terms, fallback_hints, fallback_flags = derive_chunk_semantics(
+            text=chunk.text,
+            section_title=chunk.section_title,
+            source_block_kinds=chunk.source_block_kinds,
+            source_structural_flags=chunk.structural_flags,
+        )
+        if not semantic_terms:
+            semantic_terms = fallback_terms
+        if not content_hints:
+            content_hints = fallback_hints
+        if not structural_flags:
+            structural_flags = fallback_flags
+        chunk.semantic_terms = semantic_terms
+        chunk.content_hints = content_hints
+        chunk.structural_flags = structural_flags
     metadata = {
         "doc_id": chunk.doc_id,
         "source_pdf": chunk.source_pdf,
@@ -113,6 +133,10 @@ def _chunk_metadata(chunk: ChunkRecord) -> dict[str, str | int | bool | None]:
         "extraction_method": chunk.extraction_method,
         "ocr_used": chunk.ocr_used,
         "subtopic_cues": "|".join(chunk.subtopic_cues) if chunk.subtopic_cues else None,
+        "semantic_terms": "|".join(semantic_terms) if semantic_terms else None,
+        "content_hints": "|".join(content_hints) if content_hints else None,
+        "structural_flags": "|".join(structural_flags) if structural_flags else None,
+        "source_block_kinds": "|".join(chunk.source_block_kinds) if chunk.source_block_kinds else None,
         "noise_labels": "|".join(chunk.noise_labels) if chunk.noise_labels else None,
         "quality_score": chunk.quality_score,
     }

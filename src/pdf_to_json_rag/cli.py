@@ -2,9 +2,14 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 import shutil
+import subprocess
 import sys
+import tempfile
+
+import fitz
 
 from . import __version__
 from .answering import answer_query_with_retrieval, format_grounded_answer
@@ -36,6 +41,7 @@ COMMAND_ALIASES = {
     "chunk": "chunk-document",
     "index": "build-index",
     "workflow": "run-workflow",
+    "create-demo": "create-demo-pdf",
     "list": "list-documents",
     "inspect": "inspect-document",
     "plan": "plan-query",
@@ -48,6 +54,10 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
     "init": {
         "summary": "Create local data directories under the configured data root.",
         "example": "pdf-to-json-rag init --json",
+    },
+    "create-demo-pdf": {
+        "summary": "Create a small public-safe demo PDF for first-run workflow checks.",
+        "example": "pdf-to-json-rag create-demo-pdf --path /tmp/demo.pdf --json",
     },
     "extract-native": {
         "summary": "Extract a PDF into document-level JSON artifacts.",
@@ -109,6 +119,14 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
         "summary": "Check install/runtime readiness without touching private benchmark inputs.",
         "example": "pdf-to-json-rag doctor --json",
     },
+    "package-check": {
+        "summary": "Build a wheel and verify the packaged CLI from a clean temporary install root.",
+        "example": "pdf-to-json-rag package-check --json",
+    },
+    "release-check": {
+        "summary": "Run public-surface smoke checks plus key maintainer regressions for a release candidate.",
+        "example": "pdf-to-json-rag release-check --json",
+    },
     "help": {
         "summary": "Show command summaries or detailed help for one command.",
         "example": "pdf-to-json-rag help --topic answer-query",
@@ -124,6 +142,30 @@ CLI_EPILOG = """Common first-run commands:
 
 Use `pdf-to-json-rag help --topic <command>` for a focused command summary.
 """
+
+
+def _human_status(passed: bool) -> str:
+    return "PASS" if passed else "FAIL"
+
+
+def _release_channel_recommendation(overall_pass: bool) -> dict[str, object]:
+    if overall_pass:
+        return {
+            "release_ready": True,
+            "suggested_tag": "v0.1.0-beta",
+            "why": [
+                "public CLI smoke checks pass",
+                "core maintainer regression shards pass",
+                "known limitations are documented and do not block a first public pre-release",
+            ],
+        }
+    return {
+        "release_ready": False,
+        "suggested_tag": None,
+        "why": [
+            "at least one public-surface or maintainer regression gate is failing",
+        ],
+    }
 
 
 def _chunk_payload(chunk) -> dict[str, object]:
@@ -220,7 +262,12 @@ def _emit_error_json(command: str | None, error: CliError, output_path: Path | N
 
 
 def _wants_json(argv: list[str]) -> bool:
-    return "--json" in argv
+    if "--json" in argv:
+        return True
+    for index, token in enumerate(argv[:-1]):
+        if token == "--format" and argv[index + 1] == "json":
+            return True
+    return False
 
 
 def _resolve_output_path(value: str | None) -> Path | None:
@@ -256,6 +303,336 @@ def _resolve_pdf_path(value: str) -> Path:
 
 def _resolve_index_dir(value: str | None, default: Path) -> Path:
     return Path(value).expanduser().resolve() if value else default
+
+
+def _resolve_optional_path(value: str | None, default: Path) -> Path:
+    return Path(value).expanduser().resolve() if value else default
+
+
+def _create_demo_pdf(path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_text(
+        (72, 72),
+        "Demo Safety Guide\n\n"
+        "Purpose: provide procedural guidance for basic safety checks, incident response, and follow-up.\n"
+        "Audience: operations staff and team leads.\n"
+        "Section 1: Preparation\n"
+        "Use the checklist before field work.\n"
+        "Section 2: Response\n"
+        "Report incidents, document evidence, and notify the supervisor.\n"
+        "Section 3: Follow-up\n"
+        "Review the event, record lessons learned, and close the ticket.\n",
+    )
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def _subprocess_env(data_dir: Path | None = None) -> dict[str, str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(PATHS.root / "src")
+    if data_dir is not None:
+        env["PDF_TO_JSON_RAG_DATA_DIR"] = str(data_dir)
+    return env
+
+
+def _run_cli_subprocess(args: list[str], data_dir: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "pdf_to_json_rag", *args],
+        cwd=PATHS.root,
+        env=_subprocess_env(data_dir=data_dir),
+        capture_output=True,
+        text=True,
+    )
+
+
+def _run_public_surface_release_smoke() -> dict[str, object]:
+    with tempfile.TemporaryDirectory() as temp_dir_name:
+        workspace = Path(temp_dir_name)
+        data_dir = workspace / "data"
+        demo_pdf = _create_demo_pdf(workspace / "public-release-demo.pdf")
+        init_process = _run_cli_subprocess(["init", "--json"], data_dir=data_dir)
+        smoke_process = _run_cli_subprocess(
+            [
+                "smoke-check",
+                "--pdf",
+                str(demo_pdf),
+                "--query",
+                "What does this file cover?",
+                "--json",
+            ],
+            data_dir=data_dir,
+        )
+        init_payload = json.loads(init_process.stdout) if init_process.stdout.strip() else {}
+        smoke_payload = json.loads(smoke_process.stdout) if smoke_process.stdout.strip() else {}
+        return {
+            "workspace": str(workspace),
+            "data_dir": str(data_dir),
+            "demo_pdf": str(demo_pdf),
+            "init_returncode": init_process.returncode,
+            "smoke_returncode": smoke_process.returncode,
+            "init_ok": bool(init_payload.get("ok")),
+            "smoke_ok": bool(smoke_payload.get("ok")),
+            "smoke_all_pass": bool(smoke_payload.get("result", {}).get("all_pass")),
+            "smoke_checks": smoke_payload.get("result", {}).get("checks", []),
+        }
+
+
+def _run_public_surface_unittests() -> dict[str, object]:
+    process = subprocess.run(
+        [sys.executable, "-m", "unittest", "tests.test_cli_public_surface"],
+        cwd=PATHS.root,
+        env=_subprocess_env(),
+        capture_output=True,
+        text=True,
+    )
+    output_text = "\n".join(
+        part.strip()
+        for part in (process.stdout, process.stderr)
+        if part and part.strip()
+    )
+    return {
+        "returncode": process.returncode,
+        "passed": process.returncode == 0,
+        "output_tail": output_text[-1200:],
+    }
+
+
+def _run_package_check() -> dict[str, object]:
+    with tempfile.TemporaryDirectory() as temp_dir_name:
+        workspace = Path(temp_dir_name)
+        wheel_dir = workspace / "wheelhouse"
+        venv_dir = workspace / "venv"
+        data_dir = workspace / "data"
+        demo_pdf = workspace / "package-demo.pdf"
+        wheel_dir.mkdir(parents=True, exist_ok=True)
+
+        build_process = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "wheel",
+                ".",
+                "--no-deps",
+                "--no-build-isolation",
+                "--wheel-dir",
+                str(wheel_dir),
+            ],
+            cwd=PATHS.root,
+            capture_output=True,
+            text=True,
+        )
+        wheels = sorted(wheel_dir.glob("*.whl"))
+        wheel_path = wheels[0] if wheels else None
+
+        venv_process = None
+        install_process = None
+        venv_python = venv_dir / "bin" / "python"
+        script_path = venv_dir / "bin" / "pdf-to-json-rag"
+        doctor_process = None
+        smoke_process = None
+        doctor_payload: dict[str, object] = {}
+        smoke_payload: dict[str, object] = {}
+
+        if build_process.returncode == 0 and wheel_path is not None:
+            venv_process = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "venv",
+                    "--system-site-packages",
+                    str(venv_dir),
+                ],
+                cwd=PATHS.root,
+                capture_output=True,
+                text=True,
+            )
+            if venv_process.returncode == 0 and venv_python.exists():
+                install_process = subprocess.run(
+                    [
+                        str(venv_python),
+                        "-m",
+                        "pip",
+                        "install",
+                        "--no-deps",
+                        "--force-reinstall",
+                        str(wheel_path),
+                    ],
+                    cwd=PATHS.root,
+                    capture_output=True,
+                    text=True,
+                )
+
+            if install_process is not None and install_process.returncode == 0 and script_path.exists():
+                package_env = os.environ.copy()
+                package_env["PDF_TO_JSON_RAG_DATA_DIR"] = str(data_dir)
+                create_demo_process = subprocess.run(
+                    [str(script_path), "create-demo-pdf", "--path", str(demo_pdf), "--json"],
+                    cwd=PATHS.root,
+                    env=package_env,
+                    capture_output=True,
+                    text=True,
+                )
+                if create_demo_process.returncode == 0:
+                    doctor_process = subprocess.run(
+                        [str(script_path), "doctor", "--json"],
+                        cwd=PATHS.root,
+                        env=package_env,
+                        capture_output=True,
+                        text=True,
+                    )
+                    smoke_process = subprocess.run(
+                        [
+                            str(script_path),
+                            "smoke-check",
+                            "--pdf",
+                            str(demo_pdf),
+                            "--query",
+                            "What does this file cover?",
+                            "--json",
+                        ],
+                        cwd=PATHS.root,
+                        env=package_env,
+                        capture_output=True,
+                        text=True,
+                    )
+                    if doctor_process.stdout.strip():
+                        doctor_payload = json.loads(doctor_process.stdout)
+                    if smoke_process.stdout.strip():
+                        smoke_payload = json.loads(smoke_process.stdout)
+                else:
+                    smoke_payload = {
+                        "ok": False,
+                        "error": {
+                            "code": "create_demo_failed",
+                            "message": create_demo_process.stderr.strip() or create_demo_process.stdout.strip(),
+                        },
+                    }
+
+        all_pass = (
+            build_process.returncode == 0
+            and wheel_path is not None
+            and venv_process is not None
+            and venv_process.returncode == 0
+            and install_process is not None
+            and install_process.returncode == 0
+            and script_path.exists()
+            and doctor_process is not None
+            and doctor_process.returncode == 0
+            and bool(doctor_payload.get("ok"))
+            and smoke_process is not None
+            and smoke_process.returncode == 0
+            and bool(smoke_payload.get("ok"))
+            and bool(smoke_payload.get("result", {}).get("all_pass"))
+        )
+
+        return {
+            "all_pass": all_pass,
+            "workspace": str(workspace),
+            "wheel_path": str(wheel_path) if wheel_path else None,
+            "venv_path": str(venv_dir),
+            "script_path": str(script_path),
+            "build_returncode": build_process.returncode,
+            "venv_returncode": venv_process.returncode if venv_process else None,
+            "install_returncode": install_process.returncode if install_process else None,
+            "doctor_returncode": doctor_process.returncode if doctor_process else None,
+            "smoke_returncode": smoke_process.returncode if smoke_process else None,
+            "doctor_ok": bool(doctor_payload.get("ok")),
+            "smoke_ok": bool(smoke_payload.get("ok")),
+            "smoke_all_pass": bool(smoke_payload.get("result", {}).get("all_pass")),
+            "build_output_tail": "\n".join(
+                part.strip()
+                for part in (build_process.stdout, build_process.stderr)
+                if part and part.strip()
+            )[-1200:],
+            "install_output_tail": (
+                "\n".join(
+                    part.strip()
+                    for part in ((install_process.stdout if install_process else ""), (install_process.stderr if install_process else ""))
+                    if part and part.strip()
+                )[-1200:]
+                if install_process is not None
+                else ""
+            ),
+        }
+
+
+RELEASE_CHECK_SHARDS = [
+    "query_planning_core",
+    "answer_modes_core",
+    "document_family_core",
+    "inventory_coverage_core",
+    "relationship_core",
+]
+
+
+def _run_release_check(k: int) -> dict[str, object]:
+    doctor = _doctor_checks()
+    public_smoke = _run_public_surface_release_smoke()
+    public_unittests = _run_public_surface_unittests()
+    package_check = _run_package_check()
+
+    regressions: list[dict[str, object]] = []
+    benchmark_assets_available = doctor["ready_for_internal_benchmark"]
+    regression_all_pass = True
+
+    if benchmark_assets_available:
+        eval_path = ensure_default_eval_cases(PATHS.data_eval)
+        for shard in RELEASE_CHECK_SHARDS:
+            report, report_path = run_regression_suite(
+                index_dir=PATHS.data_index,
+                chunk_root=PATHS.data_chunks,
+                eval_dir=PATHS.data_eval,
+                k=k,
+                eval_path=eval_path,
+                shard=shard,
+            )
+            regressions.append(
+                {
+                    "shard": shard,
+                    "all_pass": report["all_pass"],
+                    "pass_count": report["pass_count"],
+                    "fail_count": report["fail_count"],
+                    "failed_case_ids": report["failed_case_ids"],
+                    "report_path": str(report_path),
+                }
+            )
+        regression_all_pass = all(item["all_pass"] for item in regressions)
+    else:
+        regression_all_pass = False
+
+    public_surface_all_pass = (
+        public_smoke["init_ok"]
+        and public_smoke["smoke_ok"]
+        and public_smoke["smoke_all_pass"]
+        and public_unittests["passed"]
+        and doctor["ready_for_public_cli"]
+        and package_check["all_pass"]
+    )
+
+    overall_pass = public_surface_all_pass and benchmark_assets_available and regression_all_pass
+    recommendation = _release_channel_recommendation(overall_pass)
+
+    return {
+        "doctor": doctor,
+        "public_surface": {
+            "all_pass": public_surface_all_pass,
+            "smoke": public_smoke,
+            "unittests": public_unittests,
+            "package_check": package_check,
+        },
+        "internal_regressions": {
+            "benchmark_assets_available": benchmark_assets_available,
+            "selected_shards": RELEASE_CHECK_SHARDS,
+            "all_pass": regression_all_pass if benchmark_assets_available else False,
+            "results": regressions,
+        },
+        "overall_pass": overall_pass,
+        "recommendation": recommendation,
+    }
 
 
 def _resolve_document_paths(doc_id: str) -> tuple[Path, Path]:
@@ -397,16 +774,19 @@ def _doctor_checks() -> dict[str, object]:
         {
             "name": "package_metadata_present",
             "passed": pyproject_path.exists(),
+            "category": "required_public_tool",
             "details": {"path": str(pyproject_path)},
         },
         {
             "name": "data_root_configured",
             "passed": bool(PATHS.data_dir),
+            "category": "required_public_tool",
             "details": {"data_dir": str(PATHS.data_dir)},
         },
         {
             "name": "data_dirs_exist",
             "passed": all(path.exists() for path in (PATHS.data_input, PATHS.data_documents, PATHS.data_chunks, PATHS.data_index, PATHS.data_eval)),
+            "category": "required_public_tool",
             "details": {
                 "data_input": str(PATHS.data_input),
                 "data_documents": str(PATHS.data_documents),
@@ -418,41 +798,57 @@ def _doctor_checks() -> dict[str, object]:
         {
             "name": "tesseract_available",
             "passed": shutil.which("tesseract") is not None,
+            "category": "optional_capability",
             "details": {"which": shutil.which("tesseract")},
         },
         {
             "name": "example_assets_present",
             "passed": examples_dir.exists() and all((examples_dir / name).exists() for name in example_files),
+            "category": "required_public_tool",
             "details": {
                 "examples_dir": str(examples_dir),
                 "expected_files": example_files,
             },
         },
         {
+            "name": "demo_pdf_generation_available",
+            "passed": True,
+            "category": "required_public_tool",
+            "details": {"engine": "PyMuPDF"},
+        },
+        {
             "name": "document_inventory_available",
             "passed": len(inventory) > 0,
+            "category": "internal_benchmark",
             "details": {"document_count": len(inventory)},
         },
         {
             "name": "index_manifest_available",
             "passed": manifest_path.exists(),
+            "category": "internal_benchmark",
             "details": {"manifest_path": str(manifest_path)},
         },
     ]
-    ready_for_cli = all(
+    ready_for_public_cli = all(
         check["passed"]
         for check in checks
-        if check["name"] in {"package_metadata_present", "data_root_configured", "data_dirs_exist", "example_assets_present"}
+        if check["category"] == "required_public_tool"
     )
-    ready_for_retrieval = ready_for_cli and all(
+    ready_for_retrieval = ready_for_public_cli and all(
         check["passed"]
         for check in checks
         if check["name"] in {"document_inventory_available", "index_manifest_available"}
     )
+    ready_for_internal_benchmark = all(
+        check["passed"]
+        for check in checks
+        if check["category"] in {"required_public_tool", "internal_benchmark"}
+    )
     return {
         "checks": checks,
-        "ready_for_cli": ready_for_cli,
+        "ready_for_public_cli": ready_for_public_cli,
         "ready_for_retrieval": ready_for_retrieval,
+        "ready_for_internal_benchmark": ready_for_internal_benchmark,
         "data_root": str(PATHS.data_dir),
     }
 
@@ -472,6 +868,10 @@ def main() -> None:
     parser.add_argument(
         "--pdf",
         help="Path to a local PDF file.",
+    )
+    parser.add_argument(
+        "--path",
+        help="Optional output path for generated local assets such as create-demo-pdf.",
     )
     parser.add_argument(
         "--doc-id",
@@ -517,23 +917,35 @@ def main() -> None:
         help="Print structured JSON output.",
     )
     parser.add_argument(
+        "--format",
+        choices=("text", "json"),
+        help="Optional output format. `json` is equivalent to `--json`.",
+    )
+    parser.add_argument(
         "--output",
-        help="Optional file path for JSON output. Requires --json.",
+        help="Optional file path for JSON output. Requires JSON output.",
     )
     try:
         args = parser.parse_args(argv)
         command = _canonical_command(args.command)
         output_path = _resolve_output_path(args.output)
-        if output_path and not args.json:
+        if args.json and args.format == "text":
+            raise CliError(
+                "conflicting_output_format",
+                "--json cannot be combined with --format text",
+                {"format": args.format},
+            )
+        json_output = args.json or args.format == "json"
+        if output_path and not json_output:
             raise CliError(
                 "output_requires_json",
-                "--output can only be used together with --json",
+                "--output can only be used together with JSON output",
                 {"output": str(output_path)},
             )
 
         if command == "help":
             help_text = _render_help(args.topic)
-            if args.json:
+            if json_output:
                 _emit_json(
                     "help",
                     {
@@ -548,7 +960,7 @@ def main() -> None:
 
         if command == "demo-profile":
             payload = _load_example_json("public_demo_profile.json")
-            if args.json:
+            if json_output:
                 _emit_json("demo-profile", {"profile": payload}, output_path=output_path)
                 return
             print(json.dumps(payload, ensure_ascii=False, indent=2))
@@ -556,18 +968,82 @@ def main() -> None:
 
         if command == "doctor":
             payload = _doctor_checks()
-            if args.json:
+            if json_output:
                 _emit_json("doctor", payload, output_path=output_path)
                 return
-            print(f"ready_for_cli: {payload['ready_for_cli']}")
-            print(f"ready_for_retrieval: {payload['ready_for_retrieval']}")
-            for check in payload["checks"]:
-                print(f"- {check['name']}: {'PASS' if check['passed'] else 'FAIL'}")
+            print(f"Public CLI readiness: {_human_status(payload['ready_for_public_cli'])}")
+            print(f"Retrieval workflow readiness: {_human_status(payload['ready_for_retrieval'])}")
+            print(f"Internal benchmark readiness: {_human_status(payload['ready_for_internal_benchmark'])}")
+            grouped_checks = {
+                "required_public_tool": "Required public-tool checks",
+                "optional_capability": "Optional capabilities",
+                "internal_benchmark": "Internal benchmark assets",
+            }
+            for category, label in grouped_checks.items():
+                category_checks = [check for check in payload["checks"] if check["category"] == category]
+                if not category_checks:
+                    continue
+                print("")
+                print(f"{label}:")
+                for check in category_checks:
+                    print(f"- {_human_status(check['passed'])} {check['name']}")
+            return
+
+        if command == "create-demo-pdf":
+            PATHS.ensure_dirs()
+            output_demo_path = _resolve_optional_path(
+                args.path,
+                PATHS.data_input / "public_demo.pdf",
+            )
+            created_path = _create_demo_pdf(output_demo_path)
+            payload = {
+                "pdf": str(created_path),
+                "suggested_queries": _load_example_json("public_demo_queries.json"),
+            }
+            if json_output:
+                _emit_json("create-demo-pdf", payload, output_path=output_path)
+                return
+            print(f"Created demo PDF: {created_path}")
+            return
+
+        if command == "package-check":
+            PATHS.ensure_dirs()
+            payload = _run_package_check()
+            if json_output:
+                _emit_json("package-check", payload, output_path=output_path)
+                return
+            print(f"Package check: {_human_status(payload['all_pass'])}")
+            if payload["wheel_path"]:
+                print(f"Built wheel: {payload['wheel_path']}")
+            print(f"Installed CLI path: {payload['script_path']}")
+            print(f"Build step: {_human_status(payload['build_returncode'] == 0)}")
+            print(f"Install step: {_human_status(payload['install_returncode'] == 0)}")
+            print(f"Packaged doctor: {_human_status(payload['doctor_ok'])}")
+            print(f"Packaged smoke-check: {_human_status(payload['smoke_all_pass'])}")
+            return
+
+        if command == "release-check":
+            PATHS.ensure_dirs()
+            payload = _run_release_check(args.k)
+            if json_output:
+                _emit_json("release-check", payload, output_path=output_path)
+                return
+            print(f"Release check: {_human_status(payload['overall_pass'])}")
+            recommendation = payload["recommendation"]
+            if recommendation["suggested_tag"]:
+                print(f"Suggested release tag: {recommendation['suggested_tag']}")
+            print(f"Public CLI surface: {_human_status(payload['public_surface']['all_pass'])}")
+            print(f"Packaged CLI gate: {_human_status(payload['public_surface']['package_check']['all_pass'])}")
+            print(f"Maintainer regression gate: {_human_status(payload['internal_regressions']['all_pass'])}")
+            print("")
+            print("Why:")
+            for reason in recommendation["why"]:
+                print(f"- {reason}")
             return
 
         if command == "init":
             PATHS.ensure_dirs()
-            if args.json:
+            if json_output:
                 _emit_json(
                     "init",
                     {
@@ -594,7 +1070,7 @@ def main() -> None:
                 pdf_path=pdf_path,
                 output_dir=PATHS.data_documents,
             )
-            if args.json:
+            if json_output:
                 _emit_json(
                     "extract-native",
                     {
@@ -636,7 +1112,7 @@ def main() -> None:
                 document_path=document_path,
                 output_dir=PATHS.data_chunks,
             )
-            if args.json:
+            if json_output:
                 _emit_json(
                     "chunk-document",
                     {
@@ -674,7 +1150,7 @@ def main() -> None:
                 chunks.extend(load_chunk_records(chunk_dir))
             index_dir = _resolve_index_dir(args.index_dir, PATHS.data_index)
             manifest = build_local_index(chunks=chunks, index_dir=index_dir)
-            if args.json:
+            if json_output:
                 _emit_json(
                     "build-index",
                     {
@@ -771,7 +1247,7 @@ def main() -> None:
                     "checks": checks,
                     "all_pass": all(item["passed"] for item in checks),
                 }
-                if args.json:
+                if json_output:
                     _emit_json("smoke-check", smoke_payload, output_path=output_path)
                     return
                 print(f"Smoke check for: {pdf_path.name}")
@@ -779,7 +1255,7 @@ def main() -> None:
                     print(f"- {item['name']}: {'PASS' if item['passed'] else 'FAIL'}")
                 print(f"all_pass: {all(item['passed'] for item in checks)}")
                 return
-            if args.json:
+            if json_output:
                 _emit_json("run-workflow", payload, output_path=output_path)
                 return
             print(f"Workflow complete for: {pdf_path.name}")
@@ -792,7 +1268,7 @@ def main() -> None:
         if command == "list-documents":
             PATHS.ensure_dirs()
             entries = shortlist_documents(args.query, limit=args.k if args.query else 20) if args.query else list(load_document_inventory())[:20]
-            if args.json:
+            if json_output:
                 _emit_json(
                     "list-documents",
                     {
@@ -824,7 +1300,7 @@ def main() -> None:
             payload = {
                 **_document_payload(entry),
             }
-            if args.json:
+            if json_output:
                 _emit_json("inspect-document", payload, output_path=output_path)
                 return
             for key, value in payload.items():
@@ -844,7 +1320,7 @@ def main() -> None:
                 "matched_doc_ids": list(plan.matched_doc_ids),
                 "preferred_doc_id": plan.preferred_doc_id,
             }
-            if args.json:
+            if json_output:
                 _emit_json("plan-query", payload, output_path=output_path)
                 return
             for key, value in payload.items():
@@ -857,7 +1333,7 @@ def main() -> None:
             index_dir = _resolve_index_dir(args.index_dir, PATHS.data_index)
             _validate_index_dir(index_dir)
             hits = retrieve_top_k(query=query, index_dir=index_dir, k=args.k)
-            if args.json:
+            if json_output:
                 _emit_json(
                     "retrieve",
                     {
@@ -892,7 +1368,7 @@ def main() -> None:
                 chunk_root=PATHS.data_chunks,
                 k=args.k,
             )
-            if args.json:
+            if json_output:
                 _emit_json(
                     "retrieve-expanded",
                     {
@@ -939,7 +1415,7 @@ def main() -> None:
                 chunk_root=PATHS.data_chunks,
                 k=args.k,
             )
-            if args.json:
+            if json_output:
                 _emit_json("answer-query", _grounded_answer_payload(result), output_path=output_path)
                 return
             print(format_grounded_answer(result))
@@ -957,7 +1433,7 @@ def main() -> None:
                 k=args.k,
                 eval_path=eval_path,
             )
-            if args.json:
+            if json_output:
                 _emit_json(
                     "evaluate-mvp",
                     {
@@ -1032,7 +1508,7 @@ def main() -> None:
                 case_ids=case_ids,
                 shard=args.shard,
             )
-            if args.json:
+            if json_output:
                 _emit_json(
                     "evaluate-regression",
                     {
@@ -1065,7 +1541,7 @@ def main() -> None:
 
         raise CliError("unknown_command", f"Unknown command: {command}", {"command": command})
     except CliError as error:
-        if _wants_json(argv):
+        if _wants_json(argv) or ("args" in locals() and args.format == "json"):
             _emit_error_json(locals().get("command"), error, output_path=locals().get("output_path"))
         else:
             print(f"Error [{error.code}]: {error.message}", file=sys.stderr)

@@ -4,6 +4,7 @@ import json
 import re
 from pathlib import Path
 
+from .content_metadata import classify_block_metadata, derive_chunk_semantics
 from .extraction import ExtractedBlock
 from .quality import TOC_LEADER_RE, PAGE_NUMBER_ONLY_RE, classify_chunk_quality
 from .schemas import ChunkRecord, DocumentRecord
@@ -633,12 +634,10 @@ def _apply_health_check_form_assist(
 
             if normalized_text:
                 normalized_question_blocks.append(
-                    ExtractedBlock(
-                        page_num=block.page_num,
+                    _rebuild_block(
+                        source_block=block,
                         text=normalized_text,
                         bbox=_merge_bboxes([block, *extra_blocks]),
-                        reading_order_index=block.reading_order_index,
-                        extraction_method=block.extraction_method,
                     )
                 )
             else:
@@ -688,12 +687,10 @@ def _apply_health_check_form_assist(
                 if id(block) in consumed_ids and block.bbox is not None
             ]
         )
-        synthesized_block = ExtractedBlock(
-            page_num=page_num,
+        synthesized_block = _rebuild_block(
+            source_block=title_block,
             text="\n".join(synthesized_lines),
             bbox=merged_bbox,
-            reading_order_index=title_block.reading_order_index,
-            extraction_method=title_block.extraction_method,
         )
 
         inserted = False
@@ -721,12 +718,9 @@ def _apply_opioid_appendix_form_assist(
 
         if normalized != raw:
             rebuilt.append(
-                ExtractedBlock(
-                    page_num=block.page_num,
+                _rebuild_block(
+                    source_block=block,
                     text=normalized,
-                    bbox=block.bbox,
-                    reading_order_index=block.reading_order_index,
-                    extraction_method=block.extraction_method,
                 )
             )
         else:
@@ -738,6 +732,26 @@ STRUCTURED_FORM_ASSIST_HANDLERS = {
     "health-check-questionnaire-for-subjects-expose-to": _apply_health_check_form_assist,
     "cep-opioidmanager-appendix2017": _apply_opioid_appendix_form_assist,
 }
+
+
+def _rebuild_block(
+    *,
+    source_block: ExtractedBlock,
+    text: str,
+    bbox: list[float] | None = None,
+) -> ExtractedBlock:
+    metadata = classify_block_metadata(text)
+    return ExtractedBlock(
+        page_num=source_block.page_num,
+        text=text,
+        bbox=bbox if bbox is not None else source_block.bbox,
+        reading_order_index=source_block.reading_order_index,
+        extraction_method=source_block.extraction_method,
+        block_kind=str(metadata["block_kind"]),
+        line_count=int(metadata["line_count"]),
+        token_count=int(metadata["token_count"]),
+        structural_flags=list(metadata["structural_flags"]),
+    )
 
 
 def _apply_structured_form_assists(
@@ -763,6 +777,14 @@ def _make_chunk_record(
     extraction_method, ocr_used = _infer_extraction_method(blocks)
     resolved_section_title = inferred_title or section_title
     subtopic_cues = _collect_subtopic_cues(text=text, section_title=resolved_section_title)
+    semantic_terms, content_hints, structural_flags = derive_chunk_semantics(
+        text=text,
+        section_title=resolved_section_title,
+        source_block_kinds=[block.block_kind for block in blocks],
+        source_structural_flags=[
+            flag for block in blocks for flag in block.structural_flags
+        ],
+    )
     noise_labels, quality_score = classify_chunk_quality(
         text=text,
         section_title=resolved_section_title,
@@ -784,6 +806,10 @@ def _make_chunk_record(
         extraction_method=extraction_method,
         ocr_used=ocr_used,
         subtopic_cues=subtopic_cues,
+        semantic_terms=semantic_terms,
+        content_hints=content_hints,
+        structural_flags=structural_flags,
+        source_block_kinds=sorted({block.block_kind for block in blocks if block.block_kind}),
         noise_labels=noise_labels,
         quality_score=quality_score,
         confidence=None,
@@ -878,7 +904,7 @@ def chunk_document(
                     current_section_title = inline_section_title
                     current_section_level = None
 
-                if _is_probable_header(segment, toc_entries):
+                if block.block_kind == "heading" or _is_probable_header(segment, toc_entries):
                     flush_buffer()
                     current_section_title = segment
                     current_section_level = (
@@ -886,6 +912,9 @@ def chunk_document(
                     )
                     in_key_points_summary = False
                     continue
+
+                if block.block_kind == "table_like" and buffer and buffer_chars >= min_chunk_chars:
+                    flush_buffer()
 
                 is_bullet_summary = in_key_points_summary and segment.lstrip().startswith("•")
                 if is_bullet_summary and buffer:
@@ -924,12 +953,9 @@ def chunk_document(
                     flush_buffer()
 
                 buffer.append(
-                    ExtractedBlock(
-                        page_num=block.page_num,
+                    _rebuild_block(
+                        source_block=block,
                         text=segment,
-                        bbox=block.bbox,
-                        reading_order_index=block.reading_order_index,
-                        extraction_method=block.extraction_method,
                     )
                 )
                 buffer_chars += len(segment)
@@ -957,6 +983,10 @@ def load_blocks_from_native_json(native_path: Path) -> list[ExtractedBlock]:
             bbox=block.get("bbox"),
             reading_order_index=block["reading_order_index"],
             extraction_method=block.get("extraction_method", "native"),
+            block_kind=block.get("block_kind", "text"),
+            line_count=int(block.get("line_count", 1)),
+            token_count=int(block.get("token_count", 0)),
+            structural_flags=list(block.get("structural_flags", [])),
         )
         for block in data.get("blocks", [])
     ]

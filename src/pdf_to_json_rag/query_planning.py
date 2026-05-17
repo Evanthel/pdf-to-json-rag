@@ -90,7 +90,7 @@ def plan_query(query: str) -> QueryPlan:
         or ("what kind of" in query_lower and ("document" in query_lower or "file" in query_lower or "source" in query_lower))
         or ("what type of" in query_lower and ("document" in query_lower or "file" in query_lower or "source" in query_lower))
         or ("what is the purpose of" in query_lower)
-    ) and (configured_source_doc_id(query) or metadata_matches or inventory_doc_ids):
+    ):
         preferred = explicit_source_doc_id or (inventory_doc_ids[0] if inventory_doc_ids else None)
         matched = (preferred,) if preferred else tuple()
         return QueryPlan(

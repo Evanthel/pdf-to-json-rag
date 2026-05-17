@@ -1,7 +1,7 @@
 """Extraction-stage interfaces for the MVP pipeline."""
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import re
 import shutil
@@ -12,6 +12,7 @@ import fitz
 from PIL import Image
 import pytesseract
 
+from .content_metadata import classify_block_metadata
 from .document_semantics import interpret_document_semantics
 from .schemas import DocumentRecord
 
@@ -44,6 +45,10 @@ class ExtractedBlock:
     bbox: list[float] | None
     reading_order_index: int
     extraction_method: str = "native"
+    block_kind: str = "text"
+    line_count: int = 1
+    token_count: int = 0
+    structural_flags: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -210,6 +215,28 @@ def _derive_discovery_terms(
     return terms[:20]
 
 
+def _build_extracted_block(
+    *,
+    page_num: int,
+    text: str,
+    bbox: list[float] | None,
+    reading_order_index: int,
+    extraction_method: str,
+) -> ExtractedBlock:
+    metadata = classify_block_metadata(text)
+    return ExtractedBlock(
+        page_num=page_num,
+        text=text,
+        bbox=bbox,
+        reading_order_index=reading_order_index,
+        extraction_method=extraction_method,
+        block_kind=str(metadata["block_kind"]),
+        line_count=int(metadata["line_count"]),
+        token_count=int(metadata["token_count"]),
+        structural_flags=list(metadata["structural_flags"]),
+    )
+
+
 def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
     """Extract page blocks and document metadata from a native-text PDF.
 
@@ -267,7 +294,7 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
             for x0, y0, x1, y1, clean_text in page_blocks:
                 page_text_parts.append(clean_text)
                 candidate_blocks.append(
-                    ExtractedBlock(
+                    _build_extracted_block(
                         page_num=page_num,
                         text=clean_text,
                         bbox=_normalize_bbox(
@@ -296,7 +323,7 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
 
             for final_block in final_page_blocks:
                 blocks.append(
-                    ExtractedBlock(
+                    _build_extracted_block(
                         page_num=final_block.page_num,
                         text=final_block.text,
                         bbox=final_block.bbox,
@@ -412,6 +439,10 @@ def native_extraction_to_dict(extraction: NativePdfExtraction) -> dict:
                 "bbox": block.bbox,
                 "reading_order_index": block.reading_order_index,
                 "extraction_method": block.extraction_method,
+                "block_kind": block.block_kind,
+                "line_count": block.line_count,
+                "token_count": block.token_count,
+                "structural_flags": block.structural_flags,
             }
             for block in extraction.blocks
         ],
@@ -727,7 +758,7 @@ def _build_ocr_blocks_from_image(image: Image.Image, page_num: int) -> list[Extr
         bottom = max(line["bottom"] for line in paragraph)
 
         blocks.append(
-            ExtractedBlock(
+            _build_extracted_block(
                 page_num=page_num,
                 text=block_text,
                 bbox=_normalize_pixel_bbox(
@@ -783,7 +814,7 @@ def extract_page_with_ocr(pdf_path: Path, page_num: int) -> list[ExtractedBlock]
 
             image_width, image_height = image.size
             return [
-                ExtractedBlock(
+                _build_extracted_block(
                     page_num=page_num,
                     text=ocr_text,
                     bbox=_normalize_bbox(

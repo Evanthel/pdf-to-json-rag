@@ -6,7 +6,7 @@ This file records the project at a practical level without mirroring every code 
 
 ## Current State
 
-Current implementation level: `v1.33`
+Current implementation level: `v1.41`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
 
@@ -167,6 +167,14 @@ Representative validation that has already been completed:
 - isolated public-surface CLI smoke tests via `python -m unittest tests.test_cli_public_surface`
 - public `doctor`, `demo-profile`, and `help` command checks
 - full-benchmark rerun after the `v1.29-v1.33` release-facing pass
+
+### v1.34-v1.41
+
+- Hardened document processing with extraction-time block metadata and chunk-level semantic metadata.
+- Reduced brittle retrieval behavior with semantic overlap, structural-reference alignment, and more coverage-aware evidence selection.
+- Made the public quickstart self-contained with `create-demo-pdf`, `doctor`, `package-check`, and `release-check`.
+- Added packaged-install verification through a temporary wheel-build and clean install path.
+- Added public-safe pre-release artifacts and aligned the repo around a first `v0.1.0-beta` release candidate.
 
 ## Deferred Features
 

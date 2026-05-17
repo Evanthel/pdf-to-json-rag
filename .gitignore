@@ -34,6 +34,10 @@ env/
 # Local source PDFs for private benchmarking
 pdf/
 
+# Local maintainer-only release notes/checklists
+docs/RELEASE_CHECKLIST.md
+docs/PRE_RELEASE_TEMPLATE.md
+
 # Local data inputs and generated artifacts
 data/input/*
 !data/input/.gitkeep

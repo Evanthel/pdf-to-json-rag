@@ -1,8 +1,24 @@
 {
   "workflow": [
     {
+      "step": "init",
+      "command": "pdf-to-json-rag init --json"
+    },
+    {
+      "step": "doctor",
+      "command": "pdf-to-json-rag doctor --json"
+    },
+    {
+      "step": "package-check",
+      "command": "pdf-to-json-rag package-check --json"
+    },
+    {
+      "step": "create-demo-pdf",
+      "command": "pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json"
+    },
+    {
       "step": "extract-native",
-      "command": "pdf-to-json-rag extract-native --pdf /path/to/file.pdf --json"
+      "command": "pdf-to-json-rag extract-native --pdf /tmp/pdf-to-json-rag-demo.pdf --json"
     },
     {
       "step": "chunk-document",
@@ -26,7 +42,11 @@
     },
     {
       "step": "run-workflow",
-      "command": "pdf-to-json-rag run-workflow --pdf /path/to/file.pdf --query \"What does this file cover?\" --json"
+      "command": "pdf-to-json-rag run-workflow --pdf /tmp/pdf-to-json-rag-demo.pdf --query \"What does this file cover?\" --json"
+    },
+    {
+      "step": "release-check",
+      "command": "pdf-to-json-rag release-check --json"
     }
   ],
   "notes": [

@@ -29,6 +29,10 @@ class ChunkRecord(BaseModel):
     extraction_method: ExtractionMethod = "native"
     ocr_used: bool = False
     subtopic_cues: list[str] = Field(default_factory=list)
+    semantic_terms: list[str] = Field(default_factory=list)
+    content_hints: list[str] = Field(default_factory=list)
+    structural_flags: list[str] = Field(default_factory=list)
+    source_block_kinds: list[str] = Field(default_factory=list)
     noise_labels: list[str] = Field(default_factory=list)
     quality_score: float = Field(default=1.0, ge=0.0, le=1.0)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)

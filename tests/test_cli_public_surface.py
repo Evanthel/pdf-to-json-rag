@@ -71,10 +71,22 @@ class CliPublicSurfaceTests(unittest.TestCase):
         payload = json.loads(process.stdout)
         self.assertTrue(payload["ok"])
         result = payload["result"]
-        self.assertTrue(result["ready_for_cli"])
+        self.assertTrue(result["ready_for_public_cli"])
         check_names = {item["name"] for item in result["checks"]}
         self.assertIn("package_metadata_present", check_names)
         self.assertIn("example_assets_present", check_names)
+        self.assertIn("demo_pdf_generation_available", check_names)
+
+    def test_create_demo_pdf_json(self) -> None:
+        self._run("init", "--json")
+        demo_path = self.workspace / "generated-demo.pdf"
+        process = self._run("create-demo-pdf", "--path", str(demo_path), "--json")
+        payload = json.loads(process.stdout)
+        self.assertTrue(payload["ok"])
+        result = payload["result"]
+        self.assertEqual(result["pdf"], str(demo_path.resolve()))
+        self.assertTrue(demo_path.exists())
+        self.assertGreaterEqual(len(result["suggested_queries"]), 1)
 
     def test_smoke_check_end_to_end_json(self) -> None:
         self._run("init", "--json")
@@ -98,6 +110,41 @@ class CliPublicSurfaceTests(unittest.TestCase):
         written = json.loads(output_path.read_text(encoding="utf-8"))
         self.assertEqual(written["command"], "smoke-check")
         self.assertTrue(written["result"]["all_pass"])
+
+    def test_create_demo_then_smoke_then_answer_query_chain(self) -> None:
+        self._run("init", "--json")
+        generated_pdf = self.workspace / "generated-demo.pdf"
+        self._run("create-demo-pdf", "--path", str(generated_pdf), "--format", "json")
+        smoke = self._run(
+            "smoke-check",
+            "--pdf",
+            str(generated_pdf),
+            "--query",
+            "What does this file cover?",
+            "--format",
+            "json",
+        )
+        smoke_payload = json.loads(smoke.stdout)
+        self.assertTrue(smoke_payload["ok"])
+        self.assertTrue(smoke_payload["result"]["all_pass"])
+
+        index_dir = self.data_dir / "index" / "workflow_smoke"
+        answer = self._run(
+            "answer-query",
+            "--query",
+            "What does this file cover?",
+            "--index-dir",
+            str(index_dir),
+            "--format",
+            "json",
+        )
+        answer_payload = json.loads(answer.stdout)
+        self.assertTrue(answer_payload["ok"])
+        self.assertTrue(answer_payload["result"]["answer"])
+        self.assertEqual(
+            answer_payload["result"]["answer_trace"]["answer_mode"],
+            "document_overview",
+        )
 
     def test_error_json_for_missing_index(self) -> None:
         self._run("init", "--json")

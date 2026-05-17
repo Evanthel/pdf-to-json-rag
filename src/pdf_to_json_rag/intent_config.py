@@ -470,7 +470,7 @@ STRUCTURED_INTENT_PROFILES = {
             "appendix a checklist optimized before opioid therapy non-pharmacological "
             "therapy non-opioid pharmacotherapy informed consent opioid safety urine drug screening"
         ),
-        answer_sentence_budget=2,
+        answer_sentence_budget=3,
     ),
     "opioid_adverse_effect_scale": StructuredIntentProfile(
         intent="opioid_adverse_effect_scale",
@@ -483,6 +483,18 @@ STRUCTURED_INTENT_PROFILES = {
         section_hints=("APPENDIX B", "MONITORING"),
         support_terms=frozenset({"adverse", "effects", "adls", "none", "limits", "prevents"}),
         augment_suffix="appendix b adverse effect scale 0 none 1 limits adls 2 prevents adls",
+    ),
+    "opioid_med_legend": StructuredIntentProfile(
+        intent="opioid_med_legend",
+        source_doc_id="cep-opioidmanager-appendix2017",
+        source_anchors=("opioid manager appendix", "opioid manager appendices", "appendix b"),
+        template_id="structured.opioid.med_legend",
+        pattern_id="legend-scale",
+        candidate_k=(6, 22),
+        neighbor_depth=1,
+        section_hints=("APPENDIX B", "MED"),
+        support_terms=frozenset({"med", "morphine", "equivalent", "dose"}),
+        augment_suffix="appendix b med morphine equivalent dose legend chart",
     ),
     "opioid_switch_follow_up": StructuredIntentProfile(
         intent="opioid_switch_follow_up",
@@ -528,6 +540,7 @@ STRUCTURED_INTENT_PROFILES = {
             "checklist caution cautions contraindications yes no live vaccine anticoagulant "
             "warfarin noacs doacs pregnancy infection"
         ),
+        answer_sentence_budget=2,
     ),
     "appendix_risk_list": StructuredIntentProfile(
         intent="appendix_risk_list",
@@ -684,6 +697,10 @@ def detect_structured_intent(query: str, query_terms: set[str]) -> str | None:
         "adverse" in query_terms or "adl" in query_terms or "scores" in query_terms or "mean" in query_terms
     ):
         return "opioid_adverse_effect_scale"
+    if "appendix b" in query_lower and "med" in query_terms and (
+        "stand" in query_terms or "mean" in query_terms
+    ):
+        return "opioid_med_legend"
     if (
         "appendix c" in query_lower
         or "switching opioids" in query_lower

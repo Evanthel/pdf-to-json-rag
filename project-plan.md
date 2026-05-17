@@ -357,15 +357,85 @@ Outcome:
 - the repo is now materially closer to a first public `v0.1` than to another internal benchmark sprint
 - the release surface is cleaner, more testable, and less dependent on the existing local workspace state
 
-## 6.34. v1.34 Plan
+## 6.34-6.38. Processing and Semantic-Retrieval Hardening
 
-The next iteration should focus on making the public release flow fully copy-pasteable and tag-ready.
+These five iterations shifted the focus back from CLI release polish to the two largest remaining architectural gaps: robustness in document processing and a retrieval/answering core that depends less on brittle surface cues.
 
-1. Add a `create-demo-pdf` command so the quickstart can run without asking the user for any external PDF.
-2. Add a single `release-check` command or script that combines the public-surface smoke tests with the key regression shards.
-3. Tighten `doctor` so it distinguishes optional benchmark assets from required public-tool assets more clearly.
-4. Add a minimal release-note / `v0.1` checklist path for publishing the first public version on GitHub.
-5. Re-check deferred features one more time from the perspective of public users, not internal benchmark coverage.
+Completed scope:
+
+1. Added extraction-time block metadata so native and OCR paths both persist block kind, line count, token count, and structural flags.
+2. Added chunk-level semantic metadata such as `semantic_terms`, `content_hints`, `structural_flags`, and `source_block_kinds`, and persisted them through chunk JSON and index metadata.
+3. Extended retrieval scoring with semantic overlap and structural-reference alignment for `Appendix`, `Table`, and `Question` queries instead of relying only on lexical matches and source-family heuristics.
+4. Made answer assembly more coverage-aware so multi-point answers pull complementary evidence rather than repeatedly selecting the same high-score fragment.
+5. Re-ran regression shards and the full benchmark after the semantic/structural pass and restored a warning-free state without reviving `pdfplumber`, cross-encoder reranking, or LLM-as-a-judge.
+
+Outcome:
+
+- document processing now carries richer structural semantics from extraction into chunking and retrieval
+- retrieval and answer assembly are less purely heuristic and less dependent on accidental wording matches
+- the benchmark remains warning-free at 67 cases across 19 indexed sample documents, with `MRR = 1.0`, `avg_keyword_coverage = 1.0`, and stable slices
+
+## 6.39. v1.39 Milestones
+
+This iteration focused on the last release-path gaps rather than on core benchmark or retrieval expansion.
+
+Completed scope:
+
+1. Added a `create-demo-pdf` command so the quickstart can run without requiring any user-supplied PDF.
+2. Added a single `release-check` command that combines public-surface smoke checks with the highest-value maintainer regression shards.
+3. Tightened `doctor` so it separates required public-tool assets from optional OCR capability and internal benchmark assets.
+4. Added a minimal release checklist path for the first public pre-release or release candidate.
+5. Re-checked the release surface from the perspective of a first public user and kept heavier deferred features out of scope.
+
+Outcome:
+
+- the public onboarding flow is now self-contained
+- the maintainer has one release-gate command instead of several manual checks
+- the repo is materially closer to a first public `v0.1` / pre-release than to another benchmark sprint
+
+## 6.40. v1.40 Milestones
+
+This iteration focused on the last small polish gaps before the first public pre-release.
+
+Completed scope:
+
+1. Added a public-safe `v0.1` pre-release notes template instead of relying on a repo-tracked maintainer-only checklist.
+2. Tightened CLI wording so document-level answers and `doctor` / `release-check` summaries read more like a product surface than an internal tool.
+3. Added one more public-surface smoke test around `create-demo-pdf -> smoke-check -> answer-query` as a single scripted path.
+4. Added a small `--format text|json` polish pass without breaking the stable JSON contracts.
+5. Re-assessed the first public label and kept the recommendation at `v0.1.0-beta` rather than `v0.1.0-rc1`.
+
+Outcome:
+
+- the public release surface is now self-contained, easier to explain, and easier to validate from a clean install path
+- the repo is now closer to executing a first public beta than to another release-polish architecture sprint
+
+## 6.41. v1.41 Milestones
+
+This iteration focused on the last packaging and publication gaps before the first public beta.
+
+Completed scope:
+
+1. Added an isolated packaging verification path that builds the project artifact and verifies the packaged CLI from a clean temporary install root.
+2. Extended `release-check` with a packaging/distribution gate while keeping the command usable as a normal maintainer release gate.
+3. Added concise public release artifacts derived from the version log and pre-release template.
+4. Tightened the final public docs so quickstart, command reference, and release notes no longer assume benchmark knowledge.
+5. Re-assessed the current release state and kept the recommended first public label at `v0.1.0-beta`.
+
+Outcome:
+
+- the repo now verifies both source-path and packaged-install behavior before a public release
+- the remaining gap to a first public beta is mostly release execution rather than missing architecture
+
+## 6.42. v1.42 Plan
+
+The next iteration should focus on cutting and validating the actual first public beta.
+
+1. Add a release-note artifact for the specific `v0.1.0-beta` cut, not just a reusable template.
+2. Add one final `doctor` / `release-check` wording pass only if it improves clarity without changing the command contracts.
+3. Add a tiny post-install smoke note for users who install from the built artifact instead of editable mode.
+4. Re-run the full benchmark, packaged-install check, and public-surface CLI tests as the final pre-tag gate.
+5. Decide whether to stop at `v0.1.0-beta` or immediately schedule a short `v0.1.1` polish pass after publication feedback.
 
 
 ## 7. Explicitly Deferred
