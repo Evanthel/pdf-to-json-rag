@@ -1,0 +1,30 @@
+{
+  "name": "public-safe-local-demo",
+  "description": "A minimal public-safe demo profile for the packaged CLI surface.",
+  "workflow": [
+    "pdf-to-json-rag init --json",
+    "pdf-to-json-rag doctor --json",
+    "pdf-to-json-rag extract-native --pdf /path/to/file.pdf --json",
+    "pdf-to-json-rag chunk-document --doc-id your-doc-id --json",
+    "pdf-to-json-rag build-index --doc-ids your-doc-id --json",
+    "pdf-to-json-rag inspect-document --doc-id your-doc-id --json",
+    "pdf-to-json-rag plan-query --query \"What does this file cover?\" --json",
+    "pdf-to-json-rag answer-query --query \"What does this file cover?\" --json",
+    "pdf-to-json-rag smoke-check --pdf /path/to/file.pdf --query \"What does this file cover?\" --json"
+  ],
+  "recommended_queries": [
+    "What does this file cover?",
+    "What kind of document is this?",
+    "What is the purpose of this file?",
+    "Which file is most relevant for drought triggers?"
+  ],
+  "example_outputs": [
+    "examples/inspect_document.example.json",
+    "examples/plan_query.example.json",
+    "examples/answer_query.example.json"
+  ],
+  "notes": [
+    "This profile is intended for first-time public users.",
+    "It avoids private benchmark PDFs and ignored local artifacts."
+  ]
+}

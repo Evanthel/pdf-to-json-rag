@@ -6,6 +6,7 @@ It is intentionally separate from the larger local benchmark and from ignored ra
 
 Use it for:
 
+- `demo-profile` onboarding assets
 - sample queries
 - example JSON output shapes
 - lightweight workflow references for first-time users

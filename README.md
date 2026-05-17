@@ -17,7 +17,7 @@ This codebase is intentionally separate from that fork. The fork captures the ba
 
 ## Current Status
 
-Current version: `v1.28`
+Current version: `v1.33`
 
 The pipeline currently runs end-to-end as a local-first tool across a mixed benchmark of review papers, OCR-derived scans, technical manuals, questionnaires, checklist-style appendices, non-medical books, open guidance notes, and short model-report style documents.
 
@@ -37,6 +37,8 @@ It supports both:
 - a packaged CLI entry path for `python -m pdf_to_json_rag` and `pdf-to-json-rag`
 - a packaged smoke-check path for first-run validation
 - public-safe example JSON outputs for inspect / plan / answer command shapes
+- an isolated `PDF_TO_JSON_RAG_DATA_DIR` path for testing and local tool use without polluting the repo workspace
+- public release helpers such as `doctor`, `demo-profile`, command aliases, and `--output` JSON export
 
 Current benchmark snapshot:
 
@@ -78,7 +80,11 @@ Current benchmark snapshot:
 - A packaged project entry path through `pyproject.toml`, `python -m pdf_to_json_rag`, and the `pdf-to-json-rag` console script
 - A `smoke-check` command that validates the packaged end-to-end workflow path
 - Stable CLI error envelopes for missing inputs, missing index state, and argument errors
+- A `doctor` command that reports install/runtime readiness
+- A `demo-profile` command that exposes the public-safe onboarding flow
+- Optional JSON export with `--output /path/to/file.json`
 - Multi-document evaluation with regression shards, per-case debug snapshots, slice summaries, rerank comparison, and deferred-feature decision checkpoints
+- Automated public-surface CLI smoke tests that run against an isolated temporary data root
 
 ## Workflow
 
@@ -98,7 +104,10 @@ Minimal local flow:
 
 ```bash
 pip install -e .
+export PDF_TO_JSON_RAG_DATA_DIR=/tmp/pdf-to-json-rag-data
 pdf-to-json-rag init --json
+pdf-to-json-rag doctor --json
+pdf-to-json-rag demo-profile --json
 pdf-to-json-rag extract-native --pdf /path/to/file.pdf --json
 pdf-to-json-rag chunk-document --doc-id your-doc-id --json
 pdf-to-json-rag build-index --doc-id your-doc-id --json
@@ -140,6 +149,12 @@ pdf-to-json-rag run-workflow --pdf /path/to/file.pdf --query "What does this fil
 pdf-to-json-rag smoke-check --pdf /path/to/file.pdf --query "What does this file cover?" --json
 ```
 
+Write JSON output to a file:
+
+```bash
+pdf-to-json-rag answer-query --query "What does this file cover?" --json --output answer.json
+```
+
 ## Key Files
 
 - `project-plan.md`
@@ -154,6 +169,12 @@ pdf-to-json-rag smoke-check --pdf /path/to/file.pdf --query "What does this file
   Sampled faithfulness-audit set.
 - `examples/`
   Public-safe workflow assets, example queries, and trimmed example JSON outputs.
+- `docs/CLI_QUICKSTART.md`
+  Public onboarding path for the packaged CLI.
+- `docs/CLI_REFERENCE.md`
+  User-facing command reference and aliases.
+- `docs/INTERNAL_EVALUATION.md`
+  Internal benchmark and regression notes.
 - `data/eval/mvp_eval_report.json`
   Generated locally by the evaluation workflow and ignored by default.
 
@@ -318,3 +339,13 @@ This version focused on first-user release polish:
 - tightened CLI error contracts into stable human-readable and JSON error paths
 - added trimmed public-safe example JSON outputs for inspect / plan / answer commands
 - aligned the docs around the packaged CLI rather than the internal benchmark harness
+
+### v1.29-v1.33
+
+This sprint shifted the repo from “packageable prototype” to “first public local tool candidate”:
+
+- added an isolated `PDF_TO_JSON_RAG_DATA_DIR` path so tool usage and automated tests do not depend on the repo workspace state
+- added automated public-surface CLI smoke tests that generate a tiny PDF and validate the packaged workflow path
+- added user-facing release helpers such as `help`, `doctor`, `demo-profile`, command aliases, and `--output`
+- split public CLI onboarding docs from internal evaluation/debug docs
+- kept the broader benchmark stable while focusing on product surface instead of more document churn

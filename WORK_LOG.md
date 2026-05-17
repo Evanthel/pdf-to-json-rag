@@ -6,7 +6,7 @@ This file records the project at a practical level without mirroring every code 
 
 ## Current State
 
-Current implementation level: `v1.28`
+Current implementation level: `v1.33`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
 
@@ -139,6 +139,19 @@ Key regression shards currently passing:
 - Added public-safe trimmed example JSON outputs for inspect / plan / answer command shapes
 - Shifted the docs further toward a first public tool flow instead of the internal benchmark harness
 
+### v1.29-v1.33
+
+- Added an isolated `PDF_TO_JSON_RAG_DATA_DIR` path so the CLI can run cleanly outside the repo-local benchmark workspace
+- Added public-surface smoke tests that generate a tiny PDF and validate the packaged CLI path end to end
+- Added user-facing release helpers:
+  - `help`
+  - `doctor`
+  - `demo-profile`
+  - command aliases
+  - `--output` JSON export
+- Split public CLI onboarding docs from internal evaluation notes
+- Re-ran the public CLI tests, core regression shards, and the full benchmark after the release-facing pass
+
 ## Validation Summary
 
 Representative validation that has already been completed:
@@ -151,6 +164,9 @@ Representative validation that has already been completed:
 - OCR fallback smoke test on synthetic image-only PDFs
 - repeated full-benchmark reruns across mixed source families
 - repeated regression-shard checks on structured-form, cross-document, document-discovery, document-facet, query-planning, and answer-mode paths
+- isolated public-surface CLI smoke tests via `python -m unittest tests.test_cli_public_surface`
+- public `doctor`, `demo-profile`, and `help` command checks
+- full-benchmark rerun after the `v1.29-v1.33` release-facing pass
 
 ## Deferred Features
 

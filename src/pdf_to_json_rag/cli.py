@@ -3,6 +3,7 @@
 import argparse
 import json
 from pathlib import Path
+import shutil
 import sys
 
 from . import __version__
@@ -28,6 +29,101 @@ class CliError(Exception):
 class CliArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         raise CliError("invalid_arguments", message)
+
+
+COMMAND_ALIASES = {
+    "extract": "extract-native",
+    "chunk": "chunk-document",
+    "index": "build-index",
+    "workflow": "run-workflow",
+    "list": "list-documents",
+    "inspect": "inspect-document",
+    "plan": "plan-query",
+    "answer": "answer-query",
+    "demo": "demo-profile",
+    "self-check": "doctor",
+}
+
+COMMAND_HELP: dict[str, dict[str, object]] = {
+    "init": {
+        "summary": "Create local data directories under the configured data root.",
+        "example": "pdf-to-json-rag init --json",
+    },
+    "extract-native": {
+        "summary": "Extract a PDF into document-level JSON artifacts.",
+        "example": "pdf-to-json-rag extract-native --pdf /path/to/file.pdf --json",
+    },
+    "chunk-document": {
+        "summary": "Turn one saved document JSON into chunk JSON files.",
+        "example": "pdf-to-json-rag chunk-document --doc-id your-doc-id --json",
+    },
+    "build-index": {
+        "summary": "Build the local vector index from one or more chunked documents.",
+        "example": "pdf-to-json-rag build-index --doc-ids doc-a,doc-b --json",
+    },
+    "run-workflow": {
+        "summary": "Run extract -> chunk -> index -> plan -> answer in one command.",
+        "example": "pdf-to-json-rag run-workflow --pdf /path/to/file.pdf --query \"What does this file cover?\" --json",
+    },
+    "smoke-check": {
+        "summary": "Validate the packaged workflow path and return pass/fail checks.",
+        "example": "pdf-to-json-rag smoke-check --pdf /path/to/file.pdf --query \"What does this file cover?\" --json",
+    },
+    "list-documents": {
+        "summary": "List indexed document inventory entries, optionally filtered by a query.",
+        "example": "pdf-to-json-rag list-documents --json",
+    },
+    "inspect-document": {
+        "summary": "Inspect one document inventory entry and its metadata contract.",
+        "example": "pdf-to-json-rag inspect-document --doc-id common-cold-clinincal-evidence --json",
+    },
+    "plan-query": {
+        "summary": "Classify a query before retrieval and show its answer mode.",
+        "example": "pdf-to-json-rag plan-query --query \"Which file is most relevant for drought triggers?\" --json",
+    },
+    "retrieve": {
+        "summary": "Return top-k chunks without answer assembly.",
+        "example": "pdf-to-json-rag retrieve --query \"What are common cold symptoms?\" --top-k 5 --json",
+    },
+    "retrieve-expanded": {
+        "summary": "Return top-k chunks plus adjacent expansion.",
+        "example": "pdf-to-json-rag retrieve-expanded --query \"What are common cold symptoms?\" --top-k 5 --json",
+    },
+    "answer-query": {
+        "summary": "Answer a query using the current local index and answer-mode logic.",
+        "example": "pdf-to-json-rag answer-query --query \"What are common cold symptoms?\" --json",
+    },
+    "evaluate-mvp": {
+        "summary": "Run the full local benchmark and write the evaluation report.",
+        "example": "pdf-to-json-rag evaluate-mvp --top-k 5 --json",
+    },
+    "evaluate-regression": {
+        "summary": "Run a smaller regression shard or explicit case subset.",
+        "example": "pdf-to-json-rag evaluate-regression --shard query_planning_core --top-k 5 --json",
+    },
+    "demo-profile": {
+        "summary": "Show a public-safe demo profile with stable example commands and queries.",
+        "example": "pdf-to-json-rag demo-profile --json",
+    },
+    "doctor": {
+        "summary": "Check install/runtime readiness without touching private benchmark inputs.",
+        "example": "pdf-to-json-rag doctor --json",
+    },
+    "help": {
+        "summary": "Show command summaries or detailed help for one command.",
+        "example": "pdf-to-json-rag help --topic answer-query",
+    },
+}
+
+CANONICAL_COMMANDS = list(COMMAND_HELP.keys())
+CLI_EPILOG = """Common first-run commands:
+  pdf-to-json-rag init --json
+  pdf-to-json-rag doctor --json
+  pdf-to-json-rag demo-profile --json
+  pdf-to-json-rag smoke-check --pdf /path/to/file.pdf --query "What does this file cover?" --json
+
+Use `pdf-to-json-rag help --topic <command>` for a focused command summary.
+"""
 
 
 def _chunk_payload(chunk) -> dict[str, object]:
@@ -87,42 +183,48 @@ def _grounded_answer_payload(result) -> dict[str, object]:
     }
 
 
-def _emit_json(command: str, payload: dict[str, object]) -> None:
-    print(
-        json.dumps(
-            {
-                "command": command,
-                "version": __version__,
-                "ok": True,
-                "result": payload,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
+def _write_json_output(payload: dict[str, object], output_path: Path | None = None) -> None:
+    text = json.dumps(payload, ensure_ascii=False, indent=2)
+    if output_path:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(text + "\n", encoding="utf-8")
+    print(text)
+
+
+def _emit_json(command: str, payload: dict[str, object], output_path: Path | None = None) -> None:
+    _write_json_output(
+        {
+            "command": command,
+            "version": __version__,
+            "ok": True,
+            "result": payload,
+        },
+        output_path=output_path,
     )
 
 
-def _emit_error_json(command: str | None, error: CliError) -> None:
-    print(
-        json.dumps(
-            {
-                "command": command,
-                "version": __version__,
-                "ok": False,
-                "error": {
-                    "code": error.code,
-                    "message": error.message,
-                    "details": error.details,
-                },
+def _emit_error_json(command: str | None, error: CliError, output_path: Path | None = None) -> None:
+    _write_json_output(
+        {
+            "command": command,
+            "version": __version__,
+            "ok": False,
+            "error": {
+                "code": error.code,
+                "message": error.message,
+                "details": error.details,
             },
-            ensure_ascii=False,
-            indent=2,
-        )
+        },
+        output_path=output_path,
     )
 
 
 def _wants_json(argv: list[str]) -> bool:
     return "--json" in argv
+
+
+def _resolve_output_path(value: str | None) -> Path | None:
+    return Path(value).expanduser().resolve() if value else None
 
 
 def _require_arg(value: str | None, flag: str, command: str) -> str:
@@ -233,50 +335,165 @@ def _smoke_checks(payload: dict[str, object]) -> list[dict[str, object]]:
     return checks
 
 
+def _canonical_command(command: str) -> str:
+    return COMMAND_ALIASES.get(command, command)
+
+
+def _project_examples_dir() -> Path:
+    return PATHS.root / "examples"
+
+
+def _load_example_json(filename: str) -> dict[str, object] | list[object]:
+    path = _project_examples_dir() / filename
+    if not path.exists():
+        raise CliError(
+            "missing_example_asset",
+            f"Example asset was not found: {path}",
+            {"filename": filename, "path": str(path)},
+        )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _render_help(topic: str | None = None) -> str:
+    if not topic:
+        lines = ["Available commands:"]
+        for command in CANONICAL_COMMANDS:
+            summary = str(COMMAND_HELP[command]["summary"])
+            lines.append(f"- {command}: {summary}")
+        lines.append("")
+        lines.append("Run `pdf-to-json-rag help --topic <command>` for a concrete example.")
+        return "\n".join(lines)
+
+    command = _canonical_command(topic)
+    spec = COMMAND_HELP.get(command)
+    if not spec:
+        raise CliError(
+            "unknown_help_topic",
+            f"Unknown help topic: {topic}",
+            {"topic": topic, "known_commands": CANONICAL_COMMANDS},
+        )
+    lines = [command, str(spec["summary"])]
+    aliases = sorted(alias for alias, target in COMMAND_ALIASES.items() if target == command)
+    if aliases:
+        lines.append(f"Aliases: {', '.join(aliases)}")
+    lines.append(f"Example: {spec['example']}")
+    return "\n".join(lines)
+
+
+def _doctor_checks() -> dict[str, object]:
+    pyproject_path = PATHS.root / "pyproject.toml"
+    examples_dir = _project_examples_dir()
+    example_files = [
+        "public_demo_profile.json",
+        "public_workflow.json",
+        "public_demo_queries.json",
+        "inspect_document.example.json",
+        "plan_query.example.json",
+        "answer_query.example.json",
+    ]
+    manifest_path = PATHS.data_index / "index_manifest.json"
+    inventory = load_document_inventory()
+    checks: list[dict[str, object]] = [
+        {
+            "name": "package_metadata_present",
+            "passed": pyproject_path.exists(),
+            "details": {"path": str(pyproject_path)},
+        },
+        {
+            "name": "data_root_configured",
+            "passed": bool(PATHS.data_dir),
+            "details": {"data_dir": str(PATHS.data_dir)},
+        },
+        {
+            "name": "data_dirs_exist",
+            "passed": all(path.exists() for path in (PATHS.data_input, PATHS.data_documents, PATHS.data_chunks, PATHS.data_index, PATHS.data_eval)),
+            "details": {
+                "data_input": str(PATHS.data_input),
+                "data_documents": str(PATHS.data_documents),
+                "data_chunks": str(PATHS.data_chunks),
+                "data_index": str(PATHS.data_index),
+                "data_eval": str(PATHS.data_eval),
+            },
+        },
+        {
+            "name": "tesseract_available",
+            "passed": shutil.which("tesseract") is not None,
+            "details": {"which": shutil.which("tesseract")},
+        },
+        {
+            "name": "example_assets_present",
+            "passed": examples_dir.exists() and all((examples_dir / name).exists() for name in example_files),
+            "details": {
+                "examples_dir": str(examples_dir),
+                "expected_files": example_files,
+            },
+        },
+        {
+            "name": "document_inventory_available",
+            "passed": len(inventory) > 0,
+            "details": {"document_count": len(inventory)},
+        },
+        {
+            "name": "index_manifest_available",
+            "passed": manifest_path.exists(),
+            "details": {"manifest_path": str(manifest_path)},
+        },
+    ]
+    ready_for_cli = all(
+        check["passed"]
+        for check in checks
+        if check["name"] in {"package_metadata_present", "data_root_configured", "data_dirs_exist", "example_assets_present"}
+    )
+    ready_for_retrieval = ready_for_cli and all(
+        check["passed"]
+        for check in checks
+        if check["name"] in {"document_inventory_available", "index_manifest_available"}
+    )
+    return {
+        "checks": checks,
+        "ready_for_cli": ready_for_cli,
+        "ready_for_retrieval": ready_for_retrieval,
+        "data_root": str(PATHS.data_dir),
+    }
+
+
 def main() -> None:
     argv = sys.argv[1:]
-    parser = CliArgumentParser(description="PDF-to-JSON RAG local-first CLI")
+    parser = CliArgumentParser(
+        description="PDF-to-JSON RAG local-first CLI",
+        formatter_class=argparse.RawTextHelpFormatter,
+        epilog=CLI_EPILOG,
+    )
     parser.add_argument(
         "command",
-        choices=[
-            "init",
-            "extract-native",
-            "chunk-document",
-            "build-index",
-            "run-workflow",
-            "smoke-check",
-            "list-documents",
-            "inspect-document",
-            "plan-query",
-            "retrieve",
-            "retrieve-expanded",
-            "answer-query",
-            "evaluate-mvp",
-            "evaluate-regression",
-        ],
-        help="Currently available scaffold command.",
+        choices=sorted(set(CANONICAL_COMMANDS + list(COMMAND_ALIASES.keys()))),
+        help="Command to run. Use `help` or `help --topic <command>` for focused guidance.",
     )
     parser.add_argument(
         "--pdf",
-        help="Path to a local PDF file for native extraction.",
+        help="Path to a local PDF file.",
     )
     parser.add_argument(
         "--doc-id",
-        help="Document ID used to load saved JSON artifacts for chunk generation.",
+        "--doc-ids",
+        dest="doc_id",
+        help="Document ID or comma-separated document IDs, depending on the command.",
     )
     parser.add_argument(
         "--query",
-        help="Natural-language query for retrieval testing.",
+        help="Natural-language query to plan, retrieve, or answer.",
     )
     parser.add_argument(
         "--k",
+        "--top-k",
         type=int,
+        dest="k",
         default=5,
         help="Number of retrieval hits to return.",
     )
     parser.add_argument(
         "--index-dir",
-        help="Optional custom index directory for isolated workflow runs.",
+        help="Optional custom index directory.",
     )
     parser.add_argument(
         "--eval-file",
@@ -291,20 +508,70 @@ def main() -> None:
         help="Optional regression shard for evaluate-regression.",
     )
     parser.add_argument(
+        "--topic",
+        help="Optional command topic for the `help` command.",
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
-        help="Print structured JSON output for inspect/plan/answer commands.",
+        help="Print structured JSON output.",
+    )
+    parser.add_argument(
+        "--output",
+        help="Optional file path for JSON output. Requires --json.",
     )
     try:
         args = parser.parse_args(argv)
-        command = args.command
+        command = _canonical_command(args.command)
+        output_path = _resolve_output_path(args.output)
+        if output_path and not args.json:
+            raise CliError(
+                "output_requires_json",
+                "--output can only be used together with --json",
+                {"output": str(output_path)},
+            )
 
-        if args.command == "init":
+        if command == "help":
+            help_text = _render_help(args.topic)
+            if args.json:
+                _emit_json(
+                    "help",
+                    {
+                        "topic": args.topic,
+                        "help_text": help_text,
+                    },
+                    output_path=output_path,
+                )
+                return
+            print(help_text)
+            return
+
+        if command == "demo-profile":
+            payload = _load_example_json("public_demo_profile.json")
+            if args.json:
+                _emit_json("demo-profile", {"profile": payload}, output_path=output_path)
+                return
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return
+
+        if command == "doctor":
+            payload = _doctor_checks()
+            if args.json:
+                _emit_json("doctor", payload, output_path=output_path)
+                return
+            print(f"ready_for_cli: {payload['ready_for_cli']}")
+            print(f"ready_for_retrieval: {payload['ready_for_retrieval']}")
+            for check in payload["checks"]:
+                print(f"- {check['name']}: {'PASS' if check['passed'] else 'FAIL'}")
+            return
+
+        if command == "init":
             PATHS.ensure_dirs()
             if args.json:
                 _emit_json(
                     "init",
                     {
+                        "data_root": str(PATHS.data_dir),
                         "created_dirs": {
                             "data_input": str(PATHS.data_input),
                             "data_documents": str(PATHS.data_documents),
@@ -313,12 +580,13 @@ def main() -> None:
                             "data_eval": str(PATHS.data_eval),
                         }
                     },
+                    output_path=output_path,
                 )
                 return
             print("Created MVP data directories.")
             return
 
-        if args.command == "extract-native":
+        if command == "extract-native":
             pdf_value = _require_arg(args.pdf, "--pdf", "extract-native")
             PATHS.ensure_dirs()
             pdf_path = _resolve_pdf_path(pdf_value)
@@ -344,6 +612,7 @@ def main() -> None:
                         "saved_native_json": str(native_path),
                         "saved_document_json": str(document_path),
                     },
+                    output_path=output_path,
                 )
                 return
             print(f"Processed: {pdf_path.name}")
@@ -358,7 +627,7 @@ def main() -> None:
             print(f"saved_document_json: {document_path}")
             return
 
-        if args.command == "chunk-document":
+        if command == "chunk-document":
             doc_id = _require_arg(args.doc_id, "--doc-id", "chunk-document")
             PATHS.ensure_dirs()
             native_path, document_path = _resolve_document_paths(doc_id)
@@ -378,6 +647,7 @@ def main() -> None:
                         "first_chunk_file": str(saved_paths[0]) if saved_paths else None,
                         "last_chunk_file": str(saved_paths[-1]) if saved_paths else None,
                     },
+                    output_path=output_path,
                 )
                 return
             print(f"Chunked document: {document.source_pdf}")
@@ -389,7 +659,7 @@ def main() -> None:
                 print(f"last_chunk_file: {saved_paths[-1]}")
             return
 
-        if args.command == "build-index":
+        if command == "build-index":
             PATHS.ensure_dirs()
             doc_ids = _load_doc_ids_with_chunks(args.doc_id)
             chunks = []
@@ -415,6 +685,7 @@ def main() -> None:
                         "embedding_model": manifest["embedding_model"],
                         "index_dir": str(index_dir),
                     },
+                    output_path=output_path,
                 )
                 return
             print(f"Indexed doc IDs: {', '.join(doc_ids)}")
@@ -425,9 +696,9 @@ def main() -> None:
             print(f"index_dir: {index_dir}")
             return
 
-        if args.command in {"run-workflow", "smoke-check"}:
-            pdf_value = _require_arg(args.pdf, "--pdf", args.command)
-            query = _require_arg(args.query, "--query", args.command)
+        if command in {"run-workflow", "smoke-check"}:
+            pdf_value = _require_arg(args.pdf, "--pdf", command)
+            query = _require_arg(args.query, "--query", command)
             PATHS.ensure_dirs()
             pdf_path = _resolve_pdf_path(pdf_value)
             workflow_index_dir = (
@@ -493,7 +764,7 @@ def main() -> None:
                 },
                 "answer": _grounded_answer_payload(answer),
             }
-            if args.command == "smoke-check":
+            if command == "smoke-check":
                 checks = _smoke_checks(payload)
                 smoke_payload = {
                     **payload,
@@ -501,7 +772,7 @@ def main() -> None:
                     "all_pass": all(item["passed"] for item in checks),
                 }
                 if args.json:
-                    _emit_json("smoke-check", smoke_payload)
+                    _emit_json("smoke-check", smoke_payload, output_path=output_path)
                     return
                 print(f"Smoke check for: {pdf_path.name}")
                 for item in checks:
@@ -509,7 +780,7 @@ def main() -> None:
                 print(f"all_pass: {all(item['passed'] for item in checks)}")
                 return
             if args.json:
-                _emit_json("run-workflow", payload)
+                _emit_json("run-workflow", payload, output_path=output_path)
                 return
             print(f"Workflow complete for: {pdf_path.name}")
             print(f"doc_id: {document.doc_id}")
@@ -518,7 +789,7 @@ def main() -> None:
             print(format_grounded_answer(answer))
             return
 
-        if args.command == "list-documents":
+        if command == "list-documents":
             PATHS.ensure_dirs()
             entries = shortlist_documents(args.query, limit=args.k if args.query else 20) if args.query else list(load_document_inventory())[:20]
             if args.json:
@@ -529,6 +800,7 @@ def main() -> None:
                         "count": len(entries),
                         "documents": [_document_payload(entry) for entry in entries],
                     },
+                    output_path=output_path,
                 )
                 return
             print(f"documents: {len(entries)}")
@@ -539,7 +811,7 @@ def main() -> None:
                 )
             return
 
-        if args.command == "inspect-document":
+        if command == "inspect-document":
             doc_id = _require_arg(args.doc_id, "--doc-id", "inspect-document")
             PATHS.ensure_dirs()
             entry = get_inventory_entry(doc_id)
@@ -553,13 +825,13 @@ def main() -> None:
                 **_document_payload(entry),
             }
             if args.json:
-                _emit_json("inspect-document", payload)
+                _emit_json("inspect-document", payload, output_path=output_path)
                 return
             for key, value in payload.items():
                 print(f"{key}: {value}")
             return
 
-        if args.command == "plan-query":
+        if command == "plan-query":
             query = _require_arg(args.query, "--query", "plan-query")
             PATHS.ensure_dirs()
             plan = plan_query(query)
@@ -573,13 +845,13 @@ def main() -> None:
                 "preferred_doc_id": plan.preferred_doc_id,
             }
             if args.json:
-                _emit_json("plan-query", payload)
+                _emit_json("plan-query", payload, output_path=output_path)
                 return
             for key, value in payload.items():
                 print(f"{key}: {value}")
             return
 
-        if args.command == "retrieve":
+        if command == "retrieve":
             query = _require_arg(args.query, "--query", "retrieve")
             PATHS.ensure_dirs()
             index_dir = _resolve_index_dir(args.index_dir, PATHS.data_index)
@@ -595,6 +867,7 @@ def main() -> None:
                         "hit_count": len(hits),
                         "hits": [_chunk_payload(chunk) for chunk in hits],
                     },
+                    output_path=output_path,
                 )
                 return
             print(f"query: {query}")
@@ -608,7 +881,7 @@ def main() -> None:
                 print(f"   {preview}")
             return
 
-        if args.command == "retrieve-expanded":
+        if command == "retrieve-expanded":
             query = _require_arg(args.query, "--query", "retrieve-expanded")
             PATHS.ensure_dirs()
             index_dir = _resolve_index_dir(args.index_dir, PATHS.data_index)
@@ -631,6 +904,7 @@ def main() -> None:
                         "top_k_hits": [_chunk_payload(chunk) for chunk in hits],
                         "expanded_hits": [_chunk_payload(chunk) for chunk in expanded],
                     },
+                    output_path=output_path,
                 )
                 return
             print(f"query: {query}")
@@ -654,7 +928,7 @@ def main() -> None:
                 print(f"   {preview}")
             return
 
-        if args.command == "answer-query":
+        if command == "answer-query":
             query = _require_arg(args.query, "--query", "answer-query")
             PATHS.ensure_dirs()
             index_dir = _resolve_index_dir(args.index_dir, PATHS.data_index)
@@ -666,12 +940,12 @@ def main() -> None:
                 k=args.k,
             )
             if args.json:
-                _emit_json("answer-query", _grounded_answer_payload(result))
+                _emit_json("answer-query", _grounded_answer_payload(result), output_path=output_path)
                 return
             print(format_grounded_answer(result))
             return
 
-        if args.command == "evaluate-mvp":
+        if command == "evaluate-mvp":
             PATHS.ensure_dirs()
             eval_path = Path(args.eval_file).expanduser().resolve() if args.eval_file else None
             if eval_path is None:
@@ -696,6 +970,7 @@ def main() -> None:
                         "deferred_feature_decisions": report.get("deferred_feature_decisions", {}),
                         "slice_stability": report.get("slice_stability", {}),
                     },
+                    output_path=output_path,
                 )
                 return
             print(f"Evaluation file: {eval_path}")
@@ -742,7 +1017,7 @@ def main() -> None:
                     print(f"slice_stability_failed_labels: {', '.join(failed)}")
             return
 
-        if args.command == "evaluate-regression":
+        if command == "evaluate-regression":
             PATHS.ensure_dirs()
             eval_path = Path(args.eval_file).expanduser().resolve() if args.eval_file else None
             case_ids = None
@@ -770,6 +1045,7 @@ def main() -> None:
                         "missing_case_ids": report.get("missing_case_ids", []),
                         "failed_case_ids": report.get("failed_case_ids", []),
                     },
+                    output_path=output_path,
                 )
                 return
             print(f"Regression report saved to: {report_path}")
@@ -787,10 +1063,10 @@ def main() -> None:
                 print(f"Failed case IDs: {', '.join(failed)}")
             return
 
-        raise CliError("unknown_command", f"Unknown command: {args.command}", {"command": args.command})
+        raise CliError("unknown_command", f"Unknown command: {command}", {"command": command})
     except CliError as error:
         if _wants_json(argv):
-            _emit_error_json(locals().get("command"), error)
+            _emit_error_json(locals().get("command"), error, output_path=locals().get("output_path"))
         else:
             print(f"Error [{error.code}]: {error.message}", file=sys.stderr)
             if error.details:

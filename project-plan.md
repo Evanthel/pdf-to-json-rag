@@ -340,15 +340,32 @@ Outcome:
 - the project now has a packageable CLI, a first-run smoke path, and stable output/error contracts for the user-facing commands
 - the repo is closer to a first public tool release and less dependent on internal benchmark knowledge
 
-## 6.29. v1.29 Plan
+## 6.29-6.33. Public Release Hardening
 
-The next iteration should focus on public-release hardening rather than benchmark growth.
+These five iterations focused on making the repo usable as a first public local tool rather than extending the benchmark.
 
-1. Add a minimal automated tool-facing smoke test that runs against the packaged CLI surface, not only the internal regression harness.
-2. Tighten command help text and argument ergonomics for the public commands (`extract-native`, `chunk-document`, `build-index`, `inspect-document`, `plan-query`, `answer-query`, `smoke-check`).
-3. Add one compact public-safe demo profile so the README quickstart can point to a stable example set instead of only generic placeholders.
-4. Separate user-facing CLI docs from internal evaluation/debug docs more clearly.
-5. Revisit whether any deferred feature is actually required for `v0.1`, and keep them deferred unless the release-hardening pass exposes a concrete user-facing failure.
+Completed scope:
+
+1. Added an isolated `PDF_TO_JSON_RAG_DATA_DIR` path so the CLI and smoke tests can run outside the repo-local benchmark workspace.
+2. Added automated public-surface smoke tests that generate a tiny PDF and validate the packaged CLI flow end to end.
+3. Tightened command ergonomics with user-facing help, aliases, `doctor`, `demo-profile`, and optional `--output` JSON export.
+4. Split public CLI onboarding docs from internal evaluation/debug docs.
+5. Re-ran the public CLI checks, core regression shards, and the full benchmark after the release-facing pass.
+
+Outcome:
+
+- the repo is now materially closer to a first public `v0.1` than to another internal benchmark sprint
+- the release surface is cleaner, more testable, and less dependent on the existing local workspace state
+
+## 6.34. v1.34 Plan
+
+The next iteration should focus on making the public release flow fully copy-pasteable and tag-ready.
+
+1. Add a `create-demo-pdf` command so the quickstart can run without asking the user for any external PDF.
+2. Add a single `release-check` command or script that combines the public-surface smoke tests with the key regression shards.
+3. Tighten `doctor` so it distinguishes optional benchmark assets from required public-tool assets more clearly.
+4. Add a minimal release-note / `v0.1` checklist path for publishing the first public version on GitHub.
+5. Re-check deferred features one more time from the perspective of public users, not internal benchmark coverage.
 
 
 ## 7. Explicitly Deferred
