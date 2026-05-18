@@ -115,6 +115,26 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self._run("init", "--json")
         generated_pdf = self.workspace / "generated-demo.pdf"
         self._run("create-demo-pdf", "--path", str(generated_pdf), "--format", "json")
+        extract = self._run(
+            "extract-native",
+            "--pdf",
+            str(generated_pdf),
+            "--format",
+            "json",
+        )
+        extract_payload = json.loads(extract.stdout)
+        doc_id = extract_payload["result"]["doc_id"]
+        inspect_payload = json.loads(
+            self._run(
+                "inspect-document",
+                "--doc-id",
+                doc_id,
+                "--format",
+                "json",
+            ).stdout
+        )
+        self.assertTrue(inspect_payload["ok"])
+        self.assertEqual(inspect_payload["result"]["doc_id"], doc_id)
         smoke = self._run(
             "smoke-check",
             "--pdf",
@@ -141,6 +161,10 @@ class CliPublicSurfaceTests(unittest.TestCase):
         answer_payload = json.loads(answer.stdout)
         self.assertTrue(answer_payload["ok"])
         self.assertTrue(answer_payload["result"]["answer"])
+        self.assertNotIn(
+            "No grounded answer could be assembled",
+            answer_payload["result"]["answer"],
+        )
         self.assertEqual(
             answer_payload["result"]["answer_trace"]["answer_mode"],
             "document_overview",

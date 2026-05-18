@@ -305,6 +305,15 @@ def _resolve_index_dir(value: str | None, default: Path) -> Path:
     return Path(value).expanduser().resolve() if value else default
 
 
+def _default_public_index_dir() -> Path:
+    workflow_smoke_dir = PATHS.data_index / "workflow_smoke"
+    if not (PATHS.data_index / "index_manifest.json").exists() and (
+        workflow_smoke_dir / "index_manifest.json"
+    ).exists():
+        return workflow_smoke_dir
+    return PATHS.data_index
+
+
 def _resolve_optional_path(value: str | None, default: Path) -> Path:
     return Path(value).expanduser().resolve() if value else default
 
@@ -768,7 +777,11 @@ def _doctor_checks() -> dict[str, object]:
         "plan_query.example.json",
         "answer_query.example.json",
     ]
-    manifest_path = PATHS.data_index / "index_manifest.json"
+    manifest_candidates = [
+        PATHS.data_index / "index_manifest.json",
+        PATHS.data_index / "workflow_smoke" / "index_manifest.json",
+    ]
+    selected_manifest = next((path for path in manifest_candidates if path.exists()), manifest_candidates[0])
     inventory = load_document_inventory()
     checks: list[dict[str, object]] = [
         {
@@ -824,9 +837,12 @@ def _doctor_checks() -> dict[str, object]:
         },
         {
             "name": "index_manifest_available",
-            "passed": manifest_path.exists(),
+            "passed": any(path.exists() for path in manifest_candidates),
             "category": "internal_benchmark",
-            "details": {"manifest_path": str(manifest_path)},
+            "details": {
+                "manifest_path": str(selected_manifest),
+                "manifest_candidates": [str(path) for path in manifest_candidates],
+            },
         },
     ]
     ready_for_public_cli = all(
@@ -1148,7 +1164,7 @@ def main() -> None:
                         {"doc_id": doc_id, "chunk_dir": str(chunk_dir)},
                     )
                 chunks.extend(load_chunk_records(chunk_dir))
-            index_dir = _resolve_index_dir(args.index_dir, PATHS.data_index)
+            index_dir = _resolve_index_dir(args.index_dir, _default_public_index_dir())
             manifest = build_local_index(chunks=chunks, index_dir=index_dir)
             if json_output:
                 _emit_json(
@@ -1330,7 +1346,7 @@ def main() -> None:
         if command == "retrieve":
             query = _require_arg(args.query, "--query", "retrieve")
             PATHS.ensure_dirs()
-            index_dir = _resolve_index_dir(args.index_dir, PATHS.data_index)
+            index_dir = _resolve_index_dir(args.index_dir, _default_public_index_dir())
             _validate_index_dir(index_dir)
             hits = retrieve_top_k(query=query, index_dir=index_dir, k=args.k)
             if json_output:
@@ -1360,7 +1376,7 @@ def main() -> None:
         if command == "retrieve-expanded":
             query = _require_arg(args.query, "--query", "retrieve-expanded")
             PATHS.ensure_dirs()
-            index_dir = _resolve_index_dir(args.index_dir, PATHS.data_index)
+            index_dir = _resolve_index_dir(args.index_dir, _default_public_index_dir())
             _validate_index_dir(index_dir)
             hits, expanded = retrieve_top_k_with_neighbors(
                 query=query,
@@ -1407,7 +1423,7 @@ def main() -> None:
         if command == "answer-query":
             query = _require_arg(args.query, "--query", "answer-query")
             PATHS.ensure_dirs()
-            index_dir = _resolve_index_dir(args.index_dir, PATHS.data_index)
+            index_dir = _resolve_index_dir(args.index_dir, _default_public_index_dir())
             _validate_index_dir(index_dir)
             result = answer_query_with_retrieval(
                 query=query,

@@ -2,6 +2,8 @@
 
 Local-first, domain-agnostic PDF-to-JSON RAG tool for turning PDFs into structured JSON, routing queries across documents, and returning grounded CLI answers.
 
+![Public CLI readiness check](./pdf_json_gh_repo.png)
+
 ## Lineage
 
 This repo is a personal implementation inspired by:
@@ -17,29 +19,11 @@ This codebase is intentionally separate from that fork. The fork captures the ba
 
 ## Current Status
 
-Current version: `v1.41`
+Current public release target: `0.1.0-beta`
 
-The tool currently runs end to end across a mixed benchmark of review papers, OCR-derived scans, technical manuals, questionnaires, checklist-style appendices, non-medical books, open guidance notes, and short model-report style documents.
+Internal development iterations in this repo use `v1.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
 
-It supports both:
-
-- single-document grounded evidence questions
-- cross-document queries such as source listing and source comparison
-- document-discovery queries such as “what does this file cover?” and “which file is most relevant for X?”
-- document-facet queries such as “what kind of document is this?” and “what is its purpose?”
-- document-family queries such as “is this a manual, guidance note, model report, or book?”
-- source-justification queries such as “why is this the best source?”
-- ambiguity-aware routing queries that should surface more than one relevant source
-- query-planned paths that separate evidence lookup, document discovery, cross-document comparison, and document-facet questions before retrieval
-- normalized answer contracts for overview, routing, comparison, and evidence-style answers
-- inventory-level coverage summaries and relationship reasoning for document-level and cross-document answers
-- tool-oriented inspection paths such as document listing, document inspection, query planning, and JSON answer output
-- a packaged CLI entry path for `python -m pdf_to_json_rag` and `pdf-to-json-rag`
-- a packaged smoke-check path for first-run validation
-- public-safe example JSON outputs for inspect / plan / answer command shapes
-- an isolated `PDF_TO_JSON_RAG_DATA_DIR` path for testing and local tool use without polluting the repo workspace
-- public release helpers such as `doctor`, `demo-profile`, `create-demo-pdf`, `package-check`, `release-check`, command aliases, and `--output` JSON export
-- a recommended first public release tag of `v0.1.0-beta` once `release-check` passes, including the packaged-install gate
+The current tool runs end to end across a mixed local benchmark that includes native-text papers, OCR-derived scans, technical manuals, questionnaires, checklist-style appendices, books, guidance notes, and short model-report documents.
 
 Current benchmark snapshot:
 
@@ -52,48 +36,27 @@ Current benchmark snapshot:
 - `negative_success_rate`: `1.0`
 - `warning_case_count`: `0`
 
-## What Works
+## Capabilities
 
-- Native PDF extraction with `PyMuPDF`
-- OCR fallback for weak or missing native text using `pytesseract`
-- Document-level JSON output in `data/documents/`
-- Chunk generation with reading-order preservation, section detection, overflow splitting, noise filtering, and OCR provenance
-- Local vector indexing with `ChromaDB`
-- Retrieval with intent-aware reranking, chunk quality labels, source-aware locking, and cross-document source matching
-- Adjacent-chunk expansion for context reconstruction
-- Grounded answer assembly with explicit evidence citations and structured answer traces
-- Cross-document source-listing and comparison answers
-- Lightweight document-overview, document-routing, and source-justification answers
-- Extraction-time summary cues for document-level overview answers
-- Extraction-time `discovery_terms` for source selection and mixed-domain routing
-- Extraction-time document facets for type, purpose, audience, evidence style, and structure style
-- Shared document-semantics interpretation for facets, coverage summaries, and inventory summaries
-- Reusable inventory summaries derived from extraction-time metadata
-- Reusable coverage summaries and coverage terms for routing and overview behavior
-- Extraction-time document-family classification for books, guidance notes, model reports, manuals, forms, and clinical references
-- Extraction-time block metadata for block kind, token density, line count, and structural flags across native and OCR paths
-- Chunk-level semantic metadata such as semantic terms, content hints, and source block kinds carried into the index
-- Query planning that separates evidence lookup, document discovery, cross-document comparison, and document-facet questions
-- Explicit answer modes for overview, routing, source-listing, source-justification, comparison, and evidence lookup
-- Inventory-first document shortlisting before chunk-level retrieval
-- Retrieval bonuses that align structural references such as `Appendix B`, `Table 3-4`, and `Question 9` with the right chunks
-- Lightweight answer contracts that make document-level and cross-document answer paths more inspectable
-- Coverage-aware evidence selection that prefers complementary support over repeated high-score fragments
-- Relationship reasoning for overlap, complement, and divergence between sources
-- Ambiguity-aware multi-source routing for mixed-domain discovery queries
-- Tool-facing CLI paths for listing documents, inspecting document metadata, planning queries, and returning JSON answers
-- A packaged project entry path through `pyproject.toml`, `python -m pdf_to_json_rag`, and the `pdf-to-json-rag` console script
-- A `smoke-check` command that validates the packaged end-to-end workflow path
-- A `create-demo-pdf` command that generates a public-safe sample PDF for quickstart and smoke checks
-- A `release-check` command that combines public-surface smoke validation with key maintainer regression shards
-- A `package-check` command that builds a wheel and verifies the packaged CLI from a clean temporary install root
-- A `--format text|json` option for the public CLI surface, in addition to `--json`
-- Stable CLI error envelopes for missing inputs, missing index state, and argument errors
-- A `doctor` command that separates required public-tool readiness from optional OCR support and internal benchmark readiness
-- A `demo-profile` command that exposes the public-safe onboarding flow
-- Optional JSON export with `--output /path/to/file.json`
-- Multi-document evaluation with regression shards, per-case debug snapshots, slice summaries, rerank comparison, and deferred-feature decision checkpoints
-- Automated public-surface CLI smoke tests that run against an isolated temporary data root
+- Extract native-text PDFs into document-level and chunk-level JSON artifacts.
+- Fall back to OCR with `pytesseract` when native extraction is weak or missing.
+- Build a local vector index with `ChromaDB`.
+- Answer single-document evidence questions with grounded citations.
+- Route document-level and cross-document queries such as:
+  - `What does this file cover?`
+  - `What kind of document is this?`
+  - `Which file is most relevant for X?`
+  - `Why is this the best source?`
+  - `What do these sources have in common or how do they differ?`
+- Expose inspection and planning paths through a packaged CLI:
+  - `list-documents`
+  - `inspect-document`
+  - `plan-query`
+  - `answer-query`
+  - `run-workflow`
+  - `smoke-check`
+  - `package-check`
+  - `release-check`
 
 ## Workflow
 
@@ -107,17 +70,13 @@ Current benchmark snapshot:
 8. Assemble a grounded answer from the expanded context, or a source-level / document-level answer for source discovery, comparison, overview, routing, and facet questions
 9. Evaluate the result on the full benchmark or on a smaller regression shard
 
-## How to Run
-
-Minimal local flow:
+## Quickstart
 
 ```bash
 pip install -e .
 export PDF_TO_JSON_RAG_DATA_DIR=/tmp/pdf-to-json-rag-data
 pdf-to-json-rag init --json
 pdf-to-json-rag doctor --json
-pdf-to-json-rag package-check --json
-pdf-to-json-rag demo-profile --json
 pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
 pdf-to-json-rag extract-native --pdf /tmp/pdf-to-json-rag-demo.pdf --json
 pdf-to-json-rag chunk-document --doc-id your-doc-id --json
@@ -125,54 +84,25 @@ pdf-to-json-rag build-index --doc-id your-doc-id --json
 pdf-to-json-rag answer-query --query "What does this file cover?" --json
 ```
 
-Retrieve without answer assembly:
+First-release validation:
 
 ```bash
-pdf-to-json-rag retrieve --query "How are common cold infections transmitted?" --k 5 --json
-```
-
-Build one local index across multiple extracted documents:
-
-```bash
-pdf-to-json-rag build-index --doc-id doc-a,doc-b --json
-```
-
-Run the full benchmark:
-
-```bash
-pdf-to-json-rag evaluate-mvp --k 5 --json
-```
-
-Run a smaller regression shard:
-
-```bash
-pdf-to-json-rag evaluate-regression --k 5 --shard cross_document_core --json
-```
-
-Inspect document inventory and planning paths:
-
-```bash
-pdf-to-json-rag list-documents --json
-pdf-to-json-rag inspect-document --doc-id common-cold-clinincal-evidence --json
-pdf-to-json-rag plan-query --query "Which file is most relevant for drought triggers?" --json
-pdf-to-json-rag answer-query --query "What does this file cover?" --json
-pdf-to-json-rag run-workflow --pdf /path/to/file.pdf --query "What does this file cover?" --json
+pdf-to-json-rag package-check --json
 pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 pdf-to-json-rag release-check --json
 ```
 
-Write JSON output to a file:
+More detailed usage lives in:
 
-```bash
-pdf-to-json-rag answer-query --query "What does this file cover?" --json --output answer.json
-```
+- [docs/CLI_QUICKSTART.md](./docs/CLI_QUICKSTART.md)
+- [docs/CLI_REFERENCE.md](./docs/CLI_REFERENCE.md)
 
 ## Key Files
 
 - `project-plan.md`
   Scope, milestones, and deferred items.
-- `WORK_LOG.md`
-  High-level implementation log and smoke-test history.
+- `DEVELOPMENT_LOG.md`
+  Internal engineering log and implementation history.
 - `src/pdf_to_json_rag/`
   Extraction, chunking, indexing, retrieval, answering, and evaluation code.
 - `data/eval/mvp_eval_cases.json`
@@ -247,32 +177,3 @@ This repo was brainstormed with ideas from:
 Earlier in development, a small set of course notebooks from [Document AI: From OCR to Agentic Doc Extraction](https://learn.deeplearning.ai/courses/document-ai-from-ocr-to-agentic-doc-extraction/information) was copied into a temporary `references/` folder and used only as design input for OCR fallback planning, reading-order/layout handling, schema design, and grounding-aware RAG flow.
 
 Those reference notebooks were removed from the final repo structure. The current codebase is a separate local implementation rather than a notebook-derived copy.
-
-## Version Log
-
-### v1.0-v1.13
-
-- established the local-first extraction, chunking, indexing, grounded-answering, and early evaluation core
-- expanded from single-document evidence lookup to structured-form handling and initial cross-document behavior
-
-### v1.14-v1.21
-
-- shifted the repo toward document discovery, overview, routing, source justification, and comparison
-- added document facets, document families, query planning, answer modes, and document-level answer contracts
-
-### v1.22-v1.28
-
-- consolidated document semantics and inventory-first routing
-- turned the repo into a packageable CLI tool with `run-workflow`, `smoke-check`, and public-safe example assets
-
-### v1.29-v1.38
-
-- hardened the public CLI surface with isolated data roots, smoke tests, and release helpers
-- strengthened processing and retrieval with block metadata, chunk semantics, structural alignment, and coverage-aware evidence selection
-
-### v1.39-v1.41
-
-- made the public quickstart self-contained with `create-demo-pdf`
-- added `release-check` and `package-check` for public-surface and packaged-install validation
-- tightened `doctor`, output formatting, and public release artifacts
-- confirmed the first public release should ship as `v0.1.0-beta`

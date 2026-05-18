@@ -2,6 +2,8 @@
 
 _This plan was brainstormed with [DeepLearning.AI / Skill Builder](https://skillbuilder.deeplearning.ai/) and ChatGPT 5.4, then narrowed into a local-first MVP._
 
+Internal development iterations in this plan use `v1.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
+
 ## 1. Document Processing: PDF to Structured JSON
 
 - Hybrid Extraction:

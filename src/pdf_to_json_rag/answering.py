@@ -2506,20 +2506,28 @@ def answer_from_chunks(query: str, chunks: list[ChunkRecord]) -> GroundedAnswer:
         chunks=chunks,
         max_sentences=_answer_sentence_budget(query),
     )
-    if _should_abstain(query, evidence):
+    mode_answer, mode_trace = _document_mode_answer(
+        query=query,
+        query_intent=query_intent,
+        top_k_hits=chunks,
+        evidence=evidence,
+        chunk_root=Path("."),
+    )
+    if _should_abstain(query, evidence) and not mode_answer:
         answer = NO_GROUNDED_ANSWER
         answer_trace = _base_answer_trace(query=query, query_intent=query_intent, evidence=evidence)
     else:
         structured_answer, structured_trace = _format_structured_answer(query_intent, evidence)
-        answer = structured_answer or _compress_sentences(evidence)
+        answer = mode_answer or structured_answer or _compress_sentences(evidence)
+        trace_source = mode_trace or structured_trace
         answer_trace = _base_answer_trace(
             query=query,
             query_intent=query_intent,
             evidence=evidence,
-            template_id=structured_trace.get("template_id") if structured_trace else None,
-            matched_pattern=structured_trace.get("matched_pattern") if structured_trace else None,
-            matched_cues=structured_trace.get("matched_cues") if structured_trace else None,
-            answer_contract=structured_trace.get("answer_contract") if structured_trace else None,
+            template_id=trace_source.get("template_id") if trace_source else None,
+            matched_pattern=trace_source.get("matched_pattern") if trace_source else None,
+            matched_cues=trace_source.get("matched_cues") if trace_source else None,
+            answer_contract=trace_source.get("answer_contract") if trace_source else None,
         )
     return GroundedAnswer(
         query=query,
@@ -2576,17 +2584,17 @@ def answer_query_with_retrieval(
         chunks=answer_chunks,
         max_sentences=_answer_sentence_budget(query),
     )
-    if _should_abstain(query, evidence):
+    mode_answer, mode_trace = _document_mode_answer(
+        query=query,
+        query_intent=query_intent,
+        top_k_hits=top_k_hits,
+        evidence=evidence,
+        chunk_root=chunk_root,
+    )
+    if _should_abstain(query, evidence) and not mode_answer:
         answer = NO_GROUNDED_ANSWER
         answer_trace = _base_answer_trace(query=query, query_intent=query_intent, evidence=evidence)
     else:
-        mode_answer, mode_trace = _document_mode_answer(
-            query=query,
-            query_intent=query_intent,
-            top_k_hits=top_k_hits,
-            evidence=evidence,
-            chunk_root=chunk_root,
-        )
         structured_answer, structured_trace = _format_structured_answer(query_intent, evidence)
         answer = mode_answer or structured_answer or _compress_sentences(evidence)
         trace_source = mode_trace or structured_trace

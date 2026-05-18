@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 import re
 
+from .config import PATHS
 from .document_semantics import (
     build_inventory_summary,
     interpret_document_semantics,
@@ -129,7 +130,7 @@ def _entry_semantic_terms(entry: DocumentInventoryEntry) -> set[str]:
 def load_document_inventory() -> tuple[DocumentInventoryEntry, ...]:
     from .intent_config import get_document_profile
 
-    documents_dir = Path(__file__).resolve().parents[2] / "data" / "documents"
+    documents_dir = PATHS.data_documents
     entries: list[DocumentInventoryEntry] = []
     if not documents_dir.exists():
         return tuple(entries)
