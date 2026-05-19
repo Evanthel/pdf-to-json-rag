@@ -1,0 +1,21 @@
+{
+  "command": "plan-query",
+  "version": "0.1.0",
+  "ok": true,
+  "result": {
+    "query": "Which file is most relevant for drought triggers?",
+    "query_class": "document_discovery",
+    "query_intent": "document_routing",
+    "answer_mode": "document_routing",
+    "inventory_doc_ids": [
+      "model-report-chad-drought-anticipatory-action-trigger",
+      "niger-aa-trigger-for-drought-model-report",
+      "model-report-bfa-aa",
+      "510-philippines-typhoon-model-report"
+    ],
+    "matched_doc_ids": [
+      "model-report-chad-drought-anticipatory-action-trigger"
+    ],
+    "preferred_doc_id": "model-report-chad-drought-anticipatory-action-trigger"
+  }
+}

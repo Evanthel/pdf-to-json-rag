@@ -1,0 +1,56 @@
+{
+  "workflow": [
+    {
+      "step": "init",
+      "command": "pdf-to-json-rag init --json"
+    },
+    {
+      "step": "doctor",
+      "command": "pdf-to-json-rag doctor --json"
+    },
+    {
+      "step": "package-check",
+      "command": "pdf-to-json-rag package-check --json"
+    },
+    {
+      "step": "create-demo-pdf",
+      "command": "pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json"
+    },
+    {
+      "step": "extract-native",
+      "command": "pdf-to-json-rag extract-native --pdf /tmp/pdf-to-json-rag-demo.pdf --json"
+    },
+    {
+      "step": "chunk-document",
+      "command": "pdf-to-json-rag chunk-document --doc-id your-doc-id --json"
+    },
+    {
+      "step": "build-index",
+      "command": "pdf-to-json-rag build-index --doc-id your-doc-id --json"
+    },
+    {
+      "step": "inspect-document",
+      "command": "pdf-to-json-rag inspect-document --doc-id your-doc-id --json"
+    },
+    {
+      "step": "plan-query",
+      "command": "pdf-to-json-rag plan-query --query \"What does this file cover?\" --json"
+    },
+    {
+      "step": "answer-query",
+      "command": "pdf-to-json-rag answer-query --query \"What does this file cover?\" --json"
+    },
+    {
+      "step": "run-workflow",
+      "command": "pdf-to-json-rag run-workflow --pdf /tmp/pdf-to-json-rag-demo.pdf --query \"What does this file cover?\" --json"
+    },
+    {
+      "step": "release-check",
+      "command": "pdf-to-json-rag release-check --json"
+    }
+  ],
+  "notes": [
+    "These commands are public-safe examples and do not rely on private benchmark PDFs.",
+    "The JSON output contracts are intended for downstream scripting and tool integration."
+  ]
+}

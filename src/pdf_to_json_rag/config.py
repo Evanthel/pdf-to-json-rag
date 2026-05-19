@@ -3,10 +3,12 @@
 from dataclasses import dataclass
 import os
 from pathlib import Path
+import sys
 
 
 DATA_DIR_ENV = "PDF_TO_JSON_RAG_DATA_DIR"
 PROJECT_ROOT_ENV = "PDF_TO_JSON_RAG_PROJECT_ROOT"
+PROJECT_NAME = "pdf-to-json-rag"
 
 
 @dataclass(frozen=True)
@@ -54,10 +56,40 @@ class ProjectPaths:
         ):
             path.mkdir(parents=True, exist_ok=True)
 
+
+def _find_project_root(start: Path) -> Path | None:
+    current = start.resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "pyproject.toml").exists() and (candidate / "src" / "pdf_to_json_rag").exists():
+            return candidate
+    return None
+
+
+def _default_user_data_dir() -> Path:
+    home = Path.home()
+    if sys.platform == "darwin":
+        return home / "Library" / "Application Support" / PROJECT_NAME
+    if os.name == "nt":
+        appdata = os.getenv("APPDATA")
+        if appdata:
+            return Path(appdata) / PROJECT_NAME
+        return home / "AppData" / "Roaming" / PROJECT_NAME
+    xdg_data_home = os.getenv("XDG_DATA_HOME")
+    if xdg_data_home:
+        return Path(xdg_data_home).expanduser().resolve() / PROJECT_NAME
+    return home / ".local" / "share" / PROJECT_NAME
+
+
 def _resolve_project_root() -> Path:
     configured_root = os.getenv(PROJECT_ROOT_ENV)
     if configured_root:
         return Path(configured_root).expanduser().resolve()
+    cwd_root = _find_project_root(Path.cwd())
+    if cwd_root is not None:
+        return cwd_root
+    module_root = _find_project_root(Path(__file__).resolve())
+    if module_root is not None:
+        return module_root
     return Path(__file__).resolve().parents[2]
 
 
@@ -67,7 +99,9 @@ def _resolve_paths() -> ProjectPaths:
     if configured_data_dir:
         data_dir = Path(configured_data_dir).expanduser().resolve()
         return ProjectPaths.from_data_dir(project_root, data_dir)
-    return ProjectPaths.from_root(project_root)
+    if (project_root / "pyproject.toml").exists():
+        return ProjectPaths.from_root(project_root)
+    return ProjectPaths.from_data_dir(project_root, _default_user_data_dir())
 
 
 PROJECT_ROOT = _resolve_project_root()

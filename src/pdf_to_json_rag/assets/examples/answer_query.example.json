@@ -1,0 +1,101 @@
+{
+  "command": "answer-query",
+  "version": "0.1.0",
+  "ok": true,
+  "result": {
+    "query": "Why is Model Report - Chad Drought Anticipatory Action Trigger the best source for drought triggers?",
+    "query_intent": "source_justification",
+    "answer": "Model Report - Chad Drought Anticipatory Action trigger is the best match because model report; risk or trigger assessment; for analysts; model summary; report sections; it matches cues such as action, anticipatory, chad, drought; it is classified as model report / risk or trigger assessment; it includes sections such as MODEL REPORT:.",
+    "top_k_hits": [
+      {
+        "chunk_id": "model-report-chad-drought-anticipatory-action-trigger-chunk-0002",
+        "doc_id": "model-report-chad-drought-anticipatory-action-trigger",
+        "page_start": 2,
+        "page_end": 2,
+        "section_title": "Model Report:",
+        "preceding_chunk_id": "model-report-chad-drought-anticipatory-action-trigger-chunk-0001",
+        "following_chunk_id": "model-report-chad-drought-anticipatory-action-trigger-chunk-0003",
+        "extraction_method": "native",
+        "quality_score": 1.0,
+        "noise_labels": [],
+        "preview": "Trigger for OCHA Anticipatory Action on Drought in Chad 1. Background This document summarizes the documentation and findings of the peer review..."
+      }
+    ],
+    "expanded_hits": [
+      {
+        "chunk_id": "model-report-chad-drought-anticipatory-action-trigger-chunk-0001",
+        "doc_id": "model-report-chad-drought-anticipatory-action-trigger",
+        "page_start": 1,
+        "page_end": 1,
+        "section_title": "MODEL REPORT: Trigger for OCHA Anticipatory Action on Drought in Chad",
+        "preceding_chunk_id": null,
+        "following_chunk_id": "model-report-chad-drought-anticipatory-action-trigger-chunk-0002",
+        "extraction_method": "native",
+        "quality_score": 1.0,
+        "noise_labels": [],
+        "preview": "Trigger developed by the UN OCHA Centre for Humanitarian Data June 2023"
+      }
+    ],
+    "evidence": [
+      {
+        "chunk_id": "model-report-chad-drought-anticipatory-action-trigger-chunk-0002",
+        "page_start": 2,
+        "page_end": 2,
+        "section_title": "Model Report:",
+        "score": 6.0,
+        "sentence": "Background This document summarizes the documentation and findings of the peer review of the model used by the UN Central Emergency Response Fund to trigger the drought anticipatory action framework in Chad."
+      }
+    ],
+    "answer_trace": {
+      "query_class": "document_discovery",
+      "answer_mode": "source_justification",
+      "query_intent": "source_justification",
+      "source_doc_id": "model-report-chad-drought-anticipatory-action-trigger",
+      "inventory_doc_ids": [
+        "model-report-chad-drought-anticipatory-action-trigger",
+        "niger-aa-trigger-for-drought-model-report",
+        "model-report-bfa-aa",
+        "510-philippines-typhoon-model-report"
+      ],
+      "matched_doc_ids": [
+        "model-report-chad-drought-anticipatory-action-trigger"
+      ],
+      "template_id": "document_level.justification",
+      "matched_pattern": "doc-metadata-justification",
+      "matched_cues": [
+        "Model Report - Chad Drought Anticipatory Action trigger",
+        "model report; risk or trigger assessment; for analysts; model summary; report sections",
+        "action",
+        "anticipatory",
+        "chad",
+        "drought",
+        "MODEL REPORT:"
+      ],
+      "answer_contract": {
+        "mode": "source_justification",
+        "primary_doc_ids": [
+          "model-report-chad-drought-anticipatory-action-trigger"
+        ],
+        "document_families": [
+          "humanitarian_model_report"
+        ],
+        "summary_type": "inventory_summary_plus_cues",
+        "coverage_terms": [
+          "chad",
+          "drought",
+          "anticipatory",
+          "action"
+        ],
+        "matched_terms": [
+          "action",
+          "anticipatory",
+          "chad",
+          "drought"
+        ]
+      },
+      "evidence_chunk_ids": [
+        "model-report-chad-drought-anticipatory-action-trigger-chunk-0002"
+      ]
+    }
+  }
+}

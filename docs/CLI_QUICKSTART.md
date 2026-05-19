@@ -5,12 +5,25 @@ This is the shortest public path through the tool.
 ## Install
 
 ```bash
-pip install -e .
+python -m pip install .
+```
+
+For local development without installing the console script:
+
+```bash
+PYTHONPATH=src python -m pdf_to_json_rag doctor --json
+```
+
+Optional stronger local embeddings:
+
+```bash
+export PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1
 ```
 
 ## Initialize local data directories
 
 ```bash
+export PDF_TO_JSON_RAG_DATA_DIR=/tmp/pdf-to-json-rag-data
 pdf-to-json-rag init --json
 ```
 
@@ -26,31 +39,37 @@ pdf-to-json-rag doctor --json
 pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
 ```
 
-## Run one document through the tool
-
-```bash
-pdf-to-json-rag extract-native --pdf /tmp/pdf-to-json-rag-demo.pdf --json
-pdf-to-json-rag chunk-document --doc-id your-doc-id --json
-pdf-to-json-rag build-index --doc-ids your-doc-id --json
-pdf-to-json-rag inspect-document --doc-id your-doc-id --json
-pdf-to-json-rag plan-query --query "What does this file cover?" --json
-pdf-to-json-rag answer-query --query "What does this file cover?" --json
-```
-
-## Validate the end-to-end path
+## Shortest end-to-end path
 
 ```bash
 pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 ```
 
-## Validate the public release surface
+## Full workflow in one command
+
+```bash
+pdf-to-json-rag run-workflow --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
+```
+
+## Manual step-by-step path
+
+```bash
+pdf-to-json-rag extract-native --pdf /tmp/pdf-to-json-rag-demo.pdf --json
+pdf-to-json-rag chunk-document --doc-id your-doc-id --json
+pdf-to-json-rag build-index --doc-id your-doc-id --json
+pdf-to-json-rag inspect-document --doc-id your-doc-id --json
+pdf-to-json-rag plan-query --query "What does this file cover?" --json
+pdf-to-json-rag answer-query --query "What does this file cover?" --json
+```
+
+## Maintainer release validation
 
 ```bash
 pdf-to-json-rag package-check --json
 pdf-to-json-rag release-check --json
 ```
 
-This returns a single release gate plus a suggested public pre-release tag when the current surface is ready.
+Use these from a source checkout when you want to validate wheel packaging, public smoke behavior, and the current release gates. End users only need `doctor`, `smoke-check`, and `run-workflow`.
 
 ## Public-safe examples
 

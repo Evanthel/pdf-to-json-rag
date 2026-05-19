@@ -9,7 +9,7 @@ from typing import Any
 
 from .answering import GroundedAnswer, answer_query_with_retrieval
 from .intent_config import preferred_source_doc_id as configured_source_doc_id
-from .retrieval import retrieve_top_k
+from .retrieval import retrieve_top_k, retrieve_top_k_with_neighbors
 from .schemas import ChunkRecord
 
 
@@ -895,19 +895,29 @@ def _run_faithfulness_audit(debug_cases: list[dict[str, Any]], audit_case_ids: l
 def evaluate_retrieval_case(
     case: dict,
     index_dir: Path,
+    chunk_root: Path | None,
     k: int,
     use_lightweight_rerank: bool = True,
 ) -> dict:
     """Evaluate retrieval metrics for a single query."""
-    hits = retrieve_top_k(
-        query=case["query"],
-        index_dir=index_dir,
-        k=k,
-        use_lightweight_rerank=use_lightweight_rerank,
-    )
+    if chunk_root is not None:
+        hits, _ = retrieve_top_k_with_neighbors(
+            query=case["query"],
+            index_dir=index_dir,
+            chunk_root=chunk_root,
+            k=k,
+            use_lightweight_rerank=use_lightweight_rerank,
+        )
+    else:
+        hits = retrieve_top_k(
+            query=case["query"],
+            index_dir=index_dir,
+            k=k,
+            use_lightweight_rerank=use_lightweight_rerank,
+        )
     retrieved_ids = [chunk.chunk_id for chunk in hits]
     retrieved_doc_ids = _ordered_unique([chunk.doc_id for chunk in hits])
-    relevant = set(case["relevant_chunk_ids"])
+    relevant = set(case.get("relevant_chunk_ids", []))
     relevant_doc_ids = set(case.get("relevant_doc_ids", []))
     case_type = case.get("case_type", "grounded")
     evaluation_level = "document" if relevant_doc_ids else "chunk"
@@ -1134,12 +1144,13 @@ def run_mvp_evaluation(
             use_lightweight_rerank=True,
         )
         retrieved_ids = [chunk.chunk_id for chunk in grounded_answer.top_k_hits]
-        relevant = set(case["relevant_chunk_ids"])
+        relevant = set(case.get("relevant_chunk_ids", []))
         case_type = case.get("case_type", "grounded")
         baseline_retrieval_results.append(
             evaluate_retrieval_case(
                 case=case,
                 index_dir=index_dir,
+                chunk_root=chunk_root,
                 k=k,
                 use_lightweight_rerank=False,
             )
@@ -1309,7 +1320,7 @@ def run_regression_suite(
     case_results: list[dict[str, Any]] = []
     failed_case_ids: list[str] = []
     for case in selected_cases:
-        retrieval_result = evaluate_retrieval_case(case=case, index_dir=index_dir, k=k)
+        retrieval_result = evaluate_retrieval_case(case=case, index_dir=index_dir, chunk_root=chunk_root, k=k)
         answer_result = evaluate_answer_case(case=case, index_dir=index_dir, chunk_root=chunk_root, k=k)
         status = _regression_case_status(case.get("case_type", "grounded"), retrieval_result, answer_result)
         if status != "pass":

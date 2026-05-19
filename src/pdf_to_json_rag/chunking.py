@@ -7,7 +7,7 @@ from pathlib import Path
 from .content_metadata import classify_block_metadata, derive_chunk_semantics
 from .extraction import ExtractedBlock
 from .quality import TOC_LEADER_RE, PAGE_NUMBER_ONLY_RE, classify_chunk_quality
-from .schemas import ChunkRecord, DocumentRecord
+from .schemas import ChunkRecord, DocumentRecord, DocumentSectionRecord
 
 INLINE_SECTION_RE = re.compile(
     r"^(?P<label>[A-Z][A-Z/\-\s]{2,50})\s+(?P<body>.*[a-z].*)$"
@@ -769,8 +769,11 @@ def _make_chunk_record(
     document: DocumentRecord,
     chunk_number: int,
     blocks: list[ExtractedBlock],
+    section_id: str | None,
     section_title: str | None,
     section_level: int | None,
+    section_summary: str | None,
+    section_coverage_terms: list[str] | None,
 ) -> ChunkRecord:
     text = "\n\n".join(block.text for block in blocks)
     inferred_title = _extract_inline_section_label(blocks[0].text)
@@ -785,6 +788,11 @@ def _make_chunk_record(
             flag for block in blocks for flag in block.structural_flags
         ],
     )
+    if section_coverage_terms:
+        for term in section_coverage_terms:
+            if term not in semantic_terms:
+                semantic_terms.append(term)
+        semantic_terms = semantic_terms[:16]
     noise_labels, quality_score = classify_chunk_quality(
         text=text,
         section_title=resolved_section_title,
@@ -798,8 +806,11 @@ def _make_chunk_record(
         page_start=blocks[0].page_num + 1,
         page_end=blocks[-1].page_num + 1,
         bbox=_merge_bboxes(blocks),
+        section_id=section_id,
         section_title=resolved_section_title,
         section_level=section_level,
+        section_summary=section_summary,
+        section_coverage_terms=list(section_coverage_terms or []),
         chunk_type="text",
         reading_order_index=blocks[0].reading_order_index,
         language=document.detected_language,
@@ -825,6 +836,16 @@ def _link_adjacent_chunks(chunks: list[ChunkRecord]) -> list[ChunkRecord]:
     return chunks
 
 
+def _section_for_block(
+    reading_order_index: int,
+    sections: list[DocumentSectionRecord],
+) -> DocumentSectionRecord | None:
+    for section in sections:
+        if section.reading_order_start <= reading_order_index <= section.reading_order_end:
+            return section
+    return None
+
+
 def chunk_document(
     document: DocumentRecord,
     blocks: list[ExtractedBlock],
@@ -842,9 +863,13 @@ def chunk_document(
     chunk_number = 1
     current_section_title: str | None = document.title
     current_section_level: int | None = 1 if document.title else None
+    current_section_id: str | None = None
+    current_section_summary: str | None = None
+    current_section_coverage_terms: list[str] = []
     in_key_points_summary = False
     last_buffer_page_num: int | None = None
     buffer_treatment_subtopic: str | None = None
+    sections = list(document.sections)
 
     def flush_buffer() -> None:
         nonlocal buffer, buffer_chars, chunk_number, last_buffer_page_num, buffer_treatment_subtopic
@@ -855,8 +880,11 @@ def chunk_document(
                 document=document,
                 chunk_number=chunk_number,
                 blocks=buffer,
+                section_id=current_section_id,
                 section_title=current_section_title,
                 section_level=current_section_level,
+                section_summary=current_section_summary,
+                section_coverage_terms=current_section_coverage_terms,
             )
         )
         chunk_number += 1
@@ -866,7 +894,23 @@ def chunk_document(
         buffer_treatment_subtopic = None
 
     for block in ordered_blocks:
+        section = _section_for_block(block.reading_order_index, sections)
+        if section and section.section_id != current_section_id:
+            flush_buffer()
+            current_section_id = section.section_id
+            current_section_title = section.title
+            current_section_level = section.level
+            current_section_summary = section.summary
+            current_section_coverage_terms = list(section.coverage_terms)
+            in_key_points_summary = False
+
         raw_block_text = _clean_text(block.text)
+        if (
+            section
+            and block.block_kind == "heading"
+            and _normalize_for_match(raw_block_text) == _normalize_for_match(section.title)
+        ):
+            continue
         if _normalize_for_match(raw_block_text) == "key points":
             flush_buffer()
             in_key_points_summary = True
@@ -891,8 +935,11 @@ def chunk_document(
             for inline_heading, scoped_segment in review_section_segments:
                 if inline_heading:
                     flush_buffer()
+                    current_section_id = None
                     current_section_title = inline_heading
                     current_section_level = None
+                    current_section_summary = None
+                    current_section_coverage_terms = []
                     in_key_points_summary = False
 
                 segment = scoped_segment
@@ -901,15 +948,21 @@ def chunk_document(
                 inline_section_title = _extract_inline_section_label(segment)
                 if inline_section_title:
                     flush_buffer()
+                    current_section_id = None
                     current_section_title = inline_section_title
                     current_section_level = None
+                    current_section_summary = None
+                    current_section_coverage_terms = []
 
                 if block.block_kind == "heading" or _is_probable_header(segment, toc_entries):
                     flush_buffer()
+                    current_section_id = None
                     current_section_title = segment
                     current_section_level = (
                         1 if _normalize_for_match(segment) in toc_entries else None
                     )
+                    current_section_summary = None
+                    current_section_coverage_terms = []
                     in_key_points_summary = False
                     continue
 

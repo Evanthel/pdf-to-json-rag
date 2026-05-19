@@ -138,6 +138,14 @@ DOCUMENT_PROFILES = {
         aliases=("literature review", "wat review", "dennis wat"),
         topical_terms=frozenset({"review", "rhinovirus", "antibiotics", "symptoms", "pathogenesis"}),
     ),
+    "common-cold-clinincal-evidence": DocumentProfile(
+        doc_id="common-cold-clinincal-evidence",
+        label="Common cold clinical evidence",
+        aliases=("common cold clinical evidence", "clinical evidence review"),
+        topical_terms=frozenset(
+            {"common", "cold", "symptoms", "sneezing", "rhinorrhoea", "runny", "nose", "sore", "throat", "cough"}
+        ),
+    ),
     "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold": DocumentProfile(
         doc_id="evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold",
         label="Evaluation of echinacea for the prevention and treatment of the common cold",

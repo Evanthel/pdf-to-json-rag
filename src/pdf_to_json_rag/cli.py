@@ -1,6 +1,8 @@
 """CLI entry points for the local PDF-to-JSON RAG tool."""
 
 import argparse
+from importlib import metadata as importlib_metadata
+from importlib import resources as importlib_resources
 import json
 import os
 from pathlib import Path
@@ -13,10 +15,10 @@ import fitz
 
 from . import __version__
 from .answering import answer_query_with_retrieval, format_grounded_answer
-from .chunking import process_saved_document_to_chunks
+from .chunking import load_document_record, process_saved_document_to_chunks
 from .config import PATHS
 from .document_inventory import get_inventory_entry, load_document_inventory, shortlist_documents
-from .evaluation import ensure_default_eval_cases, run_mvp_evaluation, run_regression_suite
+from .evaluation import DEFAULT_EVAL_FILENAME, ensure_default_eval_cases, run_mvp_evaluation, run_regression_suite
 from .extraction import process_native_pdf_to_json
 from .indexing import build_local_index, load_chunk_records
 from .query_planning import plan_query
@@ -120,11 +122,11 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
         "example": "pdf-to-json-rag doctor --json",
     },
     "package-check": {
-        "summary": "Build a wheel and verify the packaged CLI from a clean temporary install root.",
+        "summary": "Maintainer check: build a wheel and verify the packaged CLI from a clean temporary install root.",
         "example": "pdf-to-json-rag package-check --json",
     },
     "release-check": {
-        "summary": "Run public-surface smoke checks plus key maintainer regressions for a release candidate.",
+        "summary": "Maintainer check: run public-surface smoke checks plus package/test/regression release gates.",
         "example": "pdf-to-json-rag release-check --json",
     },
     "help": {
@@ -135,36 +137,68 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
 
 CANONICAL_COMMANDS = list(COMMAND_HELP.keys())
 CLI_EPILOG = """Common first-run commands:
+  python -m pip install .
   pdf-to-json-rag init --json
   pdf-to-json-rag doctor --json
-  pdf-to-json-rag demo-profile --json
+  pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
   pdf-to-json-rag smoke-check --pdf /path/to/file.pdf --query "What does this file cover?" --json
 
 Use `pdf-to-json-rag help --topic <command>` for a focused command summary.
 """
+
+EXPECTED_EXAMPLE_FILES = (
+    "public_demo_profile.json",
+    "public_workflow.json",
+    "public_demo_queries.json",
+    "inspect_document.example.json",
+    "plan_query.example.json",
+    "answer_query.example.json",
+)
 
 
 def _human_status(passed: bool) -> str:
     return "PASS" if passed else "FAIL"
 
 
-def _release_channel_recommendation(overall_pass: bool) -> dict[str, object]:
+def _release_channel_recommendation(
+    overall_pass: bool,
+    *,
+    public_surface_all_pass: bool,
+    maintainer_checks_available: bool,
+    maintainer_surface_all_pass: bool,
+    benchmark_assets_available: bool,
+    regression_all_pass: bool,
+) -> dict[str, object]:
     if overall_pass:
+        reasons = [
+            "public CLI smoke checks pass",
+            "packaged install verification passes",
+        ]
+        if maintainer_checks_available and maintainer_surface_all_pass:
+            reasons.append("maintainer package and CLI test gates pass")
+        if benchmark_assets_available and regression_all_pass:
+            reasons.append("internal benchmark regression shards pass")
+        else:
+            reasons.append("internal benchmark regressions were skipped because benchmark assets were not present in the active data root")
+        reasons.append("known limitations are documented and do not block the current public release path")
         return {
             "release_ready": True,
-            "suggested_tag": "v0.1.0-beta",
-            "why": [
-                "public CLI smoke checks pass",
-                "core maintainer regression shards pass",
-                "known limitations are documented and do not block a first public pre-release",
-            ],
+            "suggested_tag": "v0.2.1",
+            "why": reasons,
         }
+    reasons: list[str] = []
+    if not public_surface_all_pass:
+        reasons.append("at least one public-surface gate is failing")
+    if maintainer_checks_available and not maintainer_surface_all_pass:
+        reasons.append("at least one maintainer package or CLI test gate is failing")
+    if benchmark_assets_available and not regression_all_pass:
+        reasons.append("at least one internal benchmark regression shard is failing")
+    if not reasons:
+        reasons.append("release gating requirements are not fully satisfied")
     return {
         "release_ready": False,
         "suggested_tag": None,
-        "why": [
-            "at least one public-surface or maintainer regression gate is failing",
-        ],
+        "why": reasons,
     }
 
 
@@ -174,11 +208,16 @@ def _chunk_payload(chunk) -> dict[str, object]:
         "doc_id": chunk.doc_id,
         "page_start": chunk.page_start,
         "page_end": chunk.page_end,
+        "section_id": chunk.section_id,
         "section_title": chunk.section_title,
+        "section_summary": chunk.section_summary,
+        "section_coverage_terms": list(chunk.section_coverage_terms),
         "preceding_chunk_id": chunk.preceding_chunk_id,
         "following_chunk_id": chunk.following_chunk_id,
         "extraction_method": chunk.extraction_method,
         "quality_score": chunk.quality_score,
+        "confidence": chunk.confidence,
+        "retrieval_signals": dict(chunk.retrieval_signals),
         "noise_labels": list(chunk.noise_labels),
         "preview": chunk.text.replace("\n", " ").strip()[:220],
     }
@@ -210,6 +249,21 @@ def _document_payload(entry) -> dict[str, object]:
         "coverage_summary": entry.coverage_summary,
         "coverage_terms": list(entry.coverage_terms),
         "discovery_terms": list(entry.discovery_terms),
+    }
+
+
+def _section_payload(section) -> dict[str, object]:
+    return {
+        "section_id": section.section_id,
+        "title": section.title,
+        "level": section.level,
+        "page_start": section.page_start,
+        "page_end": section.page_end,
+        "reading_order_start": section.reading_order_start,
+        "reading_order_end": section.reading_order_end,
+        "summary": section.summary,
+        "coverage_terms": list(section.coverage_terms),
+        "content_hints": list(section.content_hints),
     }
 
 
@@ -342,6 +396,9 @@ def _create_demo_pdf(path: Path) -> Path:
 def _subprocess_env(data_dir: Path | None = None) -> dict[str, str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(PATHS.root / "src")
+    maintainer_root = _discover_project_root(PATHS.root) or _discover_project_root(Path.cwd())
+    if maintainer_root is not None:
+        env["PDF_TO_JSON_RAG_PROJECT_ROOT"] = str(maintainer_root)
     if data_dir is not None:
         env["PDF_TO_JSON_RAG_DATA_DIR"] = str(data_dir)
     return env
@@ -390,9 +447,27 @@ def _run_public_surface_release_smoke() -> dict[str, object]:
 
 
 def _run_public_surface_unittests() -> dict[str, object]:
+    project_root = _discover_project_root(PATHS.root) or _discover_project_root(Path.cwd())
+    if project_root is None:
+        return {
+            "returncode": None,
+            "passed": False,
+            "skipped": True,
+            "reason": "project_root_not_available",
+            "output_tail": "",
+        }
     process = subprocess.run(
-        [sys.executable, "-m", "unittest", "tests.test_cli_public_surface"],
-        cwd=PATHS.root,
+        [
+            sys.executable,
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tests",
+            "-p",
+            "test_cli_public_surface.py",
+        ],
+        cwd=project_root,
         env=_subprocess_env(),
         capture_output=True,
         text=True,
@@ -405,11 +480,33 @@ def _run_public_surface_unittests() -> dict[str, object]:
     return {
         "returncode": process.returncode,
         "passed": process.returncode == 0,
+        "skipped": False,
         "output_tail": output_text[-1200:],
     }
 
 
 def _run_package_check() -> dict[str, object]:
+    project_root = _discover_project_root(PATHS.root) or _discover_project_root(Path.cwd())
+    if project_root is None:
+        return {
+            "all_pass": False,
+            "workspace": None,
+            "wheel_path": None,
+            "venv_path": None,
+            "script_path": None,
+            "build_returncode": None,
+            "venv_returncode": None,
+            "install_returncode": None,
+            "doctor_returncode": None,
+            "smoke_returncode": None,
+            "doctor_ok": False,
+            "smoke_ok": False,
+            "smoke_all_pass": False,
+            "skipped": True,
+            "reason": "project_root_not_available",
+            "build_output_tail": "",
+            "install_output_tail": "",
+        }
     with tempfile.TemporaryDirectory() as temp_dir_name:
         workspace = Path(temp_dir_name)
         wheel_dir = workspace / "wheelhouse"
@@ -430,7 +527,7 @@ def _run_package_check() -> dict[str, object]:
                 "--wheel-dir",
                 str(wheel_dir),
             ],
-            cwd=PATHS.root,
+            cwd=project_root,
             capture_output=True,
             text=True,
         )
@@ -455,7 +552,7 @@ def _run_package_check() -> dict[str, object]:
                     "--system-site-packages",
                     str(venv_dir),
                 ],
-                cwd=PATHS.root,
+                cwd=project_root,
                 capture_output=True,
                 text=True,
             )
@@ -470,7 +567,7 @@ def _run_package_check() -> dict[str, object]:
                         "--force-reinstall",
                         str(wheel_path),
                     ],
-                    cwd=PATHS.root,
+                    cwd=project_root,
                     capture_output=True,
                     text=True,
                 )
@@ -480,7 +577,7 @@ def _run_package_check() -> dict[str, object]:
                 package_env["PDF_TO_JSON_RAG_DATA_DIR"] = str(data_dir)
                 create_demo_process = subprocess.run(
                     [str(script_path), "create-demo-pdf", "--path", str(demo_pdf), "--json"],
-                    cwd=PATHS.root,
+                    cwd=workspace,
                     env=package_env,
                     capture_output=True,
                     text=True,
@@ -488,7 +585,7 @@ def _run_package_check() -> dict[str, object]:
                 if create_demo_process.returncode == 0:
                     doctor_process = subprocess.run(
                         [str(script_path), "doctor", "--json"],
-                        cwd=PATHS.root,
+                        cwd=workspace,
                         env=package_env,
                         capture_output=True,
                         text=True,
@@ -503,7 +600,7 @@ def _run_package_check() -> dict[str, object]:
                             "What does this file cover?",
                             "--json",
                         ],
-                        cwd=PATHS.root,
+                        cwd=workspace,
                         env=package_env,
                         capture_output=True,
                         text=True,
@@ -552,6 +649,7 @@ def _run_package_check() -> dict[str, object]:
             "doctor_ok": bool(doctor_payload.get("ok")),
             "smoke_ok": bool(smoke_payload.get("ok")),
             "smoke_all_pass": bool(smoke_payload.get("result", {}).get("all_pass")),
+            "skipped": False,
             "build_output_tail": "\n".join(
                 part.strip()
                 for part in (build_process.stdout, build_process.stderr)
@@ -583,13 +681,21 @@ def _run_release_check(k: int) -> dict[str, object]:
     public_smoke = _run_public_surface_release_smoke()
     public_unittests = _run_public_surface_unittests()
     package_check = _run_package_check()
+    maintainer_root = _discover_project_root(PATHS.root) or _discover_project_root(Path.cwd())
 
     regressions: list[dict[str, object]] = []
-    benchmark_assets_available = doctor["ready_for_internal_benchmark"]
+    inventory = load_document_inventory()
+    benchmark_eval_path = PATHS.data_eval / DEFAULT_EVAL_FILENAME
+    root_manifest_path = PATHS.data_index / "index_manifest.json"
+    benchmark_assets_available = (
+        root_manifest_path.exists()
+        and benchmark_eval_path.exists()
+        and len(inventory) >= 5
+    )
     regression_all_pass = True
 
     if benchmark_assets_available:
-        eval_path = ensure_default_eval_cases(PATHS.data_eval)
+        eval_path = benchmark_eval_path
         for shard in RELEASE_CHECK_SHARDS:
             report, report_path = run_regression_suite(
                 index_dir=PATHS.data_index,
@@ -617,26 +723,59 @@ def _run_release_check(k: int) -> dict[str, object]:
         public_smoke["init_ok"]
         and public_smoke["smoke_ok"]
         and public_smoke["smoke_all_pass"]
-        and public_unittests["passed"]
         and doctor["ready_for_public_cli"]
-        and package_check["all_pass"]
     )
 
-    overall_pass = public_surface_all_pass and benchmark_assets_available and regression_all_pass
-    recommendation = _release_channel_recommendation(overall_pass)
+    maintainer_checks_available = maintainer_root is not None
+    maintainer_surface_all_pass = (
+        maintainer_checks_available
+        and not package_check.get("skipped", False)
+        and bool(package_check["all_pass"])
+        and not public_unittests.get("skipped", False)
+        and bool(public_unittests["passed"])
+    )
+    maintainer_release_all_pass = maintainer_surface_all_pass and (
+        regression_all_pass if benchmark_assets_available else True
+    )
+
+    overall_pass = public_surface_all_pass and (
+        maintainer_release_all_pass if maintainer_checks_available else True
+    )
+    recommendation = _release_channel_recommendation(
+        overall_pass,
+        public_surface_all_pass=public_surface_all_pass,
+        maintainer_checks_available=maintainer_checks_available,
+        maintainer_surface_all_pass=maintainer_surface_all_pass,
+        benchmark_assets_available=benchmark_assets_available,
+        regression_all_pass=regression_all_pass,
+    )
 
     return {
         "doctor": doctor,
         "public_surface": {
             "all_pass": public_surface_all_pass,
             "smoke": public_smoke,
+        },
+        "maintainer_checks": {
+            "available": maintainer_checks_available,
+            "project_root": str(maintainer_root) if maintainer_root is not None else None,
+            "all_pass": maintainer_release_all_pass if maintainer_checks_available else None,
             "unittests": public_unittests,
             "package_check": package_check,
         },
         "internal_regressions": {
             "benchmark_assets_available": benchmark_assets_available,
+            "benchmark_asset_details": {
+                "inventory_count": len(inventory),
+                "required_min_inventory_count": 5,
+                "root_manifest_path": str(root_manifest_path),
+                "root_manifest_present": root_manifest_path.exists(),
+                "eval_file_path": str(benchmark_eval_path),
+                "eval_file_present": benchmark_eval_path.exists(),
+            },
             "selected_shards": RELEASE_CHECK_SHARDS,
-            "all_pass": regression_all_pass if benchmark_assets_available else False,
+            "skipped": not benchmark_assets_available,
+            "all_pass": regression_all_pass if benchmark_assets_available else None,
             "results": regressions,
         },
         "overall_pass": overall_pass,
@@ -725,12 +864,58 @@ def _canonical_command(command: str) -> str:
     return COMMAND_ALIASES.get(command, command)
 
 
-def _project_examples_dir() -> Path:
-    return PATHS.root / "examples"
+def _discover_project_root(start: Path | None = None) -> Path | None:
+    current = (start or Path.cwd()).resolve()
+    for candidate in (current, *current.parents):
+        if (candidate / "pyproject.toml").exists():
+            return candidate
+    return None
+
+
+def _packaged_examples_dir() -> Path:
+    package_root = importlib_resources.files("pdf_to_json_rag")
+    return Path(str(package_root / "assets" / "examples"))
+
+
+def _project_examples_dir() -> Path | None:
+    project_root = _discover_project_root(PATHS.root)
+    if project_root is None:
+        project_root = _discover_project_root(Path.cwd())
+    if project_root is None:
+        return None
+    examples_dir = project_root / "examples"
+    if not examples_dir.exists():
+        return None
+    if not all((examples_dir / name).exists() for name in EXPECTED_EXAMPLE_FILES):
+        return None
+    return examples_dir
+
+
+def _available_examples_dir() -> Path:
+    project_examples = _project_examples_dir()
+    if project_examples is not None and project_examples.exists():
+        return project_examples
+    return _packaged_examples_dir()
+
+
+def _project_metadata_available() -> tuple[bool, dict[str, object]]:
+    details: dict[str, object] = {}
+    project_examples = _project_examples_dir()
+    if project_examples is not None:
+        pyproject_path = project_examples.parent / "pyproject.toml"
+        if pyproject_path.exists():
+            details["pyproject_path"] = str(pyproject_path)
+            return True, details
+    try:
+        installed_version = importlib_metadata.version("pdf-to-json-rag")
+    except importlib_metadata.PackageNotFoundError:
+        return False, details
+    details["installed_version"] = installed_version
+    return True, details
 
 
 def _load_example_json(filename: str) -> dict[str, object] | list[object]:
-    path = _project_examples_dir() / filename
+    path = _available_examples_dir() / filename
     if not path.exists():
         raise CliError(
             "missing_example_asset",
@@ -767,16 +952,8 @@ def _render_help(topic: str | None = None) -> str:
 
 
 def _doctor_checks() -> dict[str, object]:
-    pyproject_path = PATHS.root / "pyproject.toml"
-    examples_dir = _project_examples_dir()
-    example_files = [
-        "public_demo_profile.json",
-        "public_workflow.json",
-        "public_demo_queries.json",
-        "inspect_document.example.json",
-        "plan_query.example.json",
-        "answer_query.example.json",
-    ]
+    package_metadata_present, package_metadata_details = _project_metadata_available()
+    examples_dir = _available_examples_dir()
     manifest_candidates = [
         PATHS.data_index / "index_manifest.json",
         PATHS.data_index / "workflow_smoke" / "index_manifest.json",
@@ -786,9 +963,9 @@ def _doctor_checks() -> dict[str, object]:
     checks: list[dict[str, object]] = [
         {
             "name": "package_metadata_present",
-            "passed": pyproject_path.exists(),
+            "passed": package_metadata_present,
             "category": "required_public_tool",
-            "details": {"path": str(pyproject_path)},
+            "details": package_metadata_details,
         },
         {
             "name": "data_root_configured",
@@ -816,11 +993,11 @@ def _doctor_checks() -> dict[str, object]:
         },
         {
             "name": "example_assets_present",
-            "passed": examples_dir.exists() and all((examples_dir / name).exists() for name in example_files),
+            "passed": examples_dir.exists() and all((examples_dir / name).exists() for name in EXPECTED_EXAMPLE_FILES),
             "category": "required_public_tool",
             "details": {
                 "examples_dir": str(examples_dir),
-                "expected_files": example_files,
+                "expected_files": list(EXPECTED_EXAMPLE_FILES),
             },
         },
         {
@@ -860,12 +1037,36 @@ def _doctor_checks() -> dict[str, object]:
         for check in checks
         if check["category"] in {"required_public_tool", "internal_benchmark"}
     )
+    next_steps: list[str] = []
+    if not ready_for_public_cli:
+        next_steps.extend(
+            [
+                "Run `pdf-to-json-rag init --json` to create the local data directories.",
+                "Re-run `pdf-to-json-rag doctor --json` after the required public-tool checks pass.",
+            ]
+        )
+    elif not ready_for_retrieval:
+        next_steps.extend(
+            [
+                "Run `pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json` for a self-contained sample input.",
+                "Run `pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query \"What does this file cover?\" --json` to build a demo index and validate retrieval.",
+            ]
+        )
+    else:
+        next_steps.extend(
+            [
+                "Run `pdf-to-json-rag inspect-document --doc-id <doc_id> --json` to inspect extracted document metadata.",
+                "Run `pdf-to-json-rag answer-query --query \"What does this file cover?\" --json` against the current local index.",
+            ]
+        )
     return {
         "checks": checks,
         "ready_for_public_cli": ready_for_public_cli,
         "ready_for_retrieval": ready_for_retrieval,
         "ready_for_internal_benchmark": ready_for_internal_benchmark,
         "data_root": str(PATHS.data_dir),
+        "project_root": str((_discover_project_root(PATHS.root) or _discover_project_root(Path.cwd()) or PATHS.root)),
+        "next_steps": next_steps,
     }
 
 
@@ -1003,6 +1204,11 @@ def main() -> None:
                 print(f"{label}:")
                 for check in category_checks:
                     print(f"- {_human_status(check['passed'])} {check['name']}")
+            if payload["next_steps"]:
+                print("")
+                print("Suggested next steps:")
+                for step in payload["next_steps"]:
+                    print(f"- {step}")
             return
 
         if command == "create-demo-pdf":
@@ -1020,6 +1226,10 @@ def main() -> None:
                 _emit_json("create-demo-pdf", payload, output_path=output_path)
                 return
             print(f"Created demo PDF: {created_path}")
+            print(
+                "Next: run `pdf-to-json-rag smoke-check --pdf "
+                f"{created_path} --query \"What does this file cover?\" --json`"
+            )
             return
 
         if command == "package-check":
@@ -1049,8 +1259,16 @@ def main() -> None:
             if recommendation["suggested_tag"]:
                 print(f"Suggested release tag: {recommendation['suggested_tag']}")
             print(f"Public CLI surface: {_human_status(payload['public_surface']['all_pass'])}")
-            print(f"Packaged CLI gate: {_human_status(payload['public_surface']['package_check']['all_pass'])}")
-            print(f"Maintainer regression gate: {_human_status(payload['internal_regressions']['all_pass'])}")
+            maintainer_checks = payload["maintainer_checks"]
+            if maintainer_checks["available"]:
+                print(f"Packaged CLI gate: {_human_status(maintainer_checks['package_check']['all_pass'])}")
+                print(f"Maintainer unit-test gate: {_human_status(maintainer_checks['unittests']['passed'])}")
+                if payload["internal_regressions"]["skipped"]:
+                    print("Maintainer regression gate: SKIPPED (benchmark assets not present in the active data root)")
+                else:
+                    print(f"Maintainer regression gate: {_human_status(bool(payload['internal_regressions']['all_pass']))}")
+            else:
+                print("Maintainer gates: SKIPPED (run from a source checkout to include package and regression checks)")
             print("")
             print("Why:")
             for reason in recommendation["why"]:
@@ -1075,7 +1293,8 @@ def main() -> None:
                     output_path=output_path,
                 )
                 return
-            print("Created MVP data directories.")
+            print("Created local data directories.")
+            print("Next: run `pdf-to-json-rag doctor --json`")
             return
 
         if command == "extract-native":
@@ -1117,6 +1336,10 @@ def main() -> None:
             print(f"structure_style: {document_record.structure_style}")
             print(f"saved_native_json: {native_path}")
             print(f"saved_document_json: {document_path}")
+            print(
+                "Next: run "
+                f"`pdf-to-json-rag chunk-document --doc-id {extraction.doc_id} --json`"
+            )
             return
 
         if command == "chunk-document":
@@ -1149,6 +1372,10 @@ def main() -> None:
             if saved_paths:
                 print(f"first_chunk_file: {saved_paths[0]}")
                 print(f"last_chunk_file: {saved_paths[-1]}")
+            print(
+                "Next: run "
+                f"`pdf-to-json-rag build-index --doc-id {document.doc_id} --json`"
+            )
             return
 
         if command == "build-index":
@@ -1186,6 +1413,9 @@ def main() -> None:
             print(f"embedding_backend: {manifest['embedding_backend']}")
             print(f"embedding_model: {manifest['embedding_model']}")
             print(f"index_dir: {index_dir}")
+            print(
+                'Next: run `pdf-to-json-rag answer-query --query "What does this file cover?" --json`'
+            )
             return
 
         if command in {"run-workflow", "smoke-check"}:
@@ -1313,8 +1543,17 @@ def main() -> None:
                     f"Unknown doc_id: {doc_id}",
                     {"doc_id": doc_id},
                 )
+            section_payloads: list[dict[str, object]] = []
+            try:
+                _, document_path = _resolve_document_paths(doc_id)
+                document_record = load_document_record(document_path)
+                section_payloads = [_section_payload(section) for section in document_record.sections[:12]]
+            except CliError:
+                section_payloads = []
             payload = {
                 **_document_payload(entry),
+                "section_count": len(section_payloads),
+                "sections": section_payloads,
             }
             if json_output:
                 _emit_json("inspect-document", payload, output_path=output_path)

@@ -13,6 +13,7 @@ from PIL import Image
 import pytesseract
 
 from .content_metadata import classify_block_metadata
+from .document_structure import build_document_sections
 from .document_semantics import interpret_document_semantics
 from .schemas import DocumentRecord
 
@@ -369,6 +370,15 @@ def build_document_record_from_native_extraction(
         toc=extraction.toc,
         blocks=extraction.blocks,
     )
+    sections = build_document_sections(
+        doc_id=extraction.doc_id,
+        title=extraction.title,
+        toc=extraction.toc,
+        blocks=extraction.blocks,
+    )
+    for section in sections:
+        if section.title and section.title not in summary_cues and len(summary_cues) < 12:
+            summary_cues.append(section.title)
     discovery_terms = _derive_discovery_terms(
         title=extraction.title,
         toc=extraction.toc,
@@ -409,6 +419,7 @@ def build_document_record_from_native_extraction(
             "pages_processed_with_ocr": pages_processed_with_ocr,
             "ocr_used": pages_processed_with_ocr > 0,
         },
+        sections=sections,
     )
 
 

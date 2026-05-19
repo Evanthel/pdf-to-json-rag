@@ -1,0 +1,22 @@
+[
+  {
+    "name": "document_overview",
+    "query": "What does this file cover?"
+  },
+  {
+    "name": "document_routing",
+    "query": "Which file is most relevant for drought anticipatory action triggers?"
+  },
+  {
+    "name": "source_listing",
+    "query": "Which sources in the benchmark discuss prevention or procedural guidance?"
+  },
+  {
+    "name": "cross_document_compare",
+    "query": "Compare the most relevant sources for humanitarian triggers and guidance."
+  },
+  {
+    "name": "grounded_evidence",
+    "query": "What are common cold symptoms?"
+  }
+]

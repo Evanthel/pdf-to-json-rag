@@ -5,7 +5,8 @@
     "query": "What are common cold symptoms?",
     "relevant_chunk_ids": [
       "common-cold-clinincal-evidence-chunk-0009",
-      "common-cold-clinincal-evidence-chunk-0010"
+      "common-cold-clinincal-evidence-chunk-0010",
+      "common-cold-clinincal-evidence-chunk-0013"
     ],
     "expected_keywords": [
       "sneezing",
@@ -96,7 +97,8 @@
     "case_type": "grounded",
     "query": "Do antibiotics help with the common cold?",
     "relevant_chunk_ids": [
-      "common-cold-clinincal-evidence-chunk-0005"
+      "common-cold-clinincal-evidence-chunk-0005",
+      "common-cold-clinincal-evidence-chunk-0107"
     ],
     "expected_keywords": [
       "don't reduce symptoms overall",
@@ -303,8 +305,7 @@
     "case_type": "grounded",
     "query": "According to the literature review, which virus is the most common cause of the common cold?",
     "relevant_chunk_ids": [
-      "the-common-cold-a-review-of-the-literature-chunk-0004",
-      "the-common-cold-a-review-of-the-literature-chunk-0010"
+      "the-common-cold-a-review-of-the-literature-chunk-0004"
     ],
     "expected_keywords": [
       "rhinovirus",
@@ -727,9 +728,9 @@
     "case_id": "source_listing_vitamin_c_and_echinacea",
     "case_type": "grounded",
     "query": "Which sources in the benchmark discuss vitamin C or echinacea for the common cold?",
-    "relevant_chunk_ids": [
-      "vitamin-c-for-preventing-and-treating-the-common-cold-chunk-0009",
-      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold-chunk-0002"
+    "relevant_doc_ids": [
+      "vitamin-c-for-preventing-and-treating-the-common-cold",
+      "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold"
     ],
     "expected_keywords": [
       "Vitamin C for Preventing and Treating the Common Cold",

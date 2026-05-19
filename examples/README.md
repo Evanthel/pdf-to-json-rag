@@ -8,7 +8,8 @@ Use it for:
 
 - `demo-profile` onboarding assets
 - `create-demo-pdf` and self-contained quickstart references
-- packaging and release-surface references such as `package-check` and `release-check`
+- first-run public workflows such as `smoke-check` and `run-workflow`
+- maintainer validation references such as `package-check` and `release-check`
 - sample queries
 - example JSON output shapes
 - lightweight workflow references for first-time users

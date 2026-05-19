@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,13 +40,33 @@ def _hash_embedding(text: str, dim: int = FALLBACK_EMBEDDING_DIM) -> list[float]
 
 def _load_embedder(model_name: str = DEFAULT_EMBEDDING_MODEL):
     """Return an embedding callable plus backend metadata."""
+    use_sentence_transformers = (
+        os.environ.get("PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS") == "1"
+        or os.environ.get("PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD") == "1"
+    )
+    if not use_sentence_transformers:
+        def embed_texts(texts: list[str]) -> list[list[float]]:
+            return [_hash_embedding(text) for text in texts]
+
+        return embed_texts, {
+            "embedding_backend": "hash-fallback",
+            "embedding_model": f"hash-{FALLBACK_EMBEDDING_DIM}",
+        }
+
     try:
         from sentence_transformers import SentenceTransformer
 
+        allow_download = os.environ.get("PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD") == "1"
+        if not allow_download:
+            os.environ.setdefault("HF_HUB_OFFLINE", "1")
+            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
         try:
             model = SentenceTransformer(model_name, local_files_only=True)
         except Exception:
-            model = SentenceTransformer(model_name)
+            if allow_download:
+                model = SentenceTransformer(model_name)
+            else:
+                raise
 
         def embed_texts(texts: list[str]) -> list[list[float]]:
             embeddings = model.encode(
@@ -123,8 +144,11 @@ def _chunk_metadata(chunk: ChunkRecord) -> dict[str, str | int | bool | None]:
         "source_pdf": chunk.source_pdf,
         "page_start": chunk.page_start,
         "page_end": chunk.page_end,
+        "section_id": chunk.section_id,
         "section_title": chunk.section_title,
         "section_level": chunk.section_level,
+        "section_summary": chunk.section_summary,
+        "section_coverage_terms": "|".join(chunk.section_coverage_terms) if chunk.section_coverage_terms else None,
         "chunk_type": chunk.chunk_type,
         "reading_order_index": chunk.reading_order_index,
         "preceding_chunk_id": chunk.preceding_chunk_id,

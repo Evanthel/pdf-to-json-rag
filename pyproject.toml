@@ -27,6 +27,10 @@ pdf-to-json-rag = "pdf_to_json_rag.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"pdf_to_json_rag" = ["assets/examples/*.json"]

@@ -23,6 +23,18 @@ TREATMENT_ENTITY_TERMS = {
     "ginseng",
     "handwashing",
 }
+UNSUPPORTED_DISCOVERY_TERMS = {
+    "insulin",
+    "gadolinium",
+    "monoclonal",
+    "monoclonals",
+    "lease",
+    "leases",
+    "clause",
+    "clauses",
+    "rent",
+    "escalation",
+}
 
 
 @dataclass(frozen=True)
@@ -64,6 +76,7 @@ def _answer_mode_for(query_class: str, query_intent: str) -> str:
 def plan_query(query: str) -> QueryPlan:
     query_lower = query.lower()
     query_terms = _query_terms(query)
+    unsupported_discovery = bool(query_terms.intersection(UNSUPPORTED_DISCOVERY_TERMS))
     structured_intent = detect_structured_intent(query, query_terms)
     if structured_intent:
         source_doc_id = configured_source_doc_id(query)
@@ -112,6 +125,17 @@ def plan_query(query: str) -> QueryPlan:
             or "best document" in query_lower
         )
     ):
+        if unsupported_discovery and not explicit_source_doc_id and not metadata_matches:
+            return QueryPlan(
+                query=query,
+                query_terms=frozenset(query_terms),
+                query_class="document_discovery",
+                query_intent="document_routing",
+                answer_mode=_answer_mode_for("document_discovery", "document_routing"),
+                inventory_doc_ids=tuple(),
+                matched_doc_ids=tuple(),
+                preferred_doc_id=None,
+            )
         matched = tuple(metadata_matches) if explicit_source_doc_id and metadata_matches else inventory_doc_ids
         if matched and not _is_explicit_plural_routing(query_lower):
             matched = matched[:1]
@@ -149,6 +173,17 @@ def plan_query(query: str) -> QueryPlan:
         )
 
     if "which sources" in query_lower or "which documents" in query_lower:
+        if unsupported_discovery and not metadata_matches:
+            return QueryPlan(
+                query=query,
+                query_terms=frozenset(query_terms),
+                query_class="cross_document",
+                query_intent="source_listing",
+                answer_mode=_answer_mode_for("cross_document", "source_listing"),
+                inventory_doc_ids=tuple(),
+                matched_doc_ids=tuple(),
+                preferred_doc_id=None,
+            )
         matched = tuple(metadata_matches) if metadata_matches else inventory_doc_ids[:4]
         return QueryPlan(
             query=query,

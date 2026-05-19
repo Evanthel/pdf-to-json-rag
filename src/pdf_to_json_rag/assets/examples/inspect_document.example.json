@@ -1,0 +1,44 @@
+{
+  "command": "inspect-document",
+  "version": "0.1.0",
+  "ok": true,
+  "result": {
+    "doc_id": "guidance-note-data-incident-management",
+    "label": "Guidance Note: Data Incident Management",
+    "title": "Guidance Note: Data Incident Management",
+    "document_family": "humanitarian_guidance",
+    "document_type": "guidance_note",
+    "document_purpose": "procedural_guidance",
+    "audience": "humanitarian_responders",
+    "evidence_style": "procedural_guidance",
+    "structure_style": "report_sections",
+    "inventory_summary": "Guidance Note: Data Incident Management | guidance note; procedural guidance; for humanitarian responders; procedural guidance; report sections; topics: DATA INCIDENT MANAGEMENT, KEY TAKEAWAYS:, WHAT IS A DATA INCIDENT IN HUMANITARIAN RESPONSE?",
+    "coverage_summary": "covers topics such as incident, management, centre, humanitarian",
+    "coverage_terms": [
+      "incident",
+      "management",
+      "centre",
+      "humanitarian",
+      "series",
+      "takeaways",
+      "response",
+      "definitions"
+    ],
+    "discovery_terms": [
+      "data",
+      "incident",
+      "management",
+      "centre",
+      "humanitarian",
+      "series",
+      "takeaways",
+      "response",
+      "definitions",
+      "frameworks",
+      "understanding",
+      "incidents",
+      "risk",
+      "models"
+    ]
+  }
+}

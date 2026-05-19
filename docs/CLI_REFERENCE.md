@@ -1,10 +1,27 @@
 # CLI Reference
 
+Install from the repo root:
+
+```bash
+python -m pip install .
+```
+
+For local development without installing the console script:
+
+```bash
+PYTHONPATH=src python -m pdf_to_json_rag help
+```
+
+Optional stronger local embeddings:
+
+```bash
+export PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1
+```
+
 User-facing commands:
 
 - `init`
 - `doctor`
-- `package-check`
 - `demo-profile`
 - `create-demo-pdf`
 - `extract-native`
@@ -16,6 +33,10 @@ User-facing commands:
 - `answer-query`
 - `run-workflow`
 - `smoke-check`
+
+Maintainer validation commands:
+
+- `package-check`
 - `release-check`
 
 Benchmark/debug commands:
@@ -55,6 +76,8 @@ JSON output:
 Examples:
 
 ```bash
+pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
+pdf-to-json-rag run-workflow --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 pdf-to-json-rag inspect-document --doc-id your-doc-id --json --output inspect.json
 pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
 pdf-to-json-rag package-check --json

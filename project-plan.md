@@ -429,15 +429,129 @@ Outcome:
 - the repo now verifies both source-path and packaged-install behavior before a public release
 - the remaining gap to a first public beta is mostly release execution rather than missing architecture
 
-## 6.42. v1.42 Plan
+## 6.42. v0.1.1 Milestones
 
-The next iteration should focus on cutting and validating the actual first public beta.
+The first post-beta patch should fix rough edges exposed by the public release without changing the tool architecture.
 
-1. Add a release-note artifact for the specific `v0.1.0-beta` cut, not just a reusable template.
-2. Add one final `doctor` / `release-check` wording pass only if it improves clarity without changing the command contracts.
-3. Add a tiny post-install smoke note for users who install from the built artifact instead of editable mode.
-4. Re-run the full benchmark, packaged-install check, and public-surface CLI tests as the final pre-tag gate.
-5. Decide whether to stop at `v0.1.0-beta` or immediately schedule a short `v0.1.1` polish pass after publication feedback.
+Completed scope:
+
+1. Fixed the `document_overview` answer path so document-level metadata answers no longer fall through to unnecessary abstention.
+2. Fixed `inspect-document` so it reads from the active `PDF_TO_JSON_RAG_DATA_DIR` instead of assuming repo-local benchmark paths.
+3. Tightened `doctor` so retrieval readiness recognizes the public `workflow_smoke` index path and suggests a concrete next step.
+4. Added more explicit next-step guidance to `init`, `create-demo-pdf`, `extract-native`, `chunk-document`, and `build-index`.
+5. Re-validated the public CLI smoke path after the post-beta bug fixes.
+
+Outcome:
+
+- the public beta flow is less confusing after extraction and first-run indexing
+- the CLI is less dependent on implicit repo-local state
+
+## 6.43. v0.1.2 Milestones
+
+The second post-beta patch should reduce onboarding friction and make the public docs align with the easiest successful path through the tool.
+
+Completed scope:
+
+1. Rewrote the quickstart so the shortest path goes through `smoke-check` and `run-workflow` before the manual `extract -> chunk -> build-index` flow.
+2. Switched public install examples to `python -m pip install .` and added a clear development fallback using `PYTHONPATH=src python -m pdf_to_json_rag`.
+3. Aligned the CLI help epilog and command reference with the public install and demo flow.
+4. Updated example/docs wording so public onboarding is clearly separate from internal evaluation usage.
+5. Kept the user-facing command set stable while polishing the text output around the public paths.
+
+Outcome:
+
+- the public docs now lead with the shortest successful path instead of the most manual one
+- install and first-run guidance are more consistent across the README and CLI docs
+
+## 6.44. v0.2.0 Milestones
+
+The first minor release after the beta line should be an architectural upgrade, not another benchmark-growth cycle.
+
+Completed scope:
+
+1. Added extraction-time document sections so blocks are grouped into stable semantic sections before chunking.
+2. Reworked chunk building so section boundaries come from extraction-time structure and semantic chunk metadata inherits section context.
+3. Split retrieval scoring into clearer runtime signals for quality, semantic alignment, structural alignment, metadata priors, and rank priors.
+4. Tightened document-level overview answers so they render a cleaner section-aware summary instead of mostly stitched inventory strings.
+5. Hardened the default local-first embedding path so the public workflow falls back deterministically without requiring model downloads.
+
+Outcome:
+
+- the core architecture now carries more structure from extraction through chunking, retrieval, and document-level synthesis
+- the public demo path stays local-first and stable even without external model downloads
+- the new architecture is visible in the CLI through section-aware inspect output and retrieval signal payloads
+
+## 6.45. v0.2.1-v0.2.4 Milestones
+
+The first sprint after `v0.2.0` should harden the install and release path around the new architecture before attempting a larger learned layer.
+
+Completed scope:
+
+1. Fixed installed-package path resolution so the CLI no longer defaults to writing data under the Python installation when run outside the repo.
+2. Added packaged example assets and install-safe example loading so `doctor`, `demo-profile`, `create-demo-pdf`, and related commands work from a real installed wheel.
+3. Tightened `package-check` to build from a maintainer checkout but validate the installed CLI from a clean temporary workspace rather than implicitly relying on the repo.
+4. Split `release-check` semantics so public-surface readiness, maintainer package/test gates, and benchmark-only regression gates are reported separately.
+5. Re-ran public-surface validation and documented the remaining repo-local regression shard failures exposed by the `v0.2.0` section-aware refactor.
+
+Outcome:
+
+- the packaged CLI now behaves more like a real installed tool than a repo-bound script
+- public release validation is green for the install path
+- the next internal hardening target is benchmark regression recovery, not more packaging work
+
+## 6.46. v0.2.5 Milestones
+
+The next patch recovered the small set of repo-local regressions exposed by the section-aware architecture and clarified what still remains before the wider benchmark is back in parity.
+
+Completed scope:
+
+1. Recovered the failing core maintainer shards in `query_planning_core`, `answer_modes_core`, `document_family_core`, and `relationship_core`.
+2. Tightened section-aware scoring and source preference only where the failing cases showed real drift, instead of adding another broad benchmark-expansion pass.
+3. Added an anchor-recovery retrieval path for a few high-risk intents where embedding-first hits were still hiding the correct section or structured-form chunk inside the right document.
+4. Revalidated the public release path and maintainer gates after the recovery pass.
+5. Re-ran the broad benchmark and made explicit that wide-benchmark parity is still not back to the earlier pre-`v0.2.0` level.
+
+Outcome:
+
+- the public install/release path is green
+- the maintainer shard set used by `release-check` is green
+- the next step should be `v0.2.6` broad-benchmark recovery and evaluation cleanup, not more packaging work
+
+## 6.47. v0.2.6 Milestones
+
+This patch finished the first full-benchmark recovery pass on top of the section-aware architecture instead of stopping at a small green maintainer shard set.
+
+Completed scope:
+
+1. Recovered the highest-impact broad-benchmark regressions that still affected common evidence lookup, structured-form, and source-listing slices outside the maintainer shard set.
+2. Tightened `release-check` so internal benchmark regressions only run when the active data root actually contains full benchmark assets instead of any partial demo/index state.
+3. Fixed benchmark-evaluation semantics so document-level cases can use `relevant_doc_ids` without breaking the full rerun.
+4. Re-ran the full benchmark and restored a stable post-`v0.2.x` baseline:
+   - `precision@5 = 0.533`
+   - `recall@5 = 1.0`
+   - `MRR = 1.0`
+   - `avg_keyword_coverage = 1.0`
+   - `negative_success_rate = 1.0`
+   - `warning_case_count = 0`
+5. Revalidated the release-facing path after the recovery pass and confirmed that the next target is no longer broad retrieval parity, but cleaner document-level support/faithfulness semantics.
+
+Outcome:
+
+- public release gates are green
+- maintainer package/test gates are green
+- the maintainer shard set is green
+- the full 67-case benchmark is green again on the section-aware architecture
+- the next architectural gap is document-level support tracing, not broad benchmark churn
+
+## 6.48. v0.2.7 Plan
+
+The next patch should harden document-level faithfulness semantics and support traces before the project takes another larger retrieval/synthesis step.
+
+1. Add clearer support traces for `document_overview`, `document_routing`, and `source_listing` so document-level answers expose stronger structured grounding instead of mostly empty evidence payloads.
+2. Adjust the sampled faithfulness audit so document-level answer modes are judged against their support contract rather than only chunk-evidence sentences.
+3. Tighten the CLI JSON/text contract around document-level answers so overview/routing responses surface support cues more clearly to end users.
+4. Re-run `release-check`, the maintainer shards, and the full benchmark after the support-trace pass to confirm the broader recovery still holds.
+5. Use that result to decide whether `v0.3.0` should be a genuinely more learned retrieval/synthesis layer or one more pass of heuristic simplification around document-level reasoning.
 
 
 ## 7. Explicitly Deferred

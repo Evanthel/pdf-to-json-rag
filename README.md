@@ -19,28 +19,53 @@ This codebase is intentionally separate from that fork. The fork captures the ba
 
 ## Current Status
 
-Current public release target: `0.1.0-beta`
+Current public version: `0.1.0-beta`
 
 Internal development iterations in this repo use `v1.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
 
+Current post-beta focus:
+
+- `v0.2.1-v0.2.4`: install/release-path hardening after the `v0.2.0` architecture shift
+- `v0.2.5`: recover the core repo-local regression shards exposed by the section-aware architecture
+- `v0.2.6`: recover the full 67-case benchmark on the section-aware architecture and tighten release-gate semantics for demo-only data roots
+- `v0.2.7`: strengthen document-level support traces and faithfulness semantics without reopening broad benchmark churn
+
+Current working-tree architecture upgrades:
+
+- extraction-time document sections
+- section-aware chunk metadata
+- clearer retrieval scoring signals
+- cleaner document-overview synthesis
+- deterministic local embedding fallback by default
+- packaged example assets and install-safe example loading
+- maintainer release gates that distinguish public-surface checks from benchmark-only regressions
+
 The current tool runs end to end across a mixed local benchmark that includes native-text papers, OCR-derived scans, technical manuals, questionnaires, checklist-style appendices, books, guidance notes, and short model-report documents.
 
-Current benchmark snapshot:
+Current validation state:
 
-- `Cases`: `67`
-- `Indexed sample documents`: `19`
-- `precision@5`: `0.521`
-- `recall@5`: `1.0`
-- `MRR`: `1.0`
-- `avg_keyword_coverage`: `1.0`
-- `negative_success_rate`: `1.0`
-- `warning_case_count`: `0`
+- the public install/release path passes `package-check` and `release-check`
+- core maintainer regression shards pass:
+  - `query_planning_core`
+  - `answer_modes_core`
+  - `document_family_core`
+  - `inventory_coverage_core`
+  - `relationship_core`
+- the full 67-case benchmark is green again on the `v0.2.x` section-aware architecture:
+  - `precision@5 = 0.533`
+  - `recall@5 = 1.0`
+  - `MRR = 1.0`
+  - `avg_keyword_coverage = 1.0`
+  - `negative_success_rate = 1.0`
+  - `warning_case_count = 0`
+- the sampled faithfulness audit still flags two document-level cases, so document-level support traces remain the next internal hardening target
 
 ## Capabilities
 
 - Extract native-text PDFs into document-level and chunk-level JSON artifacts.
 - Fall back to OCR with `pytesseract` when native extraction is weak or missing.
 - Build a local vector index with `ChromaDB`.
+- Carry extraction-time document sections into chunking, inspection, and document-level synthesis.
 - Answer single-document evidence questions with grounded citations.
 - Route document-level and cross-document queries such as:
   - `What does this file cover?`
@@ -55,6 +80,7 @@ Current benchmark snapshot:
   - `answer-query`
   - `run-workflow`
   - `smoke-check`
+- Expose maintainer-facing release gates through:
   - `package-check`
   - `release-check`
 
@@ -73,23 +99,37 @@ Current benchmark snapshot:
 ## Quickstart
 
 ```bash
-pip install -e .
+python -m pip install .
 export PDF_TO_JSON_RAG_DATA_DIR=/tmp/pdf-to-json-rag-data
 pdf-to-json-rag init --json
 pdf-to-json-rag doctor --json
 pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
-pdf-to-json-rag extract-native --pdf /tmp/pdf-to-json-rag-demo.pdf --json
-pdf-to-json-rag chunk-document --doc-id your-doc-id --json
-pdf-to-json-rag build-index --doc-id your-doc-id --json
-pdf-to-json-rag answer-query --query "What does this file cover?" --json
+pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 ```
 
-First-release validation:
+Optional stronger local embeddings:
+
+```bash
+export PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1
+```
+
+Fastest full workflow:
+
+```bash
+pdf-to-json-rag run-workflow --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
+```
+
+Maintainer release validation:
 
 ```bash
 pdf-to-json-rag package-check --json
-pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 pdf-to-json-rag release-check --json
+```
+
+For end users, the main public validation path is still:
+
+```bash
+pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 ```
 
 More detailed usage lives in:
@@ -138,14 +178,16 @@ The saved evaluation report currently includes:
 - a sampled faithfulness audit over selected grounded cases
 - explicit deferred-feature decisions for `pdfplumber`, cross-encoder reranking, and `LLM-as-a-judge`
 
-On the current benchmark:
+Current `v0.2.6` gate status:
 
-- OCR-derived, technical/manual, form/grid, appendix/checklist, cross-document, and document-discovery slices are stable
-- query-planning and document-inventory slices are stable
-- answer-mode separation is stable
-- document-family reasoning and answer-contract slices are stable
-- the lightweight reranking pass is still sufficient
-- `pdfplumber`, cross-encoder reranking, and `LLM-as-a-judge` are still not justified by the observed failure modes
+- public release gates are green
+- the maintainer shard set used by `release-check` is green
+- the full 67-case benchmark is green again on the section-aware architecture
+- `release-check` now distinguishes cleanly between:
+  - public-surface gates
+  - maintainer package/test gates
+  - internal benchmark regressions that should only run when full benchmark assets are actually present
+- the remaining internal hardening target is document-level faithfulness/support tracing rather than broad retrieval parity
 
 ## Limitations
 
@@ -154,6 +196,7 @@ On the current benchmark:
 - Chunking is still heuristic rather than fully semantic
 - Section detection is improved, but still rule-based and fragile on unfamiliar layouts
 - Retrieval is stronger than earlier versions, but still depends on heuristic scoring, chunk-quality labels, structural cues, and a lightweight reranking pass rather than a more model-driven reranker
+- The default public path now prefers deterministic local embeddings over automatic model downloads; stronger local sentence-transformer embeddings are opt-in
 - Document facets are useful, but still heuristic and not yet learned from a richer metadata or classifier layer
 - Document-family classification is compact and useful, but still heuristic rather than trained
 - Query planning and document inventory are explicit now, but still built from heuristic metadata rather than a learned planner or classifier
@@ -161,10 +204,11 @@ On the current benchmark:
 - Block metadata and chunk semantics improve robustness, but they are still derived from handcrafted rules rather than a richer learned representation
 - Structured-form and appendix handling are broader than before, but still validated on a narrow set of questionnaire/checklist examples
 - Cross-document and document-discovery behavior are implemented, but still benchmarked on a modest hand-built set of source-discovery, overview, routing, and comparison queries
+- The `v0.2.x` section-aware architecture is now green on both public release gates and the full 67-case benchmark, but document-level support tracing is still thinner than chunk-evidence tracing
 - Grounded answers are extractive, not LLM-synthesized
 - The benchmark is broader than before, but still hand-built and not yet domain-diverse enough to prove true generalization
 - The scanned benchmark still uses a narrow OCR-heavy set rather than a broader scanned-document collection
-- The sampled faithfulness audit is useful as a checkpoint, but not yet a substitute for broader human review
+- The sampled faithfulness audit is useful as a checkpoint, but it still surfaces weaker document-level support traces and is not yet a substitute for broader human review
 - Multilingual robustness is not validated yet
 
 ## Notes on Reference Material
