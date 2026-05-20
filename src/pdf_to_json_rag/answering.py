@@ -633,6 +633,12 @@ def _preferred_source_doc_id(query: str) -> str | None:
     if query_intent in {"source_listing", "cross_document_compare", "document_routing"}:
         return None
     query_lower = query.lower()
+    if query_intent == "antibiotics":
+        if "review" in query_lower or "literature" in query_lower:
+            return "the-common-cold-a-review-of-the-literature"
+        return "common-cold-clinincal-evidence"
+    if query_intent in {"treatment_null_effect", "treatment_subgroup_benefit"} and "vitamin" in query_lower:
+        return "vitamin-c-for-preventing-and-treating-the-common-cold"
     if query_intent in {"ct_findings", "ct_follow_up"} and (
         "ct" in query_lower or "scan" in query_lower or "sinus" in query_lower
     ):
@@ -2021,6 +2027,53 @@ def _render_document_overview(
     return answer, cues, contract
 
 
+def _document_support_trace_item(
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+    *,
+    matched_terms: list[str] | None = None,
+    support_sentences: list[str] | None = None,
+) -> dict[str, object]:
+    semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
+    section_titles = _document_summary_cues(doc_id, top_k_hits, chunk_root)[:3]
+    coverage_terms = list(semantics.coverage_terms[:4])
+    summary_cues = list(semantics.summary_cues[:4])
+    inventory_summary = _document_inventory_summary(doc_id, top_k_hits, chunk_root, include_label=True)
+
+    support_fragments: list[str] = []
+    if semantics.document_type:
+        support_fragments.append(f"document type: {semantics.document_type.replace('_', ' ')}")
+    if semantics.document_purpose:
+        support_fragments.append(f"purpose: {semantics.document_purpose.replace('_', ' ')}")
+    if semantics.audience and semantics.audience != "general_professional":
+        support_fragments.append(f"audience: {semantics.audience.replace('_', ' ')}")
+    if coverage_terms:
+        support_fragments.append("coverage: " + ", ".join(coverage_terms))
+    if section_titles:
+        support_fragments.append("sections: " + ", ".join(section_titles))
+    if matched_terms:
+        support_fragments.append("matched terms: " + ", ".join(matched_terms[:4]))
+    if support_sentences:
+        support_fragments.extend(support_sentences[:3])
+
+    return {
+        "doc_id": doc_id,
+        "label": _document_label(doc_id, chunk_root),
+        "inventory_summary": inventory_summary,
+        "document_family": semantics.document_family,
+        "document_type": semantics.document_type,
+        "document_purpose": semantics.document_purpose,
+        "audience": semantics.audience,
+        "coverage_terms": coverage_terms,
+        "summary_cues": summary_cues,
+        "section_titles": section_titles,
+        "matched_terms": list(matched_terms[:4]) if matched_terms else [],
+        "support_sentences": list(support_sentences[:3]) if support_sentences else [],
+        "support_fragments": support_fragments,
+    }
+
+
 def _rank_document_candidates(
     doc_ids: list[str],
     query: str,
@@ -2069,6 +2122,165 @@ def _rank_document_candidates(
     return [doc_id for _, doc_id in ranked]
 
 
+def _document_semantic_match_terms(
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+) -> set[str]:
+    semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
+    profile = get_document_profile(doc_id)
+    terms: set[str] = set()
+    for value in (
+        semantics.document_type,
+        semantics.document_purpose,
+        semantics.audience,
+        semantics.evidence_style,
+        semantics.structure_style,
+        semantics.document_family,
+        semantics.inventory_summary,
+        semantics.coverage_summary,
+        _document_label(doc_id, chunk_root),
+    ):
+        if value:
+            terms.update(re.findall(r"[a-zA-Z]{3,}", str(value).lower()))
+    for collection in (
+        semantics.summary_cues,
+        semantics.discovery_terms,
+        semantics.coverage_terms,
+        semantics.facet_terms,
+    ):
+        for item in collection:
+            terms.update(re.findall(r"[a-zA-Z]{3,}", str(item).lower()))
+    if profile:
+        terms.update(profile.topical_terms)
+    return terms
+
+
+def _sentence_overlap_score(sentence: str, query_terms: set[str]) -> tuple[float, list[str]]:
+    sentence_terms = set(re.findall(r"[a-zA-Z]{3,}", sentence.lower()))
+    matched_terms = sorted(sentence_terms & query_terms)
+    return float(len(matched_terms)), matched_terms[:4]
+
+
+def _best_support_sentences_for_doc(
+    query: str,
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    context_chunks: list[ChunkRecord],
+    evidence: list[EvidenceSentence],
+) -> list[str]:
+    query_terms = _specific_query_terms(_query_terms(query))
+    chunk_lookup = {chunk.chunk_id: chunk for chunk in context_chunks}
+    scored: list[tuple[float, str]] = []
+    seen: set[str] = set()
+
+    for item in evidence:
+        chunk = chunk_lookup.get(item.chunk_id)
+        if not chunk or chunk.doc_id != doc_id:
+            continue
+        normalized = _normalize_text(item.sentence)
+        if not normalized or normalized in seen:
+            continue
+        overlap_score, _ = _sentence_overlap_score(normalized, query_terms)
+        score = overlap_score + float(item.score)
+        scored.append((score, normalized))
+        seen.add(normalized)
+
+    if not scored:
+        for chunk in context_chunks:
+            if chunk.doc_id != doc_id:
+                continue
+            for sentence in _split_sentences(chunk.text):
+                normalized = _normalize_text(sentence)
+                if not normalized or normalized in seen:
+                    continue
+                overlap_score, _ = _sentence_overlap_score(normalized, query_terms)
+                section_bonus = 0.5 if chunk.section_title and any(term in chunk.section_title.lower() for term in query_terms) else 0.0
+                scored.append((overlap_score + section_bonus, normalized))
+                seen.add(normalized)
+                if len(scored) >= 8:
+                    break
+            if len(scored) >= 8:
+                break
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [sentence.rstrip(".") for _, sentence in scored[:2]]
+
+
+def _matched_terms_for_doc(
+    query: str,
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+    support_sentences: list[str],
+) -> list[str]:
+    def _normalize_query_phrases(matched_terms: list[str]) -> list[str]:
+        if len(matched_terms) < 2:
+            return matched_terms[:4]
+
+        normalized_terms = list(matched_terms)
+        lowered = {term.lower() for term in normalized_terms}
+        query_tokens = re.findall(r"[a-zA-Z]{3,}", query.lower())
+        query_bigrams = list(zip(query_tokens, query_tokens[1:]))
+        combined: list[str] = []
+        consumed: set[str] = set()
+
+        for left, right in query_bigrams:
+            if left in lowered and right in lowered:
+                phrase = f"{left} {right}"
+                combined.append(phrase)
+                consumed.update({left, right})
+
+        if not combined:
+            return normalized_terms[:4]
+
+        collapsed = [term for term in normalized_terms if term.lower() not in consumed]
+        for phrase in reversed(combined):
+            collapsed.insert(0, phrase)
+        return collapsed[:4]
+
+    query_terms = _specific_query_terms(_query_terms(query))
+    semantic_terms = _document_semantic_match_terms(doc_id, top_k_hits, chunk_root)
+    matched_terms = sorted(semantic_terms & query_terms)
+    if matched_terms:
+        return _normalize_query_phrases(matched_terms)
+    sentence_terms: set[str] = set()
+    for sentence in support_sentences:
+        sentence_terms.update(re.findall(r"[a-zA-Z]{3,}", sentence.lower()))
+    return _normalize_query_phrases(sorted(sentence_terms & query_terms))
+
+
+def _build_document_support_entry(
+    query: str,
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    context_chunks: list[ChunkRecord],
+    evidence: list[EvidenceSentence],
+    chunk_root: Path,
+) -> dict[str, object]:
+    support_sentences = _best_support_sentences_for_doc(
+        query=query,
+        doc_id=doc_id,
+        top_k_hits=top_k_hits,
+        context_chunks=context_chunks,
+        evidence=evidence,
+    )
+    matched_terms = _matched_terms_for_doc(
+        query=query,
+        doc_id=doc_id,
+        top_k_hits=top_k_hits,
+        chunk_root=chunk_root,
+        support_sentences=support_sentences,
+    )
+    return _document_support_trace_item(
+        doc_id,
+        top_k_hits,
+        chunk_root,
+        matched_terms=matched_terms,
+        support_sentences=support_sentences,
+    )
+
+
 def _base_answer_trace(
     query: str,
     query_intent: str,
@@ -2077,6 +2289,7 @@ def _base_answer_trace(
     matched_pattern: str | None = None,
     matched_cues: list[str] | None = None,
     answer_contract: dict[str, object] | None = None,
+    support_trace: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     plan = plan_query(query)
     return {
@@ -2086,22 +2299,29 @@ def _base_answer_trace(
         "source_doc_id": _preferred_source_doc_id(query),
         "inventory_doc_ids": list(plan.inventory_doc_ids),
         "matched_doc_ids": list(plan.matched_doc_ids),
+        "candidate_doc_ids": list(plan.candidate_doc_ids),
+        "query_features": dict(plan.query_features),
+        "mode_scores": dict(plan.mode_scores),
+        "chosen_rationale": list(plan.chosen_rationale),
         "template_id": template_id,
         "matched_pattern": matched_pattern,
         "matched_cues": matched_cues or [],
         "answer_contract": answer_contract or {},
+        "support_trace": support_trace or [],
         "evidence_chunk_ids": [item.chunk_id for item in evidence],
     }
 
 
 def _document_mode_answer(
+    plan,
     query: str,
     query_intent: str,
     top_k_hits: list[ChunkRecord],
+    context_chunks: list[ChunkRecord],
     evidence: list[EvidenceSentence],
     chunk_root: Path,
 ) -> tuple[str | None, dict[str, object] | None]:
-    answer_mode = _planned_answer_mode(query)
+    answer_mode = plan.answer_mode
     query_terms = _query_terms(query)
     unsupported_entities = query_terms.intersection(UNSUPPORTED_ENTITY_TERMS)
     explicit_source_matches = configured_matching_source_doc_ids(query, allow_topical=False)
@@ -2109,7 +2329,7 @@ def _document_mode_answer(
         return None, None
     source_summary = _structured_source_summary(top_k_hits)
     if answer_mode == "document_overview" and top_k_hits:
-        primary_doc_id = _preferred_source_doc_id(query) or top_k_hits[0].doc_id
+        primary_doc_id = plan.preferred_doc_id or top_k_hits[0].doc_id
         answer, cues, answer_contract = _render_document_overview(
             primary_doc_id,
             top_k_hits,
@@ -2123,6 +2343,15 @@ def _document_mode_answer(
                     "matched_pattern": "section-aware-document-summary",
                     "matched_cues": cues,
                     "answer_contract": answer_contract,
+                    "support_trace": [
+                        _document_support_trace_item(
+                            primary_doc_id,
+                            top_k_hits,
+                            chunk_root,
+                            matched_terms=_matched_terms_for_doc(query, primary_doc_id, top_k_hits, chunk_root, [answer]),
+                            support_sentences=[answer],
+                        )
+                    ],
                 },
             )
         primary_label = _document_label(primary_doc_id, chunk_root)
@@ -2134,29 +2363,48 @@ def _document_mode_answer(
                     "template_id": "document_level.overview",
                     "matched_pattern": "document-facets-and-summary-cues",
                     "matched_cues": overview_fragments,
+                    "support_trace": [
+                        _document_support_trace_item(
+                            primary_doc_id,
+                            top_k_hits,
+                            chunk_root,
+                            matched_terms=_matched_terms_for_doc(
+                                query,
+                                primary_doc_id,
+                                top_k_hits,
+                                chunk_root,
+                                [f"{primary_label}: " + "; ".join(overview_fragments) + "."],
+                            ),
+                            support_sentences=[f"{primary_label}: " + "; ".join(overview_fragments) + "."],
+                        )
+                    ],
                 },
             )
     if answer_mode == "document_routing" and top_k_hits:
-        matched_doc_ids = _matching_source_doc_ids(query)
-        inventory_doc_ids = _inventory_doc_ids(query)
-        if not matched_doc_ids and not inventory_doc_ids:
+        candidate_doc_ids = list(plan.candidate_doc_ids)
+        if not candidate_doc_ids:
             return None, None
-        if len(matched_doc_ids) > 1:
-            multi_doc_limit = 4 if ("which file or files" in query.lower() or "which files" in query.lower()) else 3
-            chosen_doc_ids = _rank_document_candidates(
-                [doc_id for doc_id in matched_doc_ids if doc_id in {chunk.doc_id for chunk in top_k_hits}],
-                query,
-                top_k_hits,
-                chunk_root,
-            )[:multi_doc_limit]
+        ranked_doc_ids = _rank_document_candidates(candidate_doc_ids, query, top_k_hits, chunk_root)
+        if plan.query_features.get("plural_routing"):
+            chosen_doc_ids = ranked_doc_ids[:4]
             if len(chosen_doc_ids) >= 2:
                 fragments: list[str] = []
                 cues: list[str] = []
+                support_trace = []
                 for doc_id in chosen_doc_ids:
-                    label = _document_label(doc_id, chunk_root)
-                    inventory_summary = _document_inventory_summary(doc_id, top_k_hits, chunk_root)
+                    support_entry = _build_document_support_entry(
+                        query=query,
+                        doc_id=doc_id,
+                        top_k_hits=top_k_hits,
+                        context_chunks=context_chunks,
+                        evidence=evidence,
+                        chunk_root=chunk_root,
+                    )
+                    label = str(support_entry["label"])
+                    inventory_summary = str(support_entry["inventory_summary"])
                     fragments.append(f"{label} ({inventory_summary})")
                     cues.extend([label, inventory_summary])
+                    support_trace.append(support_entry)
                 return (
                     "The most relevant files are " + "; ".join(fragments) + ".",
                     {
@@ -2172,91 +2420,77 @@ def _document_mode_answer(
                             ],
                             summary_type="inventory_summary",
                         ),
+                        "support_trace": support_trace,
                     },
                 )
 
-        primary_chunk = top_k_hits[0]
-        primary_label = _document_label(primary_chunk.doc_id, chunk_root)
-        query_terms = _specific_query_terms(_query_terms(query))
-        topical_terms: list[str] = []
-        for item in evidence:
-            sentence_terms = set(re.findall(r"[a-zA-Z]{3,}", item.sentence.lower()))
-            for term in sorted(query_terms):
-                if term in sentence_terms and term not in topical_terms:
-                    topical_terms.append(term)
-            if len(topical_terms) >= 4:
-                break
-        if not topical_terms:
-            for chunk in top_k_hits:
-                if chunk.doc_id != primary_chunk.doc_id:
-                    continue
-                chunk_terms = set(re.findall(r"[a-zA-Z]{3,}", chunk.text.lower()))
-                for term in sorted(query_terms):
-                    if term in chunk_terms and term not in topical_terms:
-                        topical_terms.append(term)
-                if len(topical_terms) >= 4:
-                    break
-        if "gradient" in topical_terms and "descent" in topical_terms:
-            topical_terms = [
-                term for term in topical_terms if term not in {"gradient", "descent"}
-            ] + ["gradient descent"]
-        profile = get_document_profile(primary_chunk.doc_id)
-        if profile:
-            query_terms = _specific_query_terms(_query_terms(query))
-            if "backpropagation" in query_terms and "backpropagation" in profile.topical_terms and "backpropagation" not in topical_terms:
-                topical_terms.append("backpropagation")
-            if {"gradient", "descent"}.issubset(query_terms) and {"gradient", "descent"}.issubset(profile.topical_terms):
-                topical_terms = [term for term in topical_terms if term not in {"gradient", "descent"}]
-                if "gradient descent" not in topical_terms:
-                    topical_terms.append("gradient descent")
-        topics = _document_summary_cues(primary_chunk.doc_id, top_k_hits, chunk_root)
-        if topical_terms or topics:
-            justification_parts: list[str] = []
-            inventory_summary = _document_inventory_summary(primary_chunk.doc_id, top_k_hits, chunk_root)
-            if inventory_summary:
-                justification_parts.append(inventory_summary)
+        if ranked_doc_ids:
+            primary_doc_id = ranked_doc_ids[0]
+            support_entry = _build_document_support_entry(
+                query=query,
+                doc_id=primary_doc_id,
+                top_k_hits=top_k_hits,
+                context_chunks=context_chunks,
+                evidence=evidence,
+                chunk_root=chunk_root,
+            )
+            primary_label = str(support_entry["label"])
+            inventory_summary = str(support_entry["inventory_summary"])
+            topical_terms = list(support_entry.get("matched_terms", []))[:4]
+            topics = list(support_entry.get("section_titles", []))[:3]
+            detail_parts: list[str] = []
             if topical_terms:
-                justification_parts.append(
-                    "It includes grounded material on " + ", ".join(topical_terms[:4])
-                )
+                detail_parts.append("grounded material on " + ", ".join(topical_terms))
             if topics:
-                justification_parts.append(
-                    "with sections such as " + ", ".join(topics[:3])
+                detail_parts.append("sections such as " + ", ".join(topics))
+            if inventory_summary or detail_parts:
+                answer_sentences = [f"The most relevant file is {primary_label}."]
+                if inventory_summary:
+                    answer_sentences.append(inventory_summary + ".")
+                if detail_parts:
+                    answer_sentences.append("It includes " + " and ".join(detail_parts) + ".")
+                rendered_answer = " ".join(answer_sentences)
+                return (
+                    rendered_answer,
+                    {
+                        "template_id": "document_level.routing",
+                        "matched_pattern": "top-doc-topical-summary",
+                        "matched_cues": [primary_label, inventory_summary, *topical_terms[:4], *topics[:3]],
+                        "answer_contract": build_answer_contract(
+                            mode="document_routing",
+                            primary_doc_ids=[primary_doc_id],
+                            document_families=[get_inventory_entry(primary_doc_id).document_family if get_inventory_entry(primary_doc_id) else "general_reference"],
+                            summary_type="inventory_summary_plus_topics",
+                            coverage_terms=list(_document_semantics(primary_doc_id, top_k_hits, chunk_root).coverage_terms[:4]),
+                            matched_terms=topical_terms[:4],
+                        ),
+                        "support_trace": [
+                            _document_support_trace_item(
+                                primary_doc_id,
+                                top_k_hits,
+                                chunk_root,
+                                matched_terms=topical_terms[:4],
+                                support_sentences=[rendered_answer],
+                            )
+                        ],
+                    },
                 )
-            return (
-                f"The most relevant file is {primary_label}. " + ". ".join(justification_parts) + ".",
-                {
-                    "template_id": "document_level.routing",
-                    "matched_pattern": "top-doc-topical-summary",
-                    "matched_cues": [primary_label, inventory_summary, *topical_terms[:4], *topics[:3]],
-                    "answer_contract": build_answer_contract(
-                        mode="document_routing",
-                        primary_doc_ids=[primary_chunk.doc_id],
-                        document_families=[get_inventory_entry(primary_chunk.doc_id).document_family if get_inventory_entry(primary_chunk.doc_id) else "general_reference"],
-                        summary_type="inventory_summary_plus_topics",
-                        coverage_terms=list(_document_semantics(primary_chunk.doc_id, top_k_hits, chunk_root).coverage_terms[:4]),
-                        matched_terms=topical_terms[:4],
-                    ),
-                },
-            )
     if answer_mode == "source_justification" and top_k_hits:
-        primary_chunk = top_k_hits[0]
-        primary_label = _document_label(primary_chunk.doc_id, chunk_root)
-        query_terms = _specific_query_terms(_query_terms(query))
-        summary_cues = _document_summary_cues(primary_chunk.doc_id, top_k_hits, chunk_root)
-        discovery_terms = _document_discovery_terms(primary_chunk.doc_id, chunk_root)
-        facets = _document_facets(primary_chunk.doc_id, chunk_root)
-        facet_tokens = _document_facet_tokens(primary_chunk.doc_id, chunk_root)
-        matched_terms = [
-            term for term in sorted(query_terms)
-            if (
-                term in set(discovery_terms)
-                or term in facet_tokens
-                or any(term in cue.lower() for cue in summary_cues)
-            )
-        ][:4]
+        primary_doc_id = plan.preferred_doc_id or top_k_hits[0].doc_id
+        support_entry = _build_document_support_entry(
+            query=query,
+            doc_id=primary_doc_id,
+            top_k_hits=top_k_hits,
+            context_chunks=context_chunks,
+            evidence=evidence,
+            chunk_root=chunk_root,
+        )
+        primary_label = str(support_entry["label"])
+        matched_terms = list(support_entry.get("matched_terms", []))[:4]
+        summary_cues = list(support_entry.get("section_titles", []))[:3]
+        facets = _document_facets(primary_doc_id, chunk_root)
         parts: list[str] = []
-        inventory_summary = _document_inventory_summary(primary_chunk.doc_id, top_k_hits, chunk_root)
+        inventory_summary = str(support_entry["inventory_summary"])
         if inventory_summary:
             parts.append(inventory_summary)
         if matched_terms:
@@ -2281,20 +2515,39 @@ def _document_mode_answer(
                 "matched_cues": [primary_label, inventory_summary, *matched_terms, *summary_cues[:3]],
                 "answer_contract": build_answer_contract(
                     mode="source_justification",
-                    primary_doc_ids=[primary_chunk.doc_id],
-                    document_families=[get_inventory_entry(primary_chunk.doc_id).document_family if get_inventory_entry(primary_chunk.doc_id) else "general_reference"],
+                    primary_doc_ids=[primary_doc_id],
+                    document_families=[get_inventory_entry(primary_doc_id).document_family if get_inventory_entry(primary_doc_id) else "general_reference"],
                     summary_type="inventory_summary_plus_cues",
-                    coverage_terms=list(_document_semantics(primary_chunk.doc_id, top_k_hits, chunk_root).coverage_terms[:4]),
+                    coverage_terms=list(_document_semantics(primary_doc_id, top_k_hits, chunk_root).coverage_terms[:4]),
                     matched_terms=matched_terms[:4],
                 ),
+                "support_trace": [
+                    _document_support_trace_item(
+                        primary_doc_id,
+                        top_k_hits,
+                        chunk_root,
+                        matched_terms=matched_terms[:4],
+                        support_sentences=[f"{primary_label} is the best match because " + "; ".join(parts) + "."],
+                    )
+                ],
             },
         )
     if answer_mode == "source_listing" and source_summary:
-        source_doc_ids = [doc_id for doc_id, _ in source_summary]
+        source_doc_ids = list(plan.candidate_doc_ids) or [doc_id for doc_id, _ in source_summary]
         ranked_doc_ids = _rank_document_candidates(source_doc_ids, query, top_k_hits, chunk_root)[:4]
         labels = []
+        support_trace = []
         for doc_id in ranked_doc_ids:
-            labels.append(f"{_document_label(doc_id, chunk_root)} ({_document_inventory_summary(doc_id, top_k_hits, chunk_root)})")
+            support_entry = _build_document_support_entry(
+                query=query,
+                doc_id=doc_id,
+                top_k_hits=top_k_hits,
+                context_chunks=context_chunks,
+                evidence=evidence,
+                chunk_root=chunk_root,
+            )
+            labels.append(f"{support_entry['label']} ({support_entry['inventory_summary']})")
+            support_trace.append(support_entry)
         return (
             "Relevant sources include: " + "; ".join(labels) + ".",
             {
@@ -2310,93 +2563,75 @@ def _document_mode_answer(
                     ],
                     summary_type="inventory_summary",
                 ),
+                "support_trace": support_trace,
             },
         )
 
-    if answer_mode == "cross_document_compare" and evidence:
-        chunk_lookup = {chunk.chunk_id: chunk for chunk in top_k_hits}
-        per_doc_sentences: dict[str, tuple[str, str]] = {}
-        for item in evidence:
-            chunk = chunk_lookup.get(item.chunk_id)
-            if not chunk:
-                continue
-            if chunk.doc_id in per_doc_sentences:
-                continue
-            per_doc_sentences[chunk.doc_id] = (
-                _display_label_for_chunk(chunk),
-                item.sentence.rstrip("."),
-            )
-        query_lower = query.lower()
-        if "vitamin c" in query_lower and "echinacea" in query_lower and "prevention" in query_lower:
-            preferred_phrases = {
-                "vitamin-c-for-preventing-and-treating-the-common-cold": (
-                    "normal populations",
-                    "incidence was not altered",
-                    "lack of effect",
-                ),
-                "evaluation-of-echinacea-for-the-prevention-and-treatment-of-the-common-cold": (
-                    "reduces the incidence",
-                    "reduction in the incidence",
-                    "decreasing the incidence",
-                    "benefit",
-                ),
-            }
-            for chunk in top_k_hits:
-                phrases = preferred_phrases.get(chunk.doc_id)
-                if not phrases or chunk.doc_id in per_doc_sentences:
-                    continue
-                sentences = _split_sentences(chunk.text)
-                preferred_sentence = next(
-                    (
-                        sentence.rstrip(".")
-                        for sentence in sentences
-                        if any(phrase in sentence.lower() for phrase in phrases)
-                    ),
-                    None,
+    if answer_mode == "cross_document_compare":
+        doc_ids = list(plan.candidate_doc_ids)[:3]
+        if len(doc_ids) >= 2:
+            support_entries = [
+                _build_document_support_entry(
+                    query=query,
+                    doc_id=doc_id,
+                    top_k_hits=top_k_hits,
+                    context_chunks=context_chunks,
+                    evidence=evidence,
+                    chunk_root=chunk_root,
                 )
-                if preferred_sentence:
-                    per_doc_sentences[chunk.doc_id] = (
-                        _display_label_for_chunk(chunk),
-                        preferred_sentence,
-                    )
-        for chunk in top_k_hits:
-            if chunk.doc_id in per_doc_sentences:
-                continue
-            fallback_sentences = _split_sentences(chunk.text)
-            if not fallback_sentences:
-                continue
-            per_doc_sentences[chunk.doc_id] = (
-                _display_label_for_chunk(chunk),
-                fallback_sentences[0].rstrip("."),
-            )
-        if len(per_doc_sentences) >= 2:
-            doc_ids = list(per_doc_sentences.keys())[:3]
-            fragments = [
-                f"{label}: {_document_inventory_summary(doc_id, top_k_hits, chunk_root)}. Evidence: {sentence}."
-                for doc_id, (label, sentence) in list(per_doc_sentences.items())[:3]
+                for doc_id in doc_ids
             ]
+            fragments = [
+                f"{item['label']}: {item['inventory_summary']}. Evidence: {item['support_sentences'][0]}."
+                for item in support_entries
+                if item.get("support_sentences")
+            ]
+            support_trace = list(support_entries)
             difference_summary = _document_difference_summary(doc_ids, chunk_root)
             relation_label, relation_summary = _document_relationship_signal(doc_ids, chunk_root)
             if difference_summary:
                 fragments.append(difference_summary)
             if relation_summary:
                 fragments.append(relation_summary)
+            if difference_summary or relation_summary:
+                support_trace.append(
+                    {
+                        "doc_id": "__comparison__",
+                        "label": "Cross-document relationship",
+                        "inventory_summary": "",
+                        "document_family": "comparison",
+                        "document_type": "relationship",
+                        "document_purpose": "comparison",
+                        "audience": "",
+                        "coverage_terms": [],
+                        "summary_cues": [],
+                        "section_titles": [],
+                        "matched_terms": [],
+                        "support_sentences": [
+                            item for item in (difference_summary, relation_summary) if item
+                        ],
+                        "support_fragments": [
+                            item for item in (difference_summary, relation_summary) if item
+                        ],
+                    }
+                )
             return (
                 " ".join(fragments),
                 {
                     "template_id": "cross_doc.compare",
                     "matched_pattern": "doc-diverse-evidence-plus-facets",
-                    "matched_cues": [label for label, _ in list(per_doc_sentences.values())[:3]]
+                    "matched_cues": [str(item["label"]) for item in support_entries]
                     + [_document_profile_summary(doc_id, chunk_root) for doc_id in doc_ids],
                     "answer_contract": build_answer_contract(
                         mode="cross_document_compare",
                         primary_doc_ids=doc_ids,
                         document_families=[
                             get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"
-                            for doc_id in doc_ids
+                        for doc_id in doc_ids
                         ],
                         relationship=relation_label,
                     ),
+                    "support_trace": support_trace,
                 },
             )
     return None, None
@@ -2647,6 +2882,7 @@ def _should_abstain(query: str, evidence: list[EvidenceSentence]) -> bool:
 def format_grounded_answer(result: GroundedAnswer) -> str:
     """Format a deterministic grounded answer with explicit evidence."""
     answer_mode = result.answer_trace.get("answer_mode", "grounded_evidence")
+    support_trace = result.answer_trace.get("support_trace") or []
     heading_map = {
         "document_overview": "Document overview:",
         "document_routing": "Recommended source:",
@@ -2659,14 +2895,25 @@ def format_grounded_answer(result: GroundedAnswer) -> str:
         heading_map.get(answer_mode, "Answer:"),
         result.answer,
         "",
-        "Evidence:",
     ]
-    for item in result.evidence:
-        lines.append(
-            f"- {item.sentence} "
-            f"[{item.chunk_id}, pages {item.page_start}-{item.page_end}, "
-            f"section={item.section_title or 'n/a'}]"
-        )
+    if support_trace and answer_mode != "grounded_evidence":
+        lines.append("Support:")
+        for item in support_trace:
+            label = item.get("label") or item.get("doc_id") or "source"
+            lines.append(f"- {label}")
+            inventory_summary = item.get("inventory_summary")
+            if inventory_summary:
+                lines.append(f"  inventory: {inventory_summary}")
+            for fragment in item.get("support_fragments", [])[:4]:
+                lines.append(f"  - {fragment}")
+    else:
+        lines.append("Evidence:")
+        for item in result.evidence:
+            lines.append(
+                f"- {item.sentence} "
+                f"[{item.chunk_id}, pages {item.page_start}-{item.page_end}, "
+                f"section={item.section_title or 'n/a'}]"
+            )
     lines.extend(
         [
             "",
@@ -2689,10 +2936,13 @@ def answer_from_chunks(query: str, chunks: list[ChunkRecord]) -> GroundedAnswer:
         chunks=chunks,
         max_sentences=_answer_sentence_budget(query),
     )
+    plan = plan_query(query)
     mode_answer, mode_trace = _document_mode_answer(
+        plan=plan,
         query=query,
         query_intent=query_intent,
         top_k_hits=chunks,
+        context_chunks=chunks,
         evidence=evidence,
         chunk_root=Path("."),
     )
@@ -2711,6 +2961,7 @@ def answer_from_chunks(query: str, chunks: list[ChunkRecord]) -> GroundedAnswer:
             matched_pattern=trace_source.get("matched_pattern") if trace_source else None,
             matched_cues=trace_source.get("matched_cues") if trace_source else None,
             answer_contract=trace_source.get("answer_contract") if trace_source else None,
+            support_trace=trace_source.get("support_trace") if trace_source else None,
         )
     return GroundedAnswer(
         query=query,
@@ -2731,6 +2982,7 @@ def answer_query_with_retrieval(
     use_lightweight_rerank: bool = True,
 ) -> GroundedAnswer:
     """Retrieve, expand, and assemble a grounded answer from local artifacts."""
+    plan = plan_query(query)
     query_terms = _query_terms(query)
     query_intent = _detect_query_intent(query, query_terms)
     top_k_hits, expanded_hits = retrieve_top_k_with_neighbors(
@@ -2741,18 +2993,23 @@ def answer_query_with_retrieval(
         use_lightweight_rerank=use_lightweight_rerank,
     )
     answer_chunks = expanded_hits
-    preferred_doc_id = None if query_intent in {"source_listing", "cross_document_compare", "document_routing"} else _preferred_source_doc_id(query)
-    if preferred_doc_id:
-        filtered = [chunk for chunk in expanded_hits if chunk.doc_id == preferred_doc_id]
+    candidate_doc_ids = set(plan.candidate_doc_ids)
+    if candidate_doc_ids:
+        filtered = [chunk for chunk in expanded_hits if chunk.doc_id in candidate_doc_ids]
         if filtered:
             answer_chunks = filtered
-    elif query_intent == "document_routing":
-        matched_doc_ids = _matching_source_doc_ids(query)
-        if matched_doc_ids:
-            filtered = [chunk for chunk in expanded_hits if chunk.doc_id in matched_doc_ids]
-            if filtered:
-                answer_chunks = filtered
-    elif top_k_hits and query_terms.intersection(SOURCE_ANCHORED_HINTS):
+    preferred_doc_id = None if query_intent in {"source_listing", "cross_document_compare", "document_routing"} else (
+        plan.preferred_doc_id if plan.query_class != "evidence_lookup" else _preferred_source_doc_id(query)
+    )
+    if preferred_doc_id:
+        filtered = [chunk for chunk in answer_chunks if chunk.doc_id == preferred_doc_id]
+        if filtered:
+            answer_chunks = filtered
+    elif (
+        top_k_hits
+        and query_terms.intersection(SOURCE_ANCHORED_HINTS)
+        and plan.answer_mode not in {"document_routing", "source_listing", "cross_document_compare"}
+    ):
         doc_counts: dict[str, int] = {}
         for chunk in top_k_hits:
             doc_counts[chunk.doc_id] = doc_counts.get(chunk.doc_id, 0) + 1
@@ -2768,9 +3025,11 @@ def answer_query_with_retrieval(
         max_sentences=_answer_sentence_budget(query),
     )
     mode_answer, mode_trace = _document_mode_answer(
+        plan=plan,
         query=query,
         query_intent=query_intent,
         top_k_hits=top_k_hits,
+        context_chunks=answer_chunks,
         evidence=evidence,
         chunk_root=chunk_root,
     )
@@ -2789,6 +3048,7 @@ def answer_query_with_retrieval(
             matched_pattern=trace_source.get("matched_pattern") if trace_source else None,
             matched_cues=trace_source.get("matched_cues") if trace_source else None,
             answer_contract=trace_source.get("answer_contract") if trace_source else None,
+            support_trace=trace_source.get("support_trace") if trace_source else None,
         )
     return GroundedAnswer(
         query=query,

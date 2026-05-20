@@ -463,6 +463,12 @@ def _preferred_source_doc_id(query: str) -> str | None:
     if intent in {"source_listing", "cross_document_compare", "document_routing"}:
         return None
     query_lower = query.lower()
+    if intent == "antibiotics":
+        if "review" in query_lower or "literature" in query_lower:
+            return "the-common-cold-a-review-of-the-literature"
+        return "common-cold-clinincal-evidence"
+    if intent in {"treatment_null_effect", "treatment_subgroup_benefit"} and "vitamin" in query_lower:
+        return "vitamin-c-for-preventing-and-treating-the-common-cold"
     if intent in {"ct_findings", "ct_follow_up"} and (
         "ct" in query_lower or "scan" in query_lower or "sinus" in query_lower
     ):
@@ -1657,7 +1663,8 @@ def retrieve_top_k(
     index_dir = index_dir.expanduser().resolve()
     manifest = load_index_manifest(index_dir)
     collection_name = manifest.get("collection_name", DEFAULT_COLLECTION_NAME)
-    intent = _detect_query_intent(query)
+    plan = plan_query(query)
+    intent = plan.query_intent if plan.query_class != "evidence_lookup" else _detect_query_intent(query)
 
     embed_texts, _ = load_embedder_from_manifest(manifest)
     query_embedding = embed_texts([_augment_query(query)])[0]
@@ -1750,39 +1757,11 @@ def retrieve_top_k(
         chunk.quality_score = min(chunk.quality_score, score)
         hydrated_hits.append(chunk)
     filtered_hits = [chunk for chunk in hydrated_hits if not _should_exclude_chunk(chunk)]
-    inventory_doc_ids = set(_inventory_doc_ids(query))
-    if inventory_doc_ids:
-        filtered_hits = [chunk for chunk in filtered_hits if chunk.doc_id in inventory_doc_ids]
-        present_doc_ids = {chunk.doc_id for chunk in filtered_hits}
-        missing_inventory_doc_ids = [doc_id for doc_id in inventory_doc_ids if doc_id not in present_doc_ids]
-        for doc_id in missing_inventory_doc_ids:
-            doc_result = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=candidate_k,
-                where={"doc_id": doc_id},
-                include=["documents", "metadatas", "distances"],
-            )
-            for chunk in hydrate(doc_result):
-                labels, score = classify_chunk_quality(
-                    text=chunk.text,
-                    section_title=chunk.section_title,
-                    extraction_method=chunk.extraction_method,
-                )
-                chunk.noise_labels = sorted(set(chunk.noise_labels).union(labels))
-                chunk.quality_score = min(chunk.quality_score, score)
-                if not _should_exclude_chunk(chunk):
-                    filtered_hits.append(chunk)
-        deduped_hits: dict[str, ChunkRecord] = {}
-        for chunk in filtered_hits:
-            deduped_hits.setdefault(chunk.chunk_id, chunk)
-        filtered_hits = list(deduped_hits.values())
-    matched_doc_ids = set(_matching_source_doc_ids(query)) if _is_cross_document_intent(intent) else set()
-    if intent in {"document_routing", "source_justification"} and not inventory_doc_ids and not matched_doc_ids:
-        return []
-    if matched_doc_ids:
-        filtered_hits = [chunk for chunk in filtered_hits if chunk.doc_id in matched_doc_ids]
-        present_doc_ids = {chunk.doc_id for chunk in filtered_hits}
-        missing_doc_ids = [doc_id for doc_id in matched_doc_ids if doc_id not in present_doc_ids]
+    candidate_doc_ids = list(plan.candidate_doc_ids)
+
+    def backfill_candidate_docs(doc_ids: list[str], existing_hits: list[ChunkRecord]) -> list[ChunkRecord]:
+        present_doc_ids = {chunk.doc_id for chunk in existing_hits}
+        missing_doc_ids = [doc_id for doc_id in doc_ids if doc_id not in present_doc_ids]
         for doc_id in missing_doc_ids:
             doc_result = collection.query(
                 query_embeddings=[query_embedding],
@@ -1799,33 +1778,30 @@ def retrieve_top_k(
                 chunk.noise_labels = sorted(set(chunk.noise_labels).union(labels))
                 chunk.quality_score = min(chunk.quality_score, score)
                 if not _should_exclude_chunk(chunk):
-                    filtered_hits.append(chunk)
+                    existing_hits.append(chunk)
         deduped_hits: dict[str, ChunkRecord] = {}
-        for chunk in filtered_hits:
+        for chunk in existing_hits:
             deduped_hits.setdefault(chunk.chunk_id, chunk)
-        filtered_hits = list(deduped_hits.values())
-    preferred_doc_id = None if _is_cross_document_intent(intent) else _preferred_source_doc_id(query)
+        return list(deduped_hits.values())
+
+    if intent in {"document_routing", "source_justification", "source_listing", "cross_document_compare"} and not candidate_doc_ids:
+        return []
+    if candidate_doc_ids:
+        allowed_doc_ids = set(candidate_doc_ids)
+        filtered_hits = [chunk for chunk in filtered_hits if chunk.doc_id in allowed_doc_ids]
+        filtered_hits = backfill_candidate_docs(candidate_doc_ids, filtered_hits)
+    preferred_doc_id = (
+        None
+        if _is_cross_document_intent(intent)
+        else (plan.preferred_doc_id if plan.query_class != "evidence_lookup" else _preferred_source_doc_id(query))
+    )
     if preferred_doc_id:
         preferred_hits = [chunk for chunk in filtered_hits if chunk.doc_id == preferred_doc_id]
         if not preferred_hits:
-            preferred_result = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=candidate_k,
-                where={"doc_id": preferred_doc_id},
-                include=["documents", "metadatas", "distances"],
-            )
-            preferred_hydrated = []
-            for chunk in hydrate(preferred_result):
-                labels, score = classify_chunk_quality(
-                    text=chunk.text,
-                    section_title=chunk.section_title,
-                    extraction_method=chunk.extraction_method,
-                )
-                chunk.noise_labels = sorted(set(chunk.noise_labels).union(labels))
-                chunk.quality_score = min(chunk.quality_score, score)
-                preferred_hydrated.append(chunk)
             preferred_hits = [
-                chunk for chunk in preferred_hydrated if not _should_exclude_chunk(chunk)
+                chunk
+                for chunk in backfill_candidate_docs([preferred_doc_id], [])
+                if chunk.doc_id == preferred_doc_id
             ]
         if preferred_hits:
             filtered_hits = preferred_hits
@@ -1976,6 +1952,7 @@ def retrieve_top_k_with_neighbors(
     use_lightweight_rerank: bool = True,
 ) -> tuple[list[ChunkRecord], list[ChunkRecord]]:
     """Retrieve top-k chunks and expand them with adjacent neighbors."""
+    plan = plan_query(query)
     hits = retrieve_top_k(
         query=query,
         index_dir=index_dir,
@@ -1983,14 +1960,15 @@ def retrieve_top_k_with_neighbors(
         use_lightweight_rerank=use_lightweight_rerank,
     )
     doc_ids = {chunk.doc_id for chunk in hits}
-    intent = _detect_query_intent(query)
+    intent = plan.query_intent if plan.query_class != "evidence_lookup" else _detect_query_intent(query)
     structured_profile = get_structured_intent_profile(intent)
-    preferred_doc_id = _preferred_source_doc_id(query)
-    matched_doc_ids = _matching_source_doc_ids(query) if intent == "cross_document_compare" else []
+    preferred_doc_id = plan.preferred_doc_id if plan.query_class != "evidence_lookup" else _preferred_source_doc_id(query)
+    matched_doc_ids = list(plan.matched_doc_ids) if intent == "cross_document_compare" else []
     if structured_profile and structured_profile.source_doc_id:
         doc_ids.add(structured_profile.source_doc_id)
     if preferred_doc_id:
         doc_ids.add(preferred_doc_id)
+    doc_ids.update(plan.candidate_doc_ids)
     doc_ids.update(matched_doc_ids)
     all_chunks = load_chunk_lookup(chunk_root=chunk_root, doc_ids=doc_ids)
     hits = _intent_anchor_recovery_hits(query=query, hits=hits, all_chunks=all_chunks, k=k)

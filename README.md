@@ -25,17 +25,24 @@ Internal development iterations in this repo use `v1.x` labels. Public releases 
 
 Current post-beta focus:
 
-- `v0.2.1-v0.2.4`: install/release-path hardening after the `v0.2.0` architecture shift
-- `v0.2.5`: recover the core repo-local regression shards exposed by the section-aware architecture
-- `v0.2.6`: recover the full 67-case benchmark on the section-aware architecture and tighten release-gate semantics for demo-only data roots
-- `v0.2.7`: strengthen document-level support traces and faithfulness semantics without reopening broad benchmark churn
+- `v0.3.0`: simplify the document-level pipeline instead of adding a heavier model layer
+- current emphasis:
+  - feature-based query planning
+  - simplified inventory shortlist scoring
+  - two-stage document-level retrieval
+  - unified document-level support building
+  - compact default CLI payloads with verbose debug on demand
 
 Current working-tree architecture upgrades:
 
-- extraction-time document sections
-- section-aware chunk metadata
-- clearer retrieval scoring signals
-- cleaner document-overview synthesis
+- extraction-time document sections and section-aware chunk metadata
+- feature-based query planning with explicit mode scores and rationale
+- simplified shortlist scoring with explicit breakdowns
+- two-stage document-level retrieval:
+  - candidate document selection
+  - chunk retrieval inside selected documents
+- unified support-trace building for overview, routing, listing, justification, and comparison answers
+- compact default JSON answer payloads with `--verbose` for full retrieval/debug state
 - deterministic local embedding fallback by default
 - packaged example assets and install-safe example loading
 - maintainer release gates that distinguish public-surface checks from benchmark-only regressions
@@ -48,17 +55,20 @@ Current validation state:
 - core maintainer regression shards pass:
   - `query_planning_core`
   - `answer_modes_core`
+  - `document_pipeline_core`
   - `document_family_core`
   - `inventory_coverage_core`
   - `relationship_core`
-- the full 67-case benchmark is green again on the `v0.2.x` section-aware architecture:
-  - `precision@5 = 0.533`
-  - `recall@5 = 1.0`
-  - `MRR = 1.0`
-  - `avg_keyword_coverage = 1.0`
-  - `negative_success_rate = 1.0`
-  - `warning_case_count = 0`
-- the sampled faithfulness audit still flags two document-level cases, so document-level support traces remain the next internal hardening target
+- the sampled faithfulness audit remains green:
+  - `sampled_case_count = 20`
+  - `avg_supported_sentence_ratio = 1.0`
+  - `failing_case_count = 0`
+- after the `v0.3.0` simplification pass, the targeted reruns that covered all previously reopened warning cases are green:
+  - `wat_antibiotics_review`
+  - `antibiotics`
+  - `vitamin_c_normal_populations`
+  - `vitamin_c_cold_stress`
+  - `compare_vitamin_c_vs_echinacea_prevention`
 
 ## Capabilities
 
@@ -100,7 +110,7 @@ Current validation state:
 
 ```bash
 python -m pip install .
-export PDF_TO_JSON_RAG_DATA_DIR=/tmp/pdf-to-json-rag-data
+export PDF_TO_JSON_RAG_DATA_DIR="$(mktemp -d)"
 pdf-to-json-rag init --json
 pdf-to-json-rag doctor --json
 pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
@@ -178,16 +188,15 @@ The saved evaluation report currently includes:
 - a sampled faithfulness audit over selected grounded cases
 - explicit deferred-feature decisions for `pdfplumber`, cross-encoder reranking, and `LLM-as-a-judge`
 
-Current `v0.2.6` gate status:
+Current gate status:
 
 - public release gates are green
 - the maintainer shard set used by `release-check` is green
-- the full 67-case benchmark is green again on the section-aware architecture
 - `release-check` now distinguishes cleanly between:
   - public-surface gates
   - maintainer package/test gates
   - internal benchmark regressions that should only run when full benchmark assets are actually present
-- the remaining internal hardening target is document-level faithfulness/support tracing rather than broad retrieval parity
+- the current internal focus is no longer broad benchmark churn; it is keeping the simplified document-level pipeline stable before deciding whether any learned reranker is justified
 
 ## Limitations
 
@@ -200,11 +209,11 @@ Current `v0.2.6` gate status:
 - Document facets are useful, but still heuristic and not yet learned from a richer metadata or classifier layer
 - Document-family classification is compact and useful, but still heuristic rather than trained
 - Query planning and document inventory are explicit now, but still built from heuristic metadata rather than a learned planner or classifier
-- Document-level summaries and answer contracts are reusable now, but still generated from heuristic metadata rather than a stronger summarization/classification layer
+- Document-level summaries, shortlist decisions, and answer contracts are cleaner and more inspectable now, but still generated from heuristic metadata rather than a stronger summarization/classification layer
 - Block metadata and chunk semantics improve robustness, but they are still derived from handcrafted rules rather than a richer learned representation
 - Structured-form and appendix handling are broader than before, but still validated on a narrow set of questionnaire/checklist examples
 - Cross-document and document-discovery behavior are implemented, but still benchmarked on a modest hand-built set of source-discovery, overview, routing, and comparison queries
-- The `v0.2.x` section-aware architecture is now green on both public release gates and the full 67-case benchmark, but document-level support tracing is still thinner than chunk-evidence tracing
+- The `v0.3.0` simplification pass reduced document-level glue code, but the pipeline is still heuristic-first rather than model-first
 - Grounded answers are extractive, not LLM-synthesized
 - The benchmark is broader than before, but still hand-built and not yet domain-diverse enough to prove true generalization
 - The scanned benchmark still uses a narrow OCR-heavy set rather than a broader scanned-document collection

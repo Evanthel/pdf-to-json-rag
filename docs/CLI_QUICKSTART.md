@@ -23,7 +23,7 @@ export PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1
 ## Initialize local data directories
 
 ```bash
-export PDF_TO_JSON_RAG_DATA_DIR=/tmp/pdf-to-json-rag-data
+export PDF_TO_JSON_RAG_DATA_DIR="$(mktemp -d)"
 pdf-to-json-rag init --json
 ```
 

@@ -543,15 +543,70 @@ Outcome:
 - the full 67-case benchmark is green again on the section-aware architecture
 - the next architectural gap is document-level support tracing, not broad benchmark churn
 
-## 6.48. v0.2.7 Plan
+## 6.48. v0.2.7 Milestones
 
-The next patch should harden document-level faithfulness semantics and support traces before the project takes another larger retrieval/synthesis step.
+This patch hardened document-level support semantics on top of the recovered `v0.2.x` section-aware architecture instead of reopening broad benchmark churn.
 
-1. Add clearer support traces for `document_overview`, `document_routing`, and `source_listing` so document-level answers expose stronger structured grounding instead of mostly empty evidence payloads.
-2. Adjust the sampled faithfulness audit so document-level answer modes are judged against their support contract rather than only chunk-evidence sentences.
-3. Tighten the CLI JSON/text contract around document-level answers so overview/routing responses surface support cues more clearly to end users.
-4. Re-run `release-check`, the maintainer shards, and the full benchmark after the support-trace pass to confirm the broader recovery still holds.
-5. Use that result to decide whether `v0.3.0` should be a genuinely more learned retrieval/synthesis layer or one more pass of heuristic simplification around document-level reasoning.
+Completed scope:
+
+1. Added explicit `support_trace` payloads for document-level answer modes so overview, routing, source listing, source justification, and cross-document comparison expose structured support instead of mostly empty evidence payloads.
+2. Extended document-level answer assembly so support can be derived from inventory summaries, document facets, section cues, matched terms, and comparison-level relationship summaries.
+3. Adjusted the sampled faithfulness audit so document-level answer modes are judged against their support contract rather than only chunk-evidence sentences.
+4. Tightened CLI text rendering so document-level answers show `Support:` rather than a misleading empty `Evidence:` block.
+5. Re-ran `release-check`, the maintainer shard set, and the full 67-case benchmark after the support-trace pass.
+
+Outcome:
+
+- public release gates are green
+- maintainer package/test gates are green
+- the maintainer shard set is green
+- the full 67-case benchmark is green
+- the sampled faithfulness audit is green again on document-level modes
+
+## 6.49. v0.3.0 Milestones
+
+This iteration chose simplification over a heavier learned layer and reworked the document-level stack around clearer intermediate contracts.
+
+Completed scope:
+
+1. Replaced brittle literal query routing with a feature-based planner that returns:
+   - per-mode scores
+   - explicit chosen rationale
+   - shortlist-aware document metadata
+2. Simplified inventory shortlist scoring into four inspectable buckets:
+   - title/label overlap
+   - semantic/discovery overlap
+   - facet/purpose/family fit
+   - rarity/distinctive bonus
+3. Split document-level retrieval into:
+   - candidate-document selection
+   - chunk retrieval inside selected documents
+4. Unified document-level answer construction around shared support entries and a common intermediate support trace instead of multiple separate hand-built branches.
+5. Tightened evaluation and output contracts by:
+   - adding `document_pipeline_core`
+   - compacting default JSON outputs
+   - pushing full retrieval/debug payloads behind `--verbose`
+
+Outcome:
+
+- public release gates remain green
+- maintainer shard set remains green
+- document-level simplification is now explicit and inspectable
+- targeted reruns covering all reopened warning cases are green
+- the next decision is no longer whether to simplify; it is whether any learned reranker is justified after this cleaner baseline
+
+## 6.50. v0.3.1 Plan
+
+The next meaningful step should validate the simplified baseline before introducing any heavier learned component.
+
+1. Re-run and freeze the full broad benchmark on top of the `v0.3.0` simplified document-level stack.
+2. Audit the remaining heuristic seams in evidence lookup that are still source-anchor-sensitive.
+3. Decide whether a learned reranker is justified only after the simplified baseline is stable on both release gates and the broad benchmark.
+4. If no learned layer is justified, keep reducing heuristic duplication between retrieval and answer assembly.
+5. Keep evaluation focused on architecture quality, not benchmark growth:
+   - broad benchmark stable
+   - release gates stable
+   - document-level support / faithfulness stable
 
 
 ## 7. Explicitly Deferred

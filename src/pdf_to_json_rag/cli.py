@@ -17,7 +17,12 @@ from . import __version__
 from .answering import answer_query_with_retrieval, format_grounded_answer
 from .chunking import load_document_record, process_saved_document_to_chunks
 from .config import PATHS
-from .document_inventory import get_inventory_entry, load_document_inventory, shortlist_documents
+from .document_inventory import (
+    get_inventory_entry,
+    load_document_inventory,
+    shortlist_document_candidates,
+    shortlist_documents,
+)
 from .evaluation import DEFAULT_EVAL_FILENAME, ensure_default_eval_cases, run_mvp_evaluation, run_regression_suite
 from .extraction import process_native_pdf_to_json
 from .indexing import build_local_index, load_chunk_records
@@ -267,15 +272,71 @@ def _section_payload(section) -> dict[str, object]:
     }
 
 
-def _grounded_answer_payload(result) -> dict[str, object]:
+def _shortlist_candidate_payload(candidate) -> dict[str, object]:
+    return {
+        "doc_id": candidate.entry.doc_id,
+        "label": candidate.entry.label,
+        "total_score": round(candidate.breakdown.total, 3),
+        "matched_terms": list(candidate.matched_terms),
+        "rationale": list(candidate.rationale),
+        "breakdown": {
+            "title_label_score": round(candidate.breakdown.title_label_score, 3),
+            "semantic_discovery_score": round(candidate.breakdown.semantic_discovery_score, 3),
+            "facet_fit_score": round(candidate.breakdown.facet_fit_score, 3),
+            "rarity_distinctive_score": round(candidate.breakdown.rarity_distinctive_score, 3),
+        },
+    }
+
+
+def _plan_payload(plan, *, verbose: bool = False) -> dict[str, object]:
+    payload = {
+        "query": plan.query,
+        "query_class": plan.query_class,
+        "query_intent": plan.query_intent,
+        "answer_mode": plan.answer_mode,
+        "inventory_doc_ids": list(plan.inventory_doc_ids),
+        "matched_doc_ids": list(plan.matched_doc_ids),
+        "candidate_doc_ids": list(plan.candidate_doc_ids),
+        "preferred_doc_id": plan.preferred_doc_id,
+        "chosen_rationale": list(plan.chosen_rationale),
+    }
+    if verbose:
+        payload["query_features"] = dict(plan.query_features)
+        payload["mode_scores"] = {key: round(value, 3) for key, value in plan.mode_scores.items()}
+        payload["shortlist"] = [_shortlist_candidate_payload(candidate) for candidate in plan.shortlist]
+    return payload
+
+
+def _compact_answer_trace(answer_trace: dict[str, object]) -> dict[str, object]:
+    return {
+        "query_class": answer_trace.get("query_class"),
+        "answer_mode": answer_trace.get("answer_mode"),
+        "query_intent": answer_trace.get("query_intent"),
+        "candidate_doc_ids": answer_trace.get("candidate_doc_ids", []),
+        "template_id": answer_trace.get("template_id"),
+        "matched_pattern": answer_trace.get("matched_pattern"),
+        "matched_cues": answer_trace.get("matched_cues", []),
+        "chosen_rationale": answer_trace.get("chosen_rationale", []),
+        "answer_contract": answer_trace.get("answer_contract", {}),
+        "support_trace": answer_trace.get("support_trace", []),
+    }
+
+
+def _grounded_answer_payload(result, *, verbose: bool = False) -> dict[str, object]:
     return {
         "query": result.query,
         "query_intent": result.query_intent,
         "answer": result.answer,
-        "top_k_hits": [_chunk_payload(chunk) for chunk in result.top_k_hits],
-        "expanded_hits": [_chunk_payload(chunk) for chunk in result.expanded_hits],
-        "evidence": [_evidence_payload(item) for item in result.evidence],
-        "answer_trace": result.answer_trace,
+        "answer_trace": result.answer_trace if verbose else _compact_answer_trace(result.answer_trace),
+        **(
+            {
+                "top_k_hits": [_chunk_payload(chunk) for chunk in result.top_k_hits],
+                "expanded_hits": [_chunk_payload(chunk) for chunk in result.expanded_hits],
+                "evidence": [_evidence_payload(item) for item in result.evidence],
+            }
+            if verbose
+            else {}
+        ),
     }
 
 
@@ -1142,6 +1203,11 @@ def main() -> None:
         "--output",
         help="Optional file path for JSON output. Requires JSON output.",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Include fuller debug payloads for planner and answer JSON output.",
+    )
     try:
         args = parser.parse_args(argv)
         command = _canonical_command(args.command)
@@ -1469,13 +1535,7 @@ def main() -> None:
                     "discovery_terms": list(document.discovery_terms),
                 },
                 "plan": {
-                    "query": plan.query,
-                    "query_class": plan.query_class,
-                    "query_intent": plan.query_intent,
-                    "answer_mode": plan.answer_mode,
-                    "inventory_doc_ids": list(plan.inventory_doc_ids),
-                    "matched_doc_ids": list(plan.matched_doc_ids),
-                    "preferred_doc_id": plan.preferred_doc_id,
+                    **_plan_payload(plan, verbose=args.verbose),
                 },
                 "index": {
                     "doc_ids": [document.doc_id],
@@ -1484,7 +1544,7 @@ def main() -> None:
                     "embedding_backend": manifest["embedding_backend"],
                     "embedding_model": manifest["embedding_model"],
                 },
-                "answer": _grounded_answer_payload(answer),
+                "answer": _grounded_answer_payload(answer, verbose=args.verbose),
             }
             if command == "smoke-check":
                 checks = _smoke_checks(payload)
@@ -1515,12 +1575,14 @@ def main() -> None:
             PATHS.ensure_dirs()
             entries = shortlist_documents(args.query, limit=args.k if args.query else 20) if args.query else list(load_document_inventory())[:20]
             if json_output:
+                shortlist = shortlist_document_candidates(args.query, limit=args.k) if args.query else []
                 _emit_json(
                     "list-documents",
                     {
                         "query": args.query,
                         "count": len(entries),
                         "documents": [_document_payload(entry) for entry in entries],
+                        **({"shortlist": [_shortlist_candidate_payload(candidate) for candidate in shortlist]} if args.query and args.verbose else {}),
                     },
                     output_path=output_path,
                 )
@@ -1566,15 +1628,7 @@ def main() -> None:
             query = _require_arg(args.query, "--query", "plan-query")
             PATHS.ensure_dirs()
             plan = plan_query(query)
-            payload = {
-                "query": plan.query,
-                "query_class": plan.query_class,
-                "query_intent": plan.query_intent,
-                "answer_mode": plan.answer_mode,
-                "inventory_doc_ids": list(plan.inventory_doc_ids),
-                "matched_doc_ids": list(plan.matched_doc_ids),
-                "preferred_doc_id": plan.preferred_doc_id,
-            }
+            payload = _plan_payload(plan, verbose=args.verbose)
             if json_output:
                 _emit_json("plan-query", payload, output_path=output_path)
                 return
@@ -1671,7 +1725,7 @@ def main() -> None:
                 k=args.k,
             )
             if json_output:
-                _emit_json("answer-query", _grounded_answer_payload(result), output_path=output_path)
+                _emit_json("answer-query", _grounded_answer_payload(result, verbose=args.verbose), output_path=output_path)
                 return
             print(format_grounded_answer(result))
             return

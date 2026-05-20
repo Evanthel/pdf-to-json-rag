@@ -8,7 +8,7 @@ Internal development iterations in this file use `v1.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v0.2.6`
+Current implementation level: `v0.3.0`
 Current public version: `0.1.0-beta`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
@@ -23,26 +23,30 @@ Repo-local regression shards currently passing:
 
 - `query_planning_core`
 - `answer_modes_core`
+- `document_pipeline_core`
 - `document_family_core`
 - `document_facets_core`
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v0.2.6`:
+Broad benchmark note after `v0.3.0`:
 
 - the targeted maintainer shard set is green again
-- the broad 67-case benchmark is now recovered on the `v0.2.x` section-aware architecture
+- the new document-level simplification shard is green
 - current broad benchmark scope:
   - `Cases`: `67`
   - `Indexed sample documents`: `19`
-- latest full rerun on the current `v0.2.6` code path:
-  - `precision@5`: `0.533`
-  - `recall@5`: `1.0`
-  - `MRR`: `1.0`
-  - `avg_keyword_coverage`: `1.0`
-  - `negative_success_rate`: `1.0`
-  - `warning_case_count`: `0`
-- the next internal hardening target is no longer wide retrieval parity; it is cleaner document-level support tracing and faithfulness semantics
+- sampled faithfulness audit after the support-trace pass:
+  - `sampled_case_count`: `20`
+  - `avg_supported_sentence_ratio`: `1.0`
+  - `failing_case_count`: `0`
+- targeted reruns covering the cases reopened during the `v0.3.0` refactor are green:
+  - `wat_antibiotics_review`
+  - `antibiotics`
+  - `vitamin_c_normal_populations`
+  - `vitamin_c_cold_stress`
+  - `compare_vitamin_c_vs_echinacea_prevention`
+- the next internal choice is no longer whether to simplify document-level reasoning; that simplification is now in place. The next choice is whether any learned reranker is justified after this cleaner baseline.
 
 ## Delivered Architecture
 
@@ -254,6 +258,54 @@ Representative validation that has already been completed:
   - maintainer shard set: green
   - full 67-case benchmark: green
   - sampled faithfulness audit: still flags two document-level cases, which is now the next internal target
+
+### v0.2.7
+
+- Added explicit `support_trace` payloads for document-level answer modes instead of relying on mostly empty chunk-evidence fields.
+- Extended document-level answer assembly so overview, routing, source listing, source justification, and cross-document comparison expose structured support fragments derived from inventory, facets, sections, and matched cues.
+- Reworked the sampled faithfulness audit so document-level answers are judged against their support contract rather than only chunk-evidence sentences.
+- Improved human-readable CLI rendering so document-level answers show `Support:` instead of a misleading empty `Evidence:` block.
+- Re-ran:
+  - `python -m unittest tests.test_cli_public_surface`
+  - `release-check`
+  - the full 67-case benchmark
+- End state:
+  - public release gates: green
+  - maintainer shard set: green
+  - full 67-case benchmark: green
+  - sampled faithfulness audit: green
+
+### v0.3.0
+
+- Replaced the most brittle literal query routing with a feature-based planner that returns:
+  - per-mode scores
+  - explicit chosen rationale
+  - shortlist-aware document metadata
+- Simplified inventory shortlist scoring into four inspectable buckets:
+  - title/label overlap
+  - semantic/discovery overlap
+  - facet/purpose/family fit
+  - rarity/distinctive bonus
+- Split document-level retrieval into:
+  - candidate-document selection
+  - chunk retrieval inside those candidates
+- Unified document-level answer building around shared support entries instead of separate hand-built branches for overview, routing, listing, justification, and comparison.
+- Shortened the default CLI JSON surface and pushed full retrieval/debug payloads behind `--verbose`.
+- Added `document_pipeline_core` to keep the simplified document-level path under regression coverage.
+- Recovered the regressions reopened by the simplification pass, including:
+  - `lbdl_document_routing_backpropagation`
+  - `compare_vitamin_c_vs_echinacea_prevention`
+  - `wat_antibiotics_review`
+  - `antibiotics`
+  - `vitamin_c_normal_populations`
+  - `vitamin_c_cold_stress`
+- Revalidated:
+  - `python -m unittest tests.test_cli_public_surface`
+  - `release-check`
+  - `query_planning_core`
+  - `answer_modes_core`
+  - `document_pipeline_core`
+  - the targeted rerun covering all reopened warning cases
 
 ## Deferred Features
 

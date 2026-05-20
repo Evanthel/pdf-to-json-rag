@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any
 
 from .answering import GroundedAnswer, answer_query_with_retrieval
@@ -150,6 +151,13 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "compare_vitamin_c_vs_echinacea_prevention",
         "compare_niger_chad_model_reports",
         "source_listing_nonmedical_learning_and_incident_response",
+    ],
+    "document_pipeline_core": [
+        "lbdl_document_overview",
+        "lbdl_document_routing_backpropagation",
+        "source_listing_humanitarian_model_reports",
+        "compare_niger_chad_model_reports",
+        "model_report_niger_justification",
     ],
 }
 SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
@@ -559,6 +567,32 @@ def _split_answer_sentences(answer_text: str) -> list[str]:
     return [fragment if fragment.endswith(".") else f"{fragment}." for fragment in fragments]
 
 
+def _support_tokens(text: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-zA-Z]{3,}", _normalize_surface(text))
+        if token not in {"document", "file", "files", "source", "sources", "relevant", "include", "includes"}
+    }
+
+
+def _sentence_supported_by_fragments(sentence: str, support_fragments: list[str]) -> bool:
+    normalized_sentence = _normalize_surface(sentence)
+    sentence_tokens = _support_tokens(sentence)
+    if not sentence_tokens:
+        return False
+    for fragment in support_fragments:
+        normalized_fragment = _normalize_surface(fragment)
+        if normalized_sentence in normalized_fragment:
+            return True
+        fragment_tokens = _support_tokens(fragment)
+        if not fragment_tokens:
+            continue
+        overlap = sentence_tokens.intersection(fragment_tokens)
+        if len(overlap) >= max(2, min(len(sentence_tokens), len(fragment_tokens)) // 2):
+            return True
+    return False
+
+
 def _case_slice_labels(case: dict) -> list[str]:
     case_id = case["case_id"]
     case_type = case.get("case_type", "grounded")
@@ -801,6 +835,7 @@ def _debug_case_record(
             "negative_success": answer_result.get("negative_success"),
             "keyword_coverage": answer_result["keyword_coverage"],
             "trace": grounded_answer.answer_trace,
+            "support_trace": grounded_answer.answer_trace.get("support_trace", []),
             "full_answer": grounded_answer.answer,
             "answer_preview": _preview_text(grounded_answer.answer, limit=320),
             "evidence_snapshots": [
@@ -843,15 +878,33 @@ def _summarize_retrieval_results(retrieval_results: list[dict], answer_results: 
 
 
 def _faithfulness_audit_record(debug_case: dict[str, Any]) -> dict[str, Any]:
-    answer_sentences = [
-        item["sentence"] for item in debug_case["answer"]["evidence_snapshots"]
-    ]
-    support_corpus = " ".join(answer_sentences)
+    answer_mode = str(debug_case["answer"]["trace"].get("answer_mode", "grounded_evidence"))
+    support_trace = debug_case["answer"].get("support_trace", [])
+    if answer_mode in {"document_overview", "document_routing", "source_justification", "source_listing", "cross_document_compare"}:
+        answer_sentences = _split_answer_sentences(debug_case["answer"]["full_answer"])
+        support_fragments: list[str] = []
+        for item in support_trace:
+            inventory_summary = item.get("inventory_summary")
+            if isinstance(inventory_summary, str) and inventory_summary:
+                support_fragments.append(inventory_summary)
+            support_fragments.extend(str(fragment) for fragment in item.get("support_fragments", []))
+            support_fragments.extend(str(fragment) for fragment in item.get("support_sentences", []))
+            support_fragments.extend(str(fragment) for fragment in item.get("summary_cues", []))
+            support_fragments.extend(str(fragment) for fragment in item.get("section_titles", []))
+            support_fragments.extend(str(fragment) for fragment in item.get("coverage_terms", []))
+            support_fragments.extend(str(fragment) for fragment in item.get("matched_terms", []))
+    else:
+        answer_sentences = [
+            item["sentence"] for item in debug_case["answer"]["evidence_snapshots"]
+        ]
+        support_fragments = list(answer_sentences)
+
+    support_corpus = " ".join(support_fragments)
     normalized_support = _normalize_surface(support_corpus)
     supported = []
     unsupported = []
     for sentence in answer_sentences:
-        if _normalize_surface(sentence) in normalized_support:
+        if _normalize_surface(sentence) in normalized_support or _sentence_supported_by_fragments(sentence, support_fragments):
             supported.append(sentence)
         else:
             unsupported.append(sentence)
@@ -862,9 +915,7 @@ def _faithfulness_audit_record(debug_case: dict[str, Any]) -> dict[str, Any]:
         "supported_sentence_ratio": supported_ratio,
         "supported_sentences": supported,
         "unsupported_sentences": unsupported,
-        "evidence_preview": [
-            item["sentence"] for item in debug_case["answer"]["evidence_snapshots"]
-        ],
+        "evidence_preview": support_fragments[:6],
     }
 
 

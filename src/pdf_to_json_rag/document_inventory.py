@@ -88,6 +88,31 @@ class DocumentInventoryEntry:
     topical_terms: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ShortlistScoreBreakdown:
+    title_label_score: float
+    semantic_discovery_score: float
+    facet_fit_score: float
+    rarity_distinctive_score: float
+
+    @property
+    def total(self) -> float:
+        return (
+            self.title_label_score
+            + self.semantic_discovery_score
+            + self.facet_fit_score
+            + self.rarity_distinctive_score
+        )
+
+
+@dataclass(frozen=True)
+class ShortlistCandidate:
+    entry: DocumentInventoryEntry
+    breakdown: ShortlistScoreBreakdown
+    matched_terms: tuple[str, ...]
+    rationale: tuple[str, ...]
+
+
 def _tokenize(text: str, min_len: int = 3) -> set[str]:
     return {
         token
@@ -204,7 +229,7 @@ def get_inventory_entry(doc_id: str) -> DocumentInventoryEntry | None:
     return None
 
 
-def shortlist_documents(query: str, limit: int = 6) -> list[DocumentInventoryEntry]:
+def shortlist_document_candidates(query: str, limit: int = 6) -> list[ShortlistCandidate]:
     query_lower = query.lower()
     query_terms = _tokenize(query_lower, min_len=2)
     query_terms |= {
@@ -233,7 +258,7 @@ def shortlist_documents(query: str, limit: int = 6) -> list[DocumentInventoryEnt
         if term_doc_frequency.get(term, 0) == 1 and term not in GENERIC_DOC_TERMS
     }
 
-    ranked: list[tuple[float, DocumentInventoryEntry]] = []
+    ranked: list[ShortlistCandidate] = []
     for entry in entries:
         title_terms = _tokenize(entry.title)
         label_terms = _tokenize(entry.label)
@@ -268,46 +293,94 @@ def shortlist_documents(query: str, limit: int = 6) -> list[DocumentInventoryEnt
         distinctive_overlap = len(entry_semantic_term_map[entry.doc_id] & distinctive_query_terms)
 
         exact_title_match = 1 if entry.title.lower() and entry.title.lower() in query_lower else 0
-        score = (
-            exact_title_match * 12
-            + title_overlap * 5
-            + label_overlap * 4
-            + discovery_overlap * 4
-            + facet_overlap * 3
-            + summary_overlap * 2
-            + inventory_overlap * 2.5
-            + coverage_overlap * 3.0
-            + topical_overlap * 1.5
-            + unique_title_overlap * 4.0
-            + unique_discovery_overlap * 3.0
-            + unique_coverage_overlap * 3.5
-            + rare_overlap_bonus * 6.0
-            + distinctive_overlap * 8.0
-        )
-        if entry.document_family in preferences["families"]:
-            score += 2.5
-        if entry.document_purpose in preferences["purposes"]:
-            score += 2.0
         anchor_candidates = [
             candidate
             for candidate in [entry.label.lower(), *discovery_terms, *entry.coverage_terms]
             if len(candidate) >= 5 and candidate not in INVENTORY_STOPWORDS
         ]
-        if any(alias in query_lower for alias in anchor_candidates):
-            score += 3.0
-        if entry.doc_id in query_lower:
-            score += 6.0
-        if score > 0:
-            ranked.append((score, entry))
+        anchor_hit = 1 if any(alias in query_lower for alias in anchor_candidates) else 0
+        doc_id_hit = 1 if entry.doc_id in query_lower else 0
 
-    ranked.sort(key=lambda item: (-item[0], item[1].doc_id))
-    return [entry for _, entry in ranked[:limit]]
+        title_label_score = (
+            exact_title_match * 8.0
+            + title_overlap * 4.0
+            + label_overlap * 3.0
+            + unique_title_overlap * 4.0
+            + doc_id_hit * 4.0
+        )
+        semantic_discovery_score = (
+            discovery_overlap * 3.5
+            + summary_overlap * 1.5
+            + inventory_overlap * 2.0
+            + coverage_overlap * 2.5
+            + topical_overlap * 1.0
+            + anchor_hit * 2.5
+        )
+        facet_fit_score = facet_overlap * 3.0
+        if entry.document_family in preferences["families"]:
+            facet_fit_score += 2.5
+        if entry.document_purpose in preferences["purposes"]:
+            facet_fit_score += 2.0
+        rarity_distinctive_score = (
+            unique_discovery_overlap * 2.5
+            + unique_coverage_overlap * 3.0
+            + rare_overlap_bonus * 4.0
+            + distinctive_overlap * 6.0
+        )
+        breakdown = ShortlistScoreBreakdown(
+            title_label_score=title_label_score,
+            semantic_discovery_score=semantic_discovery_score,
+            facet_fit_score=facet_fit_score,
+            rarity_distinctive_score=rarity_distinctive_score,
+        )
+        matched_terms = tuple(
+            sorted(
+                (
+                    title_terms
+                    | label_terms
+                    | discovery_terms
+                    | facet_terms
+                    | inventory_terms
+                    | coverage_terms
+                    | topical_terms
+                )
+                & query_terms
+            )[:8]
+        )
+        rationale: list[str] = []
+        if exact_title_match or title_overlap or label_overlap:
+            rationale.append("title_or_label_overlap")
+        if discovery_overlap or summary_overlap or inventory_overlap or coverage_overlap or topical_overlap:
+            rationale.append("semantic_or_discovery_overlap")
+        if facet_overlap or entry.document_family in preferences["families"] or entry.document_purpose in preferences["purposes"]:
+            rationale.append("facet_or_purpose_fit")
+        if rare_overlap_bonus or distinctive_overlap:
+            rationale.append("rarity_or_distinctive_bonus")
+        if breakdown.total > 0:
+            ranked.append(
+                ShortlistCandidate(
+                    entry=entry,
+                    breakdown=breakdown,
+                    matched_terms=matched_terms,
+                    rationale=tuple(rationale),
+                )
+            )
+
+    ranked.sort(key=lambda item: (-item.breakdown.total, item.entry.doc_id))
+    return ranked[:limit]
+
+
+def shortlist_documents(query: str, limit: int = 6) -> list[DocumentInventoryEntry]:
+    return [candidate.entry for candidate in shortlist_document_candidates(query, limit=limit)]
 
 
 __all__ = [
     "DocumentInventoryEntry",
+    "ShortlistCandidate",
+    "ShortlistScoreBreakdown",
     "build_inventory_summary",
     "get_inventory_entry",
     "load_document_inventory",
+    "shortlist_document_candidates",
     "shortlist_documents",
 ]
