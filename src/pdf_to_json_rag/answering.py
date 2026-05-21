@@ -17,8 +17,9 @@ from .intent_config import (
     detect_structured_intent,
     get_document_profile,
     get_structured_intent_profile,
-    matching_source_doc_ids as configured_matching_source_doc_ids,
-    preferred_source_doc_id as configured_source_doc_id,
+    matching_source_doc_ids,
+    resolve_matching_source_doc_ids,
+    resolve_preferred_source_doc_id,
 )
 from .query_planning import plan_query
 from .retrieval import retrieve_top_k_with_neighbors
@@ -489,6 +490,16 @@ class GroundedAnswer:
     answer_trace: dict[str, object]
 
 
+@dataclass
+class DocumentSelection:
+    answer_mode: str
+    candidate_doc_ids: list[str]
+    ranked_doc_ids: list[str]
+    selected_doc_ids: list[str]
+    primary_doc_id: str | None
+    strategy: str
+
+
 def _normalize_text(text: str) -> str:
     text = text.replace("ﬁ", "fi").replace("ﬂ", "fl")
     return re.sub(r"\s+", " ", text).strip()
@@ -630,23 +641,11 @@ def _preferred_source_doc_id(query: str) -> str | None:
     if plan.query_class != "evidence_lookup":
         return plan.preferred_doc_id
     query_intent = _detect_query_intent(query, _query_terms(query))
-    if query_intent in {"source_listing", "cross_document_compare", "document_routing"}:
-        return None
-    query_lower = query.lower()
-    if query_intent == "antibiotics":
-        if "review" in query_lower or "literature" in query_lower:
-            return "the-common-cold-a-review-of-the-literature"
-        return "common-cold-clinincal-evidence"
-    if query_intent in {"treatment_null_effect", "treatment_subgroup_benefit"} and "vitamin" in query_lower:
-        return "vitamin-c-for-preventing-and-treating-the-common-cold"
-    if query_intent in {"ct_findings", "ct_follow_up"} and (
-        "ct" in query_lower or "scan" in query_lower or "sinus" in query_lower
-    ):
-        return "ct-study-of-the-common-cold-scanned"
-    allow_topical = True
-    return configured_source_doc_id(
+    return resolve_preferred_source_doc_id(
         query,
-        allow_topical=allow_topical,
+        query_class=plan.query_class,
+        query_intent=query_intent,
+        planned_preferred_doc_id=plan.preferred_doc_id,
     )
 
 
@@ -654,29 +653,17 @@ def _matching_source_doc_ids(query: str) -> list[str]:
     plan = plan_query(query)
     if plan.query_class != "evidence_lookup":
         return list(plan.matched_doc_ids)
-    query_intent = _detect_query_intent(query, _query_terms(query))
-    explicit_matches = configured_matching_source_doc_ids(query, allow_topical=False)
     query_terms = _query_terms(query)
+    query_intent = _detect_query_intent(query, query_terms)
     unsupported_entities = query_terms.intersection(UNSUPPORTED_ENTITY_TERMS)
-    if query_intent in {"source_listing", "document_routing"} and unsupported_entities and not explicit_matches:
-        return []
-    allow_topical = query_intent in {
-        "source_listing",
-        "document_routing",
-        "source_justification",
-        "document_overview",
-        "cross_document_compare",
-    }
-    matches = configured_matching_source_doc_ids(query, allow_topical=allow_topical)
-    query_lower = query.lower()
-    if query_intent == "source_justification" and matches:
-        return matches[:1]
-    if query_intent == "document_overview" and matches:
-        return matches[:1]
-    if query_intent == "document_routing" and matches:
-        if "which file or files" not in query_lower and "which files" not in query_lower:
-            return matches[:1]
-    return matches
+    return resolve_matching_source_doc_ids(
+        query,
+        query_class=plan.query_class,
+        query_intent=query_intent,
+        planned_matched_doc_ids=plan.matched_doc_ids,
+        query_terms=query_terms,
+        unsupported_entities=unsupported_entities,
+    )
 
 
 def _inventory_doc_ids(query: str) -> list[str]:
@@ -2035,8 +2022,22 @@ def _document_support_trace_item(
     matched_terms: list[str] | None = None,
     support_sentences: list[str] | None = None,
 ) -> dict[str, object]:
+    record = _load_document_record(doc_id, chunk_root)
     semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
     section_titles = _document_summary_cues(doc_id, top_k_hits, chunk_root)[:3]
+    section_summaries = [
+        section.summary.strip()
+        for section in (record.sections if record else [])
+        if section.summary and section.summary.strip()
+    ][:3]
+    section_content_hints = list(
+        dict.fromkeys(
+            hint
+            for section in (record.sections if record else [])
+            for hint in section.content_hints
+            if hint
+        )
+    )[:4]
     coverage_terms = list(semantics.coverage_terms[:4])
     summary_cues = list(semantics.summary_cues[:4])
     inventory_summary = _document_inventory_summary(doc_id, top_k_hits, chunk_root, include_label=True)
@@ -2044,14 +2045,23 @@ def _document_support_trace_item(
     support_fragments: list[str] = []
     if semantics.document_type:
         support_fragments.append(f"document type: {semantics.document_type.replace('_', ' ')}")
+        support_fragments.append(
+            f"{_document_label(doc_id, chunk_root)} is a {semantics.document_type.replace('_', ' ')}."
+        )
     if semantics.document_purpose:
         support_fragments.append(f"purpose: {semantics.document_purpose.replace('_', ' ')}")
+        support_fragments.append(f"Its main purpose is {semantics.document_purpose.replace('_', ' ')}.")
     if semantics.audience and semantics.audience != "general_professional":
         support_fragments.append(f"audience: {semantics.audience.replace('_', ' ')}")
+        support_fragments.append(f"It is aimed at {semantics.audience.replace('_', ' ')}.")
     if coverage_terms:
         support_fragments.append("coverage: " + ", ".join(coverage_terms))
     if section_titles:
         support_fragments.append("sections: " + ", ".join(section_titles))
+    if section_summaries:
+        support_fragments.append("section summaries: " + " | ".join(section_summaries))
+    if section_content_hints:
+        support_fragments.append("section hints: " + ", ".join(section_content_hints))
     if matched_terms:
         support_fragments.append("matched terms: " + ", ".join(matched_terms[:4]))
     if support_sentences:
@@ -2068,6 +2078,8 @@ def _document_support_trace_item(
         "coverage_terms": coverage_terms,
         "summary_cues": summary_cues,
         "section_titles": section_titles,
+        "section_summaries": section_summaries,
+        "section_content_hints": section_content_hints,
         "matched_terms": list(matched_terms[:4]) if matched_terms else [],
         "support_sentences": list(support_sentences[:3]) if support_sentences else [],
         "support_fragments": support_fragments,
@@ -2168,6 +2180,7 @@ def _best_support_sentences_for_doc(
     top_k_hits: list[ChunkRecord],
     context_chunks: list[ChunkRecord],
     evidence: list[EvidenceSentence],
+    chunk_root: Path,
 ) -> list[str]:
     query_terms = _specific_query_terms(_query_terms(query))
     chunk_lookup = {chunk.chunk_id: chunk for chunk in context_chunks}
@@ -2185,6 +2198,22 @@ def _best_support_sentences_for_doc(
         score = overlap_score + float(item.score)
         scored.append((score, normalized))
         seen.add(normalized)
+
+    if not scored:
+        record = _load_document_record(doc_id, chunk_root)
+        if record:
+            for section in record.sections:
+                if not section.summary:
+                    continue
+                normalized = _normalize_text(section.summary)
+                if not normalized or normalized in seen:
+                    continue
+                overlap_score, _ = _sentence_overlap_score(normalized, query_terms)
+                section_bonus = 0.75 if section.title and any(term in section.title.lower() for term in query_terms) else 0.25
+                scored.append((overlap_score + section_bonus, normalized))
+                seen.add(normalized)
+                if len(scored) >= 4:
+                    break
 
     if not scored:
         for chunk in context_chunks:
@@ -2264,6 +2293,7 @@ def _build_document_support_entry(
         top_k_hits=top_k_hits,
         context_chunks=context_chunks,
         evidence=evidence,
+        chunk_root=chunk_root,
     )
     matched_terms = _matched_terms_for_doc(
         query=query,
@@ -2281,6 +2311,27 @@ def _build_document_support_entry(
     )
 
 
+def _build_document_support_entries(
+    query: str,
+    doc_ids: list[str],
+    top_k_hits: list[ChunkRecord],
+    context_chunks: list[ChunkRecord],
+    evidence: list[EvidenceSentence],
+    chunk_root: Path,
+) -> list[dict[str, object]]:
+    return [
+        _build_document_support_entry(
+            query=query,
+            doc_id=doc_id,
+            top_k_hits=top_k_hits,
+            context_chunks=context_chunks,
+            evidence=evidence,
+            chunk_root=chunk_root,
+        )
+        for doc_id in doc_ids
+    ]
+
+
 def _base_answer_trace(
     query: str,
     query_intent: str,
@@ -2290,6 +2341,7 @@ def _base_answer_trace(
     matched_cues: list[str] | None = None,
     answer_contract: dict[str, object] | None = None,
     support_trace: list[dict[str, object]] | None = None,
+    document_selection: dict[str, object] | None = None,
 ) -> dict[str, object]:
     plan = plan_query(query)
     return {
@@ -2307,13 +2359,81 @@ def _base_answer_trace(
         "matched_pattern": matched_pattern,
         "matched_cues": matched_cues or [],
         "answer_contract": answer_contract or {},
+        "document_selection": document_selection or {},
         "support_trace": support_trace or [],
         "evidence_chunk_ids": [item.chunk_id for item in evidence],
     }
 
 
+def _document_selection_payload(selection: DocumentSelection) -> dict[str, object]:
+    return {
+        "strategy": selection.strategy,
+        "candidate_doc_ids": list(selection.candidate_doc_ids),
+        "ranked_doc_ids": list(selection.ranked_doc_ids),
+        "selected_doc_ids": list(selection.selected_doc_ids),
+        "primary_doc_id": selection.primary_doc_id,
+    }
+
+
+def _build_document_selection(
+    plan,
+    query: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+) -> DocumentSelection:
+    answer_mode = plan.answer_mode
+    candidate_doc_ids = list(plan.candidate_doc_ids)
+    if not candidate_doc_ids:
+        seen: set[str] = set()
+        for chunk in top_k_hits:
+            if chunk.doc_id not in seen:
+                candidate_doc_ids.append(chunk.doc_id)
+                seen.add(chunk.doc_id)
+
+    if answer_mode in {"document_routing", "source_listing", "cross_document_compare"}:
+        ranked_doc_ids = _rank_document_candidates(candidate_doc_ids, query, top_k_hits, chunk_root)
+    else:
+        ranked_doc_ids = list(candidate_doc_ids)
+
+    primary_doc_id = plan.preferred_doc_id or (ranked_doc_ids[0] if ranked_doc_ids else None)
+    selected_doc_ids: list[str]
+    strategy = "plan_candidates"
+
+    if answer_mode == "document_overview":
+        selected_doc_ids = [primary_doc_id] if primary_doc_id else []
+        strategy = "single_doc_overview"
+    elif answer_mode == "source_justification":
+        selected_doc_ids = [primary_doc_id] if primary_doc_id else []
+        strategy = "single_doc_justification"
+    elif answer_mode == "document_routing":
+        selected_doc_ids = ranked_doc_ids[:4] if plan.query_features.get("plural_routing") else ranked_doc_ids[:1]
+        primary_doc_id = selected_doc_ids[0] if selected_doc_ids else None
+        strategy = "ranked_routing"
+    elif answer_mode == "source_listing":
+        selected_doc_ids = ranked_doc_ids[:4]
+        primary_doc_id = selected_doc_ids[0] if selected_doc_ids else None
+        strategy = "ranked_listing"
+    elif answer_mode == "cross_document_compare":
+        selected_doc_ids = ranked_doc_ids[:3]
+        primary_doc_id = selected_doc_ids[0] if selected_doc_ids else None
+        strategy = "ranked_compare"
+    else:
+        selected_doc_ids = [primary_doc_id] if primary_doc_id else []
+        strategy = "preferred_doc"
+
+    return DocumentSelection(
+        answer_mode=answer_mode,
+        candidate_doc_ids=candidate_doc_ids,
+        ranked_doc_ids=ranked_doc_ids,
+        selected_doc_ids=selected_doc_ids,
+        primary_doc_id=primary_doc_id,
+        strategy=strategy,
+    )
+
+
 def _document_mode_answer(
     plan,
+    selection: DocumentSelection,
     query: str,
     query_intent: str,
     top_k_hits: list[ChunkRecord],
@@ -2324,12 +2444,19 @@ def _document_mode_answer(
     answer_mode = plan.answer_mode
     query_terms = _query_terms(query)
     unsupported_entities = query_terms.intersection(UNSUPPORTED_ENTITY_TERMS)
-    explicit_source_matches = configured_matching_source_doc_ids(query, allow_topical=False)
+    explicit_source_matches = matching_source_doc_ids(query, allow_topical=False)
     if answer_mode in {"document_routing", "source_listing"} and unsupported_entities and not explicit_source_matches:
         return None, None
-    source_summary = _structured_source_summary(top_k_hits)
     if answer_mode == "document_overview" and top_k_hits:
-        primary_doc_id = plan.preferred_doc_id or top_k_hits[0].doc_id
+        primary_doc_id = selection.primary_doc_id or top_k_hits[0].doc_id
+        support_entry = _build_document_support_entry(
+            query=query,
+            doc_id=primary_doc_id,
+            top_k_hits=top_k_hits,
+            context_chunks=context_chunks,
+            evidence=evidence,
+            chunk_root=chunk_root,
+        )
         answer, cues, answer_contract = _render_document_overview(
             primary_doc_id,
             top_k_hits,
@@ -2343,15 +2470,7 @@ def _document_mode_answer(
                     "matched_pattern": "section-aware-document-summary",
                     "matched_cues": cues,
                     "answer_contract": answer_contract,
-                    "support_trace": [
-                        _document_support_trace_item(
-                            primary_doc_id,
-                            top_k_hits,
-                            chunk_root,
-                            matched_terms=_matched_terms_for_doc(query, primary_doc_id, top_k_hits, chunk_root, [answer]),
-                            support_sentences=[answer],
-                        )
-                    ],
+                    "support_trace": [support_entry],
                 },
             )
         primary_label = _document_label(primary_doc_id, chunk_root)
@@ -2363,48 +2482,30 @@ def _document_mode_answer(
                     "template_id": "document_level.overview",
                     "matched_pattern": "document-facets-and-summary-cues",
                     "matched_cues": overview_fragments,
-                    "support_trace": [
-                        _document_support_trace_item(
-                            primary_doc_id,
-                            top_k_hits,
-                            chunk_root,
-                            matched_terms=_matched_terms_for_doc(
-                                query,
-                                primary_doc_id,
-                                top_k_hits,
-                                chunk_root,
-                                [f"{primary_label}: " + "; ".join(overview_fragments) + "."],
-                            ),
-                            support_sentences=[f"{primary_label}: " + "; ".join(overview_fragments) + "."],
-                        )
-                    ],
+                    "support_trace": [support_entry],
                 },
             )
     if answer_mode == "document_routing" and top_k_hits:
-        candidate_doc_ids = list(plan.candidate_doc_ids)
-        if not candidate_doc_ids:
+        if not selection.selected_doc_ids:
             return None, None
-        ranked_doc_ids = _rank_document_candidates(candidate_doc_ids, query, top_k_hits, chunk_root)
         if plan.query_features.get("plural_routing"):
-            chosen_doc_ids = ranked_doc_ids[:4]
+            chosen_doc_ids = list(selection.selected_doc_ids)
             if len(chosen_doc_ids) >= 2:
+                support_trace = _build_document_support_entries(
+                    query=query,
+                    doc_ids=chosen_doc_ids,
+                    top_k_hits=top_k_hits,
+                    context_chunks=context_chunks,
+                    evidence=evidence,
+                    chunk_root=chunk_root,
+                )
                 fragments: list[str] = []
                 cues: list[str] = []
-                support_trace = []
-                for doc_id in chosen_doc_ids:
-                    support_entry = _build_document_support_entry(
-                        query=query,
-                        doc_id=doc_id,
-                        top_k_hits=top_k_hits,
-                        context_chunks=context_chunks,
-                        evidence=evidence,
-                        chunk_root=chunk_root,
-                    )
+                for support_entry in support_trace:
                     label = str(support_entry["label"])
                     inventory_summary = str(support_entry["inventory_summary"])
                     fragments.append(f"{label} ({inventory_summary})")
                     cues.extend([label, inventory_summary])
-                    support_trace.append(support_entry)
                 return (
                     "The most relevant files are " + "; ".join(fragments) + ".",
                     {
@@ -2424,8 +2525,8 @@ def _document_mode_answer(
                     },
                 )
 
-        if ranked_doc_ids:
-            primary_doc_id = ranked_doc_ids[0]
+        if selection.primary_doc_id:
+            primary_doc_id = selection.primary_doc_id
             support_entry = _build_document_support_entry(
                 query=query,
                 doc_id=primary_doc_id,
@@ -2476,7 +2577,7 @@ def _document_mode_answer(
                     },
                 )
     if answer_mode == "source_justification" and top_k_hits:
-        primary_doc_id = plan.preferred_doc_id or top_k_hits[0].doc_id
+        primary_doc_id = selection.primary_doc_id or top_k_hits[0].doc_id
         support_entry = _build_document_support_entry(
             query=query,
             doc_id=primary_doc_id,
@@ -2532,22 +2633,18 @@ def _document_mode_answer(
                 ],
             },
         )
-    if answer_mode == "source_listing" and source_summary:
-        source_doc_ids = list(plan.candidate_doc_ids) or [doc_id for doc_id, _ in source_summary]
-        ranked_doc_ids = _rank_document_candidates(source_doc_ids, query, top_k_hits, chunk_root)[:4]
+    if answer_mode == "source_listing" and selection.selected_doc_ids:
+        support_trace = _build_document_support_entries(
+            query=query,
+            doc_ids=list(selection.selected_doc_ids),
+            top_k_hits=top_k_hits,
+            context_chunks=context_chunks,
+            evidence=evidence,
+            chunk_root=chunk_root,
+        )
         labels = []
-        support_trace = []
-        for doc_id in ranked_doc_ids:
-            support_entry = _build_document_support_entry(
-                query=query,
-                doc_id=doc_id,
-                top_k_hits=top_k_hits,
-                context_chunks=context_chunks,
-                evidence=evidence,
-                chunk_root=chunk_root,
-            )
+        for support_entry in support_trace:
             labels.append(f"{support_entry['label']} ({support_entry['inventory_summary']})")
-            support_trace.append(support_entry)
         return (
             "Relevant sources include: " + "; ".join(labels) + ".",
             {
@@ -2556,10 +2653,10 @@ def _document_mode_answer(
                 "matched_cues": labels,
                 "answer_contract": build_answer_contract(
                     mode="source_listing",
-                    primary_doc_ids=ranked_doc_ids,
+                    primary_doc_ids=list(selection.selected_doc_ids),
                     document_families=[
                         get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"
-                        for doc_id in ranked_doc_ids
+                        for doc_id in selection.selected_doc_ids
                     ],
                     summary_type="inventory_summary",
                 ),
@@ -2568,19 +2665,16 @@ def _document_mode_answer(
         )
 
     if answer_mode == "cross_document_compare":
-        doc_ids = list(plan.candidate_doc_ids)[:3]
+        doc_ids = list(selection.selected_doc_ids[:3])
         if len(doc_ids) >= 2:
-            support_entries = [
-                _build_document_support_entry(
-                    query=query,
-                    doc_id=doc_id,
-                    top_k_hits=top_k_hits,
-                    context_chunks=context_chunks,
-                    evidence=evidence,
-                    chunk_root=chunk_root,
-                )
-                for doc_id in doc_ids
-            ]
+            support_entries = _build_document_support_entries(
+                query=query,
+                doc_ids=doc_ids,
+                top_k_hits=top_k_hits,
+                context_chunks=context_chunks,
+                evidence=evidence,
+                chunk_root=chunk_root,
+            )
             fragments = [
                 f"{item['label']}: {item['inventory_summary']}. Evidence: {item['support_sentences'][0]}."
                 for item in support_entries
@@ -2937,8 +3031,15 @@ def answer_from_chunks(query: str, chunks: list[ChunkRecord]) -> GroundedAnswer:
         max_sentences=_answer_sentence_budget(query),
     )
     plan = plan_query(query)
+    document_selection = _build_document_selection(
+        plan=plan,
+        query=query,
+        top_k_hits=chunks,
+        chunk_root=Path("."),
+    )
     mode_answer, mode_trace = _document_mode_answer(
         plan=plan,
+        selection=document_selection,
         query=query,
         query_intent=query_intent,
         top_k_hits=chunks,
@@ -2948,7 +3049,12 @@ def answer_from_chunks(query: str, chunks: list[ChunkRecord]) -> GroundedAnswer:
     )
     if _should_abstain(query, evidence) and not mode_answer:
         answer = NO_GROUNDED_ANSWER
-        answer_trace = _base_answer_trace(query=query, query_intent=query_intent, evidence=evidence)
+        answer_trace = _base_answer_trace(
+            query=query,
+            query_intent=query_intent,
+            evidence=evidence,
+            document_selection=_document_selection_payload(document_selection),
+        )
     else:
         structured_answer, structured_trace = _format_structured_answer(query_intent, evidence)
         answer = mode_answer or structured_answer or _compress_sentences(evidence)
@@ -2962,6 +3068,7 @@ def answer_from_chunks(query: str, chunks: list[ChunkRecord]) -> GroundedAnswer:
             matched_cues=trace_source.get("matched_cues") if trace_source else None,
             answer_contract=trace_source.get("answer_contract") if trace_source else None,
             support_trace=trace_source.get("support_trace") if trace_source else None,
+            document_selection=_document_selection_payload(document_selection),
         )
     return GroundedAnswer(
         query=query,
@@ -2992,8 +3099,14 @@ def answer_query_with_retrieval(
         k=k,
         use_lightweight_rerank=use_lightweight_rerank,
     )
+    document_selection = _build_document_selection(
+        plan=plan,
+        query=query,
+        top_k_hits=top_k_hits,
+        chunk_root=chunk_root,
+    )
     answer_chunks = expanded_hits
-    candidate_doc_ids = set(plan.candidate_doc_ids)
+    candidate_doc_ids = set(document_selection.selected_doc_ids)
     if candidate_doc_ids:
         filtered = [chunk for chunk in expanded_hits if chunk.doc_id in candidate_doc_ids]
         if filtered:
@@ -3026,6 +3139,7 @@ def answer_query_with_retrieval(
     )
     mode_answer, mode_trace = _document_mode_answer(
         plan=plan,
+        selection=document_selection,
         query=query,
         query_intent=query_intent,
         top_k_hits=top_k_hits,
@@ -3035,7 +3149,12 @@ def answer_query_with_retrieval(
     )
     if _should_abstain(query, evidence) and not mode_answer:
         answer = NO_GROUNDED_ANSWER
-        answer_trace = _base_answer_trace(query=query, query_intent=query_intent, evidence=evidence)
+        answer_trace = _base_answer_trace(
+            query=query,
+            query_intent=query_intent,
+            evidence=evidence,
+            document_selection=_document_selection_payload(document_selection),
+        )
     else:
         structured_answer, structured_trace = _format_structured_answer(query_intent, evidence)
         answer = mode_answer or structured_answer or _compress_sentences(evidence)
@@ -3049,6 +3168,7 @@ def answer_query_with_retrieval(
             matched_cues=trace_source.get("matched_cues") if trace_source else None,
             answer_contract=trace_source.get("answer_contract") if trace_source else None,
             support_trace=trace_source.get("support_trace") if trace_source else None,
+            document_selection=_document_selection_payload(document_selection),
         )
     return GroundedAnswer(
         query=query,

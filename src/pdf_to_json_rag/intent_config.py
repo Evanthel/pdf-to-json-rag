@@ -678,6 +678,65 @@ def matching_source_doc_ids(query: str, allow_topical: bool = False) -> list[str
     return [doc_id for _, doc_id in topical_matches]
 
 
+def resolve_preferred_source_doc_id(
+    query: str,
+    *,
+    query_class: str,
+    query_intent: str,
+    planned_preferred_doc_id: str | None = None,
+) -> str | None:
+    if query_class != "evidence_lookup":
+        return planned_preferred_doc_id
+    if query_intent in {"source_listing", "cross_document_compare", "document_routing"}:
+        return None
+
+    query_lower = query.lower()
+    if query_intent == "antibiotics":
+        if "review" in query_lower or "literature" in query_lower:
+            return "the-common-cold-a-review-of-the-literature"
+        return "common-cold-clinincal-evidence"
+    if query_intent in {"treatment_null_effect", "treatment_subgroup_benefit"} and "vitamin" in query_lower:
+        return "vitamin-c-for-preventing-and-treating-the-common-cold"
+    if query_intent in {"ct_findings", "ct_follow_up"} and (
+        "ct" in query_lower or "scan" in query_lower or "sinus" in query_lower
+    ):
+        return "ct-study-of-the-common-cold-scanned"
+    return preferred_source_doc_id(query, allow_topical=True)
+
+
+def resolve_matching_source_doc_ids(
+    query: str,
+    *,
+    query_class: str,
+    query_intent: str,
+    planned_matched_doc_ids: tuple[str, ...] | list[str],
+    query_terms: set[str],
+    unsupported_entities: set[str],
+) -> list[str]:
+    if query_class != "evidence_lookup":
+        return list(planned_matched_doc_ids)
+
+    explicit_matches = matching_source_doc_ids(query, allow_topical=False)
+    if query_intent in {"source_listing", "document_routing"} and unsupported_entities and not explicit_matches:
+        return []
+
+    allow_topical = query_intent in {
+        "source_listing",
+        "document_routing",
+        "source_justification",
+        "document_overview",
+        "cross_document_compare",
+    }
+    matches = matching_source_doc_ids(query, allow_topical=allow_topical)
+    query_lower = query.lower()
+    if query_intent in {"source_justification", "document_overview"} and matches:
+        return matches[:1]
+    if query_intent == "document_routing" and matches:
+        if "which file or files" not in query_lower and "which files" not in query_lower:
+            return matches[:1]
+    return matches
+
+
 def detect_structured_intent(query: str, query_terms: set[str]) -> str | None:
     query_lower = query.lower()
     if (

@@ -9,7 +9,8 @@ import re
 from typing import Any
 
 from .answering import GroundedAnswer, answer_query_with_retrieval
-from .intent_config import preferred_source_doc_id as configured_source_doc_id
+from .intent_config import resolve_preferred_source_doc_id
+from .query_planning import plan_query
 from .retrieval import retrieve_top_k, retrieve_top_k_with_neighbors
 from .schemas import ChunkRecord
 
@@ -158,6 +159,24 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "source_listing_humanitarian_model_reports",
         "compare_niger_chad_model_reports",
         "model_report_niger_justification",
+    ],
+    "structure_chunking_core": [
+        "ajmedp_immersion_neck_limit",
+        "health_questionnaire_question5_contexts",
+        "health_questionnaire_table1_sensitivity",
+        "opioid_manager_appendix_b_adverse_scale",
+        "opioid_manager_appendix_c_follow_up_timing",
+        "pre_injection_checklist_live_vaccine",
+        "pre_injection_checklist_side_effects",
+    ],
+    "evidence_anchor_core": [
+        "antibiotics",
+        "vitamin_c_normal_populations",
+        "vitamin_c_cold_stress",
+        "echinacea_overall_conclusion",
+        "ct_follow_up_improvement",
+        "cmaj_zinc_prevention",
+        "wat_antibiotics_review",
     ],
 }
 SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
@@ -717,7 +736,13 @@ def _case_slice_labels(case: dict) -> list[str]:
 
 
 def _preferred_source_doc_id_from_query(query: str) -> str | None:
-    return configured_source_doc_id(query)
+    plan = plan_query(query)
+    return resolve_preferred_source_doc_id(
+        query,
+        query_class=plan.query_class,
+        query_intent=plan.query_intent,
+        planned_preferred_doc_id=plan.preferred_doc_id,
+    )
 
 
 def _result_slice_labels(grounded_answer: GroundedAnswer, base_labels: list[str]) -> list[str]:
@@ -761,6 +786,8 @@ def _chunk_snapshot(chunk: ChunkRecord) -> dict[str, Any]:
         "page_start": chunk.page_start,
         "page_end": chunk.page_end,
         "section_title": chunk.section_title,
+        "chunk_type": chunk.chunk_type,
+        "section_content_hints": chunk.section_content_hints,
         "extraction_method": chunk.extraction_method,
         "quality_score": chunk.quality_score,
         "noise_labels": chunk.noise_labels,

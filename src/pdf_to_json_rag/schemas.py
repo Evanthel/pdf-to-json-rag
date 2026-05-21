@@ -39,6 +39,7 @@ class ChunkRecord(BaseModel):
     section_level: int | None = None
     section_summary: str | None = None
     section_coverage_terms: list[str] = Field(default_factory=list)
+    section_content_hints: list[str] = Field(default_factory=list)
     chunk_type: ChunkType = "text"
     reading_order_index: int
     preceding_chunk_id: str | None = None

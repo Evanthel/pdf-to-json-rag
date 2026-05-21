@@ -25,13 +25,13 @@ Internal development iterations in this repo use `v1.x` labels. Public releases 
 
 Current post-beta focus:
 
-- `v0.3.0`: simplify the document-level pipeline instead of adding a heavier model layer
+- `v0.3.9`: completed the candidate-document handoff simplification with an explicit document-selection contract
 - current emphasis:
-  - feature-based query planning
-  - simplified inventory shortlist scoring
-  - two-stage document-level retrieval
-  - unified document-level support building
-  - compact default CLI payloads with verbose debug on demand
+  - stronger document-processing structure signals, not more benchmark volume
+  - broad-benchmark stability on the simplified stack
+  - release gates that include the simplified document-level path and structure-sensitive chunking cases
+  - document-level support traces that stay faithful to the rendered answer sentences
+  - delaying any learned reranker until the simplified baseline proves insufficient
 
 Current working-tree architecture upgrades:
 
@@ -41,7 +41,19 @@ Current working-tree architecture upgrades:
 - two-stage document-level retrieval:
   - candidate document selection
   - chunk retrieval inside selected documents
+- explicit `document_selection` traces that carry:
+  - candidate docs
+  - ranked docs
+  - selected docs
+  - primary doc
+  - selection strategy
 - unified support-trace building for overview, routing, listing, justification, and comparison answers
+- support traces that now carry section summaries, section-level hints, and answer-shaped document facts
+- richer structure-aware chunk metadata:
+  - `section_content_hints`
+  - `chunk_type`
+  - stronger section-level heading hierarchy
+- structure-aware chunk boundaries for table-heavy and questionnaire-like sections
 - compact default JSON answer payloads with `--verbose` for full retrieval/debug state
 - deterministic local embedding fallback by default
 - packaged example assets and install-safe example loading
@@ -56,19 +68,24 @@ Current validation state:
   - `query_planning_core`
   - `answer_modes_core`
   - `document_pipeline_core`
+  - `structure_chunking_core`
+  - `evidence_anchor_core`
   - `document_family_core`
   - `inventory_coverage_core`
   - `relationship_core`
+- the full 67-case benchmark is green on the simplified `v0.3.x` baseline:
+  - `precision@5 = 0.5309`
+  - `recall@5 = 1.0`
+  - `MRR = 1.0`
+  - `avg_keyword_coverage = 1.0`
+  - `negative_success_rate = 1.0`
+  - `warning_case_count = 0`
 - the sampled faithfulness audit remains green:
   - `sampled_case_count = 20`
   - `avg_supported_sentence_ratio = 1.0`
   - `failing_case_count = 0`
-- after the `v0.3.0` simplification pass, the targeted reruns that covered all previously reopened warning cases are green:
-  - `wat_antibiotics_review`
-  - `antibiotics`
-  - `vitamin_c_normal_populations`
-  - `vitamin_c_cold_stress`
-  - `compare_vitamin_c_vs_echinacea_prevention`
+- the current decision after `v0.3.9` is to keep learned reranking deferred:
+  - the simplified heuristic baseline is green on release gates, maintainer shards, the full benchmark, and the sampled faithfulness audit
 
 ## Capabilities
 
@@ -117,6 +134,8 @@ pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
 pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 ```
 
+Use a fresh `PDF_TO_JSON_RAG_DATA_DIR` for quickstart and release-check runs so old local artifacts do not make `doctor` or `release-check` look greener than the current session really is.
+
 Optional stronger local embeddings:
 
 ```bash
@@ -134,6 +153,13 @@ Maintainer release validation:
 ```bash
 pdf-to-json-rag package-check --json
 pdf-to-json-rag release-check --json
+```
+
+When you are validating new local code in a source checkout before reinstalling the package, prefer:
+
+```bash
+PYTHONPATH=src python -m pdf_to_json_rag release-check --json
+PYTHONPATH=src python -m pdf_to_json_rag evaluate-mvp --top-k 5 --json
 ```
 
 For end users, the main public validation path is still:
@@ -192,11 +218,14 @@ Current gate status:
 
 - public release gates are green
 - the maintainer shard set used by `release-check` is green
+- `release-check` now covers both `document_pipeline_core` and `evidence_anchor_core` as part of the maintainer regression gate
+- `release-check` now also covers `structure_chunking_core`, so structure-sensitive form/manual/checklist cases stay in the default maintainer gate
 - `release-check` now distinguishes cleanly between:
   - public-surface gates
   - maintainer package/test gates
   - internal benchmark regressions that should only run when full benchmark assets are actually present
-- the current internal focus is no longer broad benchmark churn; it is keeping the simplified document-level pipeline stable before deciding whether any learned reranker is justified
+- `release-check` now recommends the current public beta tag instead of the stale pre-`v0.3.x` suggestion
+- the current internal focus is no longer broad benchmark churn; it is preserving the simplified document-level baseline, the new `document_selection` contract, and only revisiting a learned reranker if future failures justify it
 
 ## Limitations
 

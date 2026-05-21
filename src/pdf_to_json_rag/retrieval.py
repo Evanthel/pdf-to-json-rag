@@ -17,8 +17,8 @@ from .intent_config import (
     detect_structured_intent,
     get_document_profile,
     get_structured_intent_profile,
-    matching_source_doc_ids as configured_matching_source_doc_ids,
-    preferred_source_doc_id as configured_source_doc_id,
+    resolve_matching_source_doc_ids,
+    resolve_preferred_source_doc_id,
 )
 from .query_planning import plan_query
 from .quality import classify_chunk_quality
@@ -460,53 +460,27 @@ def _preferred_source_doc_id(query: str) -> str | None:
     if plan.query_class != "evidence_lookup":
         return plan.preferred_doc_id
     intent = _detect_query_intent(query)
-    if intent in {"source_listing", "cross_document_compare", "document_routing"}:
-        return None
-    query_lower = query.lower()
-    if intent == "antibiotics":
-        if "review" in query_lower or "literature" in query_lower:
-            return "the-common-cold-a-review-of-the-literature"
-        return "common-cold-clinincal-evidence"
-    if intent in {"treatment_null_effect", "treatment_subgroup_benefit"} and "vitamin" in query_lower:
-        return "vitamin-c-for-preventing-and-treating-the-common-cold"
-    if intent in {"ct_findings", "ct_follow_up"} and (
-        "ct" in query_lower or "scan" in query_lower or "sinus" in query_lower
-    ):
-        return "ct-study-of-the-common-cold-scanned"
-    allow_topical = True
-    return configured_source_doc_id(
+    return resolve_preferred_source_doc_id(
         query,
-        allow_topical=allow_topical,
+        query_class=plan.query_class,
+        query_intent=intent,
+        planned_preferred_doc_id=plan.preferred_doc_id,
     )
 
 
 def _matching_source_doc_ids(query: str) -> list[str]:
     plan = plan_query(query)
-    if plan.query_class != "evidence_lookup":
-        return list(plan.matched_doc_ids)
     intent = _detect_query_intent(query)
-    explicit_matches = configured_matching_source_doc_ids(query, allow_topical=False)
     query_terms = _query_terms(query)
     unsupported_entities = query_terms.intersection(UNSUPPORTED_ENTITY_TERMS)
-    if intent in {"source_listing", "document_routing"} and unsupported_entities and not explicit_matches:
-        return []
-    allow_topical = intent in {
-        "source_listing",
-        "document_routing",
-        "source_justification",
-        "document_overview",
-        "cross_document_compare",
-    }
-    matches = configured_matching_source_doc_ids(query, allow_topical=allow_topical)
-    query_lower = query.lower()
-    if intent == "source_justification" and matches:
-        return matches[:1]
-    if intent == "document_overview" and matches:
-        return matches[:1]
-    if intent == "document_routing" and matches:
-        if "which file or files" not in query_lower and "which files" not in query_lower:
-            return matches[:1]
-    return matches
+    return resolve_matching_source_doc_ids(
+        query,
+        query_class=plan.query_class,
+        query_intent=intent,
+        planned_matched_doc_ids=plan.matched_doc_ids,
+        query_terms=query_terms,
+        unsupported_entities=unsupported_entities,
+    )
 
 
 def _inventory_doc_ids(query: str) -> list[str]:
@@ -1689,6 +1663,7 @@ def retrieve_top_k(
             structural_flags = _metadata_list(metadata, "structural_flags")
             source_block_kinds = _metadata_list(metadata, "source_block_kinds")
             section_coverage_terms = _metadata_list(metadata, "section_coverage_terms")
+            section_content_hints = _metadata_list(metadata, "section_content_hints")
             if not semantic_terms or not content_hints:
                 fallback_terms, fallback_hints, fallback_flags = derive_chunk_semantics(
                     text=text,
@@ -1702,6 +1677,10 @@ def retrieve_top_k(
                     content_hints = fallback_hints
                 if not structural_flags:
                     structural_flags = fallback_flags
+            if section_content_hints:
+                for hint in section_content_hints:
+                    if hint not in content_hints:
+                        content_hints.append(hint)
             hydrated.append(
                 ChunkRecord(
                     doc_id=metadata["doc_id"],
@@ -1720,6 +1699,7 @@ def retrieve_top_k(
                     ),
                     section_summary=metadata.get("section_summary"),
                     section_coverage_terms=section_coverage_terms,
+                    section_content_hints=section_content_hints,
                     chunk_type=metadata.get("chunk_type", "text"),
                     reading_order_index=int(metadata["reading_order_index"]),
                     preceding_chunk_id=metadata.get("preceding_chunk_id"),
@@ -1835,6 +1815,7 @@ def load_chunk_lookup(chunk_root: Path, doc_ids: set[str] | None = None) -> dict
         for chunk_path in sorted(doc_dir.glob("*.json")):
             data = json.loads(chunk_path.read_text(encoding="utf-8"))
             chunk = ChunkRecord.model_validate(data)
+            flags: list[str] = []
             if not chunk.semantic_terms or not chunk.content_hints:
                 terms, hints, flags = derive_chunk_semantics(
                     text=chunk.text,
@@ -1846,8 +1827,12 @@ def load_chunk_lookup(chunk_root: Path, doc_ids: set[str] | None = None) -> dict
                     chunk.semantic_terms = terms
                 if not chunk.content_hints:
                     chunk.content_hints = hints
-                if not chunk.structural_flags:
-                    chunk.structural_flags = flags
+            if chunk.section_content_hints:
+                for hint in chunk.section_content_hints:
+                    if hint not in chunk.content_hints:
+                        chunk.content_hints.append(hint)
+            if not chunk.structural_flags and flags:
+                chunk.structural_flags = flags
             lookup[chunk.chunk_id] = chunk
     return lookup
 

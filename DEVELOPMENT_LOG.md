@@ -8,7 +8,7 @@ Internal development iterations in this file use `v1.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v0.3.0`
+Current implementation level: `v0.3.9`
 Current public version: `0.1.0-beta`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
@@ -24,29 +24,34 @@ Repo-local regression shards currently passing:
 - `query_planning_core`
 - `answer_modes_core`
 - `document_pipeline_core`
+- `structure_chunking_core`
+- `evidence_anchor_core`
 - `document_family_core`
 - `document_facets_core`
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v0.3.0`:
+Broad benchmark note after `v0.3.9`:
 
 - the targeted maintainer shard set is green again
 - the new document-level simplification shard is green
 - current broad benchmark scope:
   - `Cases`: `67`
   - `Indexed sample documents`: `19`
+- latest full rerun on the current simplified `v0.3.9` baseline:
+  - `precision@5`: `0.5309`
+  - `recall@5`: `1.0`
+  - `MRR`: `1.0`
+  - `avg_keyword_coverage`: `1.0`
+  - `negative_success_rate`: `1.0`
+  - `warning_case_count`: `0`
 - sampled faithfulness audit after the support-trace pass:
   - `sampled_case_count`: `20`
   - `avg_supported_sentence_ratio`: `1.0`
   - `failing_case_count`: `0`
-- targeted reruns covering the cases reopened during the `v0.3.0` refactor are green:
-  - `wat_antibiotics_review`
-  - `antibiotics`
-  - `vitamin_c_normal_populations`
-  - `vitamin_c_cold_stress`
-  - `compare_vitamin_c_vs_echinacea_prevention`
-- the next internal choice is no longer whether to simplify document-level reasoning; that simplification is now in place. The next choice is whether any learned reranker is justified after this cleaner baseline.
+- `release-check` now includes `document_pipeline_core`, `structure_chunking_core`, and `evidence_anchor_core` in the maintainer regression gate.
+- `release-check` now recommends the current public beta tag: `v0.1.0-beta`.
+- the current decision is to keep learned reranking deferred; the simplified baseline and the explicit `document_selection` contract are green enough that a heavier learned layer is not justified yet.
 
 ## Delivered Architecture
 
@@ -306,6 +311,87 @@ Representative validation that has already been completed:
   - `answer_modes_core`
   - `document_pipeline_core`
   - the targeted rerun covering all reopened warning cases
+
+### v0.3.1
+
+- Froze the simplified `v0.3.0` baseline by rerunning the full broad benchmark and restoring a green 67-case report.
+- Tightened the remaining source-anchor-sensitive evidence lookup seams for:
+  - `antibiotics`
+  - `wat_antibiotics_review`
+  - `vitamin_c_normal_populations`
+  - `vitamin_c_cold_stress`
+- Added `document_pipeline_core` to the default `release-check` maintainer regression gate.
+- Revalidated:
+  - `python -m unittest tests.test_cli_public_surface`
+  - `release-check`
+  - `document_pipeline_core`
+  - the full broad benchmark
+- Made the architecture decision explicit: a learned reranker is still not justified on top of the current simplified baseline.
+
+### v0.3.2-v0.3.4
+
+- Centralized source-anchor resolution so retrieval, answering, and evaluation all reuse the same preferred-source and matched-source helpers.
+- Added `evidence_anchor_core` as a compact regression shard for the highest-risk source-sensitive evidence cases:
+  - `antibiotics`
+  - `wat_antibiotics_review`
+  - `vitamin_c_normal_populations`
+  - `vitamin_c_cold_stress`
+  - `echinacea_overall_conclusion`
+  - `ct_follow_up_improvement`
+  - `cmaj_zinc_prevention`
+- Extended the default `release-check` maintainer regression gate to include `evidence_anchor_core`.
+- Fixed `release-check` metadata so the recommendation now points at the real public beta tag instead of the stale pre-`v0.3.x` suggestion.
+- Revalidated:
+  - `python -m unittest tests.test_cli_public_surface`
+  - `evaluate-regression --shard evidence_anchor_core`
+  - `release-check`
+- Kept the architecture decision unchanged: preserve the simplified heuristic baseline and continue to defer learned reranking until a real failure pattern justifies it.
+
+### v0.3.5-v0.3.8
+
+- Simplified the remaining document-level support path by reusing one support-entry builder across overview, routing, listing, justification, and comparison answers.
+- Strengthened structure metadata flowing from extraction into chunking and retrieval:
+  - section heading levels are inferred more explicitly
+  - chunk records now carry `section_content_hints`
+  - chunk records now classify `chunk_type` more explicitly for table-heavy/header-like cases
+- Tightened chunk boundaries for structure-sensitive content, especially questionnaire-like numbered sections and table-heavy transitions.
+- Extended support traces so they carry section summaries, section hints, and answer-shaped document facts that line up better with the rendered document-level answers.
+- Added `structure_chunking_core` as a compact regression shard covering manuals, questionnaires, checklist-like appendices, and table-heavy support cases.
+- Extended the default `release-check` maintainer regression gate to include `structure_chunking_core`.
+- Revalidated:
+  - `python -m unittest tests.test_cli_public_surface`
+  - `evaluate-regression --shard structure_chunking_core`
+  - `release-check`
+  - full `evaluate-mvp --top-k 5 --json`
+- Result:
+  - broad benchmark still green
+  - sampled faithfulness audit green again
+  - no evidence that a learned reranker is needed yet
+
+### v0.3.9
+
+- Added an explicit `document_selection` contract to the document-level answer trace so planner, retrieval, and answer rendering now hand off one inspectable selection payload.
+- Centralized document-level selection around:
+  - `candidate_doc_ids`
+  - `ranked_doc_ids`
+  - `selected_doc_ids`
+  - `primary_doc_id`
+  - `strategy`
+- Simplified document-level answer assembly so overview, routing, listing, justification, and comparison answers consume the same selected-document payload instead of recomputing their own shortlist decisions.
+- Kept the public JSON payload compact while exposing the new `document_selection` trace in the default answer trace contract.
+- Revalidated:
+  - `python -m unittest tests.test_cli_public_surface`
+  - `evaluate-regression --shard document_pipeline_core --top-k 5 --json`
+  - `release-check --json`
+- Verified directly on the source checkout that the previously reopened benchmark cases:
+  - `transmission`
+  - `definition`
+  - `causes`
+  - `antibiotics`
+  - `source_listing_nonmedical_learning_and_incident_response`
+  still pass their retrieval and keyword checks under the new handoff contract.
+- Maintainer note:
+  - after editing `src/`, run broad benchmark commands through `PYTHONPATH=src python -m pdf_to_json_rag ...` or reinstall the package first, otherwise the console script may still point at an older installed build.
 
 ## Deferred Features
 

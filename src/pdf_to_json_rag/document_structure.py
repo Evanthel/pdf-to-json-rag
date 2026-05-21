@@ -16,6 +16,7 @@ HEADING_PREFIX_RE = re.compile(
     r"^(chapter|part|appendix|section)\b",
     re.IGNORECASE,
 )
+NUMBERED_HEADING_RE = re.compile(r"^(?P<number>\d+(?:\.\d+){0,3})(?:[\).:-]|\s)\s*")
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 
 
@@ -43,6 +44,28 @@ def _looks_like_structural_heading(text: str, toc_entries: set[str]) -> bool:
     if words and title_case_words / len(words) >= 0.75 and len(normalized) <= 90:
         return True
     return False
+
+
+def _heading_level(text: str, toc_entries: set[str]) -> int | None:
+    normalized = _normalize(text)
+    if not normalized:
+        return None
+    if normalized.lower() in toc_entries:
+        return 1
+    prefix_match = HEADING_PREFIX_RE.match(normalized)
+    if prefix_match:
+        keyword = prefix_match.group(1).lower()
+        if keyword in {"chapter", "part", "appendix"}:
+            return 1
+        if keyword == "section":
+            return 2
+    numbered_match = NUMBERED_HEADING_RE.match(normalized)
+    if numbered_match:
+        number = numbered_match.group("number")
+        return min(number.count(".") + 1, 4)
+    if normalized.isupper():
+        return 1
+    return None
 
 
 def _section_summary_and_terms(
@@ -105,7 +128,7 @@ def build_document_sections(
         if index > current_start:
             section_ranges.append((current_title, current_level, current_start, index - 1))
         current_title = block_text
-        current_level = 1 if block_text.lower() in toc_entries or HEADING_PREFIX_RE.match(block_text) else None
+        current_level = _heading_level(block_text, toc_entries)
         current_start = index
 
     section_ranges.append((current_title, current_level, current_start, len(ordered_blocks) - 1))

@@ -176,6 +176,13 @@ class CliPublicSurfaceTests(unittest.TestCase):
             answer_payload["result"]["answer_trace"]["answer_mode"],
             "document_overview",
         )
+        self.assertEqual(
+            answer_payload["result"]["answer_trace"]["document_selection"]["strategy"],
+            "single_doc_overview",
+        )
+        support_trace = answer_payload["result"]["answer_trace"]["support_trace"]
+        self.assertGreaterEqual(len(support_trace), 1)
+        self.assertTrue(support_trace[0]["section_summaries"])
 
     def test_error_json_for_missing_index(self) -> None:
         self._run("init", "--json")

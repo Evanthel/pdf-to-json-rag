@@ -774,6 +774,7 @@ def _make_chunk_record(
     section_level: int | None,
     section_summary: str | None,
     section_coverage_terms: list[str] | None,
+    section_content_hints: list[str] | None,
 ) -> ChunkRecord:
     text = "\n\n".join(block.text for block in blocks)
     inferred_title = _extract_inline_section_label(blocks[0].text)
@@ -793,11 +794,22 @@ def _make_chunk_record(
             if term not in semantic_terms:
                 semantic_terms.append(term)
         semantic_terms = semantic_terms[:16]
+    if section_content_hints:
+        for hint in section_content_hints:
+            if hint not in content_hints:
+                content_hints.append(hint)
     noise_labels, quality_score = classify_chunk_quality(
         text=text,
         section_title=resolved_section_title,
         extraction_method=extraction_method,
     )
+    block_kinds = sorted({block.block_kind for block in blocks if block.block_kind})
+    if "table_like" in block_kinds or "table_like" in content_hints:
+        chunk_type = "table"
+    elif block_kinds == ["heading"]:
+        chunk_type = "header"
+    else:
+        chunk_type = "text"
     return ChunkRecord(
         doc_id=document.doc_id,
         chunk_id=f"{document.doc_id}-chunk-{chunk_number:04d}",
@@ -811,7 +823,8 @@ def _make_chunk_record(
         section_level=section_level,
         section_summary=section_summary,
         section_coverage_terms=list(section_coverage_terms or []),
-        chunk_type="text",
+        section_content_hints=list(section_content_hints or []),
+        chunk_type=chunk_type,
         reading_order_index=blocks[0].reading_order_index,
         language=document.detected_language,
         extraction_method=extraction_method,
@@ -820,7 +833,7 @@ def _make_chunk_record(
         semantic_terms=semantic_terms,
         content_hints=content_hints,
         structural_flags=structural_flags,
-        source_block_kinds=sorted({block.block_kind for block in blocks if block.block_kind}),
+        source_block_kinds=block_kinds,
         noise_labels=noise_labels,
         quality_score=quality_score,
         confidence=None,
@@ -866,6 +879,7 @@ def chunk_document(
     current_section_id: str | None = None
     current_section_summary: str | None = None
     current_section_coverage_terms: list[str] = []
+    current_section_content_hints: list[str] = []
     in_key_points_summary = False
     last_buffer_page_num: int | None = None
     buffer_treatment_subtopic: str | None = None
@@ -885,6 +899,7 @@ def chunk_document(
                 section_level=current_section_level,
                 section_summary=current_section_summary,
                 section_coverage_terms=current_section_coverage_terms,
+                section_content_hints=current_section_content_hints,
             )
         )
         chunk_number += 1
@@ -902,6 +917,7 @@ def chunk_document(
             current_section_level = section.level
             current_section_summary = section.summary
             current_section_coverage_terms = list(section.coverage_terms)
+            current_section_content_hints = list(section.content_hints)
             in_key_points_summary = False
 
         raw_block_text = _clean_text(block.text)
@@ -940,6 +956,7 @@ def chunk_document(
                     current_section_level = None
                     current_section_summary = None
                     current_section_coverage_terms = []
+                    current_section_content_hints = []
                     in_key_points_summary = False
 
                 segment = scoped_segment
@@ -953,6 +970,7 @@ def chunk_document(
                     current_section_level = None
                     current_section_summary = None
                     current_section_coverage_terms = []
+                    current_section_content_hints = []
 
                 if block.block_kind == "heading" or _is_probable_header(segment, toc_entries):
                     flush_buffer()
@@ -963,10 +981,25 @@ def chunk_document(
                     )
                     current_section_summary = None
                     current_section_coverage_terms = []
+                    current_section_content_hints = []
                     in_key_points_summary = False
                     continue
 
                 if block.block_kind == "table_like" and buffer and buffer_chars >= min_chunk_chars:
+                    flush_buffer()
+                if (
+                    buffer
+                    and block.block_kind != "table_like"
+                    and any(item.block_kind == "table_like" for item in buffer)
+                    and buffer_chars >= 120
+                ):
+                    flush_buffer()
+                if (
+                    buffer
+                    and "questionnaire_like" in current_section_content_hints
+                    and re.match(r"^\d+[\).]?\s+", segment.lstrip())
+                    and buffer_chars >= min_chunk_chars
+                ):
                     flush_buffer()
 
                 is_bullet_summary = in_key_points_summary and segment.lstrip().startswith("•")

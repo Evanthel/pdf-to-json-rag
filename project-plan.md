@@ -595,18 +595,126 @@ Outcome:
 - targeted reruns covering all reopened warning cases are green
 - the next decision is no longer whether to simplify; it is whether any learned reranker is justified after this cleaner baseline
 
-## 6.50. v0.3.1 Plan
+## 6.50. v0.3.1 Milestones
 
-The next meaningful step should validate the simplified baseline before introducing any heavier learned component.
+This iteration froze the simplified `v0.3.0` baseline and used that cleaner stack to decide whether a learned reranker is justified yet.
 
-1. Re-run and freeze the full broad benchmark on top of the `v0.3.0` simplified document-level stack.
-2. Audit the remaining heuristic seams in evidence lookup that are still source-anchor-sensitive.
-3. Decide whether a learned reranker is justified only after the simplified baseline is stable on both release gates and the broad benchmark.
-4. If no learned layer is justified, keep reducing heuristic duplication between retrieval and answer assembly.
-5. Keep evaluation focused on architecture quality, not benchmark growth:
-   - broad benchmark stable
-   - release gates stable
-   - document-level support / faithfulness stable
+Completed scope:
+
+1. Re-ran the full broad benchmark on top of the simplified document-level stack and restored a stable green baseline:
+   - `precision@5 = 0.5309`
+   - `recall@5 = 1.0`
+   - `MRR = 1.0`
+   - `avg_keyword_coverage = 1.0`
+   - `negative_success_rate = 1.0`
+   - `warning_case_count = 0`
+2. Audited the remaining source-anchor-sensitive evidence lookup seams and narrowed them only where they were still affecting real benchmark cases:
+   - `antibiotics`
+   - `wat_antibiotics_review`
+   - `vitamin_c_normal_populations`
+   - `vitamin_c_cold_stress`
+3. Extended the maintainer release gate to include `document_pipeline_core`, so the simplified document-level path is now part of the default release-check regression set.
+4. Revalidated the simplified baseline across:
+   - `python -m unittest tests.test_cli_public_surface`
+   - `release-check`
+   - `document_pipeline_core`
+   - the full 67-case benchmark
+5. Used the fully green simplified baseline to make an explicit architecture decision: a learned reranker is still not justified yet.
+
+Outcome:
+
+- public release gates are green
+- maintainer regression gates are green
+- the full broad benchmark is green
+- the sampled faithfulness audit remains green
+- the next step is not to add a heavier model layer by default; it is to preserve this baseline and only revisit learned reranking if future failures justify it
+
+## 6.51. v0.3.2-v0.3.4 Milestones
+
+This sprint kept the `v0.3.1` simplified baseline intact while reducing the remaining maintenance cost around source-sensitive evidence lookups.
+
+Completed scope:
+
+1. Centralized source-anchor resolution so retrieval, answering, and evaluation all reuse the same preferred-source and matched-source helpers instead of carrying separate copies of the same heuristics.
+2. Added a compact `evidence_anchor_core` regression shard to hold the highest-risk source-sensitive evidence cases:
+   - `antibiotics`
+   - `wat_antibiotics_review`
+   - `vitamin_c_normal_populations`
+   - `vitamin_c_cold_stress`
+   - `echinacea_overall_conclusion`
+   - `ct_follow_up_improvement`
+   - `cmaj_zinc_prevention`
+3. Extended the default `release-check` maintainer regression gate to include `evidence_anchor_core` alongside the existing simplified document-level shard set.
+4. Fixed release-check metadata so the recommendation points to the current public beta tag, `v0.1.0-beta`, instead of the stale pre-`v0.3.x` tag.
+5. Revalidated the simplified baseline across:
+   - `python -m unittest tests.test_cli_public_surface`
+   - `evaluate-regression --shard evidence_anchor_core`
+   - `release-check`
+
+Outcome:
+
+- public release gates are still green
+- the maintainer regression gate now covers the critical evidence-anchor seams explicitly
+- the architecture decision still holds: a learned reranker remains deferred because the simplified heuristic baseline is still green on release gates and benchmark-critical shards
+
+## 6.52. v0.3.5-v0.3.8 Milestones
+
+This sprint moved one step closer to plan points `1` and `2` by strengthening structure metadata and reducing the remaining document-level support duplication without adding a heavier learned layer.
+
+Completed scope:
+
+1. Reduced the remaining document-level support duplication by reusing one support-entry builder across overview, routing, listing, justification, and comparison answers.
+2. Strengthened extraction-to-chunk structure signals:
+   - more explicit section heading levels
+   - chunk-level `section_content_hints`
+   - explicit `chunk_type` for table-heavy and header-like cases
+3. Tightened structure-aware chunk boundaries around:
+   - questionnaire-like numbered sections
+   - table-heavy transitions
+   - section-level structure handoffs
+4. Extended document-level support traces so they carry section summaries, section hints, and answer-shaped document facts that better match the rendered answer sentences.
+5. Added `structure_chunking_core` as a compact regression shard and extended the default `release-check` maintainer gate to include it.
+6. Revalidated across:
+   - `python -m unittest tests.test_cli_public_surface`
+   - `evaluate-regression --shard structure_chunking_core`
+   - `release-check`
+   - full `evaluate-mvp --top-k 5 --json`
+
+Outcome:
+
+- public release gates remain green
+- the broad benchmark remains green
+- the sampled faithfulness audit remains green
+- plan point `1` improved through stronger structure reconstruction and chunk metadata
+- plan point `2` improved through cleaner document-level support assembly
+- plan point `3` improved through a tighter structure-sensitive regression gate
+
+## 6.53. v0.3.9 Milestones
+
+This iteration kept the structure-aware `v0.3.x` baseline green while simplifying candidate-document selection and the retrieval-to-answer handoff.
+
+Completed scope:
+
+1. Added an explicit `document_selection` contract so the document-level answer trace now exposes:
+   - `candidate_doc_ids`
+   - `ranked_doc_ids`
+   - `selected_doc_ids`
+   - `primary_doc_id`
+   - `strategy`
+2. Simplified the retrieval-to-answer handoff so document-level answers consume one normalized selection payload instead of recomputing shortlist decisions inside each answer mode.
+3. Kept overview, routing, source listing, source justification, and cross-document comparison on the same shared document-selection path.
+4. Revalidated the simplified handoff through:
+   - `python -m unittest tests.test_cli_public_surface`
+   - `evaluate-regression --shard document_pipeline_core --top-k 5 --json`
+   - `release-check --json`
+5. Preserved the simplified baseline and kept the learned-reranker decision deferred, while noting that broad benchmark reruns from a source checkout should use `PYTHONPATH=src` or a fresh reinstall.
+
+Outcome:
+
+- plan point `1` stays green on the stronger structure-aware baseline
+- plan point `2` now has a cleaner, more inspectable candidate-document contract
+- plan point `3` remains green through the public release gates and maintainer shards, with direct source-checkout verification on the document-level cases reopened by the handoff refactor
+- the next step should keep simplifying document-level maintenance cost before revisiting any heavier learned layer
 
 
 ## 7. Explicitly Deferred

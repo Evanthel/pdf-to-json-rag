@@ -27,6 +27,8 @@ export PDF_TO_JSON_RAG_DATA_DIR="$(mktemp -d)"
 pdf-to-json-rag init --json
 ```
 
+Use a fresh `PDF_TO_JSON_RAG_DATA_DIR` for quickstart and release-check runs so old local artifacts do not affect `doctor` or `release-check`.
+
 ## Check tool readiness
 
 ```bash
@@ -51,6 +53,10 @@ pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What do
 pdf-to-json-rag run-workflow --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 ```
 
+If you want the richer structure/debug payload, add `--verbose` to `plan-query`, `run-workflow`, `retrieve`, `retrieve-expanded`, or `answer-query`.
+
+The default answer trace now includes a compact `document_selection` block for document-level modes so you can see which documents were considered, ranked, and finally selected without needing the full verbose payload.
+
 ## Manual step-by-step path
 
 ```bash
@@ -70,6 +76,13 @@ pdf-to-json-rag release-check --json
 ```
 
 Use these from a source checkout when you want to validate wheel packaging, public smoke behavior, and the current release gates. End users only need `doctor`, `smoke-check`, and `run-workflow`.
+
+If you changed code under `src/` and have not reinstalled the package yet, run maintainer checks from the source checkout like this:
+
+```bash
+PYTHONPATH=src python -m pdf_to_json_rag release-check --json
+PYTHONPATH=src python -m pdf_to_json_rag evaluate-mvp --top-k 5 --json
+```
 
 ## Public-safe examples
 

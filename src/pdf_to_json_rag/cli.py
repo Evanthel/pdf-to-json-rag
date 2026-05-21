@@ -188,7 +188,7 @@ def _release_channel_recommendation(
         reasons.append("known limitations are documented and do not block the current public release path")
         return {
             "release_ready": True,
-            "suggested_tag": "v0.2.1",
+            "suggested_tag": "v0.1.0-beta",
             "why": reasons,
         }
     reasons: list[str] = []
@@ -217,6 +217,8 @@ def _chunk_payload(chunk) -> dict[str, object]:
         "section_title": chunk.section_title,
         "section_summary": chunk.section_summary,
         "section_coverage_terms": list(chunk.section_coverage_terms),
+        "section_content_hints": list(chunk.section_content_hints),
+        "chunk_type": chunk.chunk_type,
         "preceding_chunk_id": chunk.preceding_chunk_id,
         "following_chunk_id": chunk.following_chunk_id,
         "extraction_method": chunk.extraction_method,
@@ -313,6 +315,7 @@ def _compact_answer_trace(answer_trace: dict[str, object]) -> dict[str, object]:
         "answer_mode": answer_trace.get("answer_mode"),
         "query_intent": answer_trace.get("query_intent"),
         "candidate_doc_ids": answer_trace.get("candidate_doc_ids", []),
+        "document_selection": answer_trace.get("document_selection", {}),
         "template_id": answer_trace.get("template_id"),
         "matched_pattern": answer_trace.get("matched_pattern"),
         "matched_cues": answer_trace.get("matched_cues", []),
@@ -731,6 +734,9 @@ def _run_package_check() -> dict[str, object]:
 RELEASE_CHECK_SHARDS = [
     "query_planning_core",
     "answer_modes_core",
+    "document_pipeline_core",
+    "structure_chunking_core",
+    "evidence_anchor_core",
     "document_family_core",
     "inventory_coverage_core",
     "relationship_core",
