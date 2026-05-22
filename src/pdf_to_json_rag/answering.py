@@ -498,6 +498,29 @@ class DocumentSelection:
     selected_doc_ids: list[str]
     primary_doc_id: str | None
     strategy: str
+    shortlist_breakdown: list[dict[str, object]] = field(default_factory=list)
+
+
+DOCUMENT_SELECTION_STRATEGIES: dict[str, str] = {
+    "document_overview": "single_doc_overview",
+    "source_justification": "single_doc_justification",
+    "document_routing": "ranked_routing",
+    "source_listing": "ranked_listing",
+    "cross_document_compare": "ranked_compare",
+    "grounded_evidence": "preferred_doc",
+}
+
+
+def _selection_limit(answer_mode: str, *, plural_routing: bool) -> int:
+    if answer_mode in {"document_overview", "source_justification", "grounded_evidence"}:
+        return 1
+    if answer_mode == "document_routing":
+        return 4 if plural_routing else 1
+    if answer_mode == "source_listing":
+        return 4
+    if answer_mode == "cross_document_compare":
+        return 3
+    return 1
 
 
 def _normalize_text(text: str) -> str:
@@ -2025,11 +2048,23 @@ def _document_support_trace_item(
     record = _load_document_record(doc_id, chunk_root)
     semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
     section_titles = _document_summary_cues(doc_id, top_k_hits, chunk_root)[:3]
+    section_paths = [
+        " > ".join(section.section_path)
+        for section in (record.sections if record else [])
+        if section.section_path
+    ][:3]
     section_summaries = [
         section.summary.strip()
         for section in (record.sections if record else [])
         if section.summary and section.summary.strip()
     ][:3]
+    section_kinds = list(
+        dict.fromkeys(
+            section.section_kind
+            for section in (record.sections if record else [])
+            if section.section_kind
+        )
+    )[:4]
     section_content_hints = list(
         dict.fromkeys(
             hint
@@ -2058,8 +2093,12 @@ def _document_support_trace_item(
         support_fragments.append("coverage: " + ", ".join(coverage_terms))
     if section_titles:
         support_fragments.append("sections: " + ", ".join(section_titles))
+    if section_paths:
+        support_fragments.append("section paths: " + " | ".join(section_paths))
     if section_summaries:
         support_fragments.append("section summaries: " + " | ".join(section_summaries))
+    if section_kinds:
+        support_fragments.append("section kinds: " + ", ".join(section_kinds))
     if section_content_hints:
         support_fragments.append("section hints: " + ", ".join(section_content_hints))
     if matched_terms:
@@ -2078,7 +2117,9 @@ def _document_support_trace_item(
         "coverage_terms": coverage_terms,
         "summary_cues": summary_cues,
         "section_titles": section_titles,
+        "section_paths": section_paths,
         "section_summaries": section_summaries,
+        "section_kinds": section_kinds,
         "section_content_hints": section_content_hints,
         "matched_terms": list(matched_terms[:4]) if matched_terms else [],
         "support_sentences": list(support_sentences[:3]) if support_sentences else [],
@@ -2332,6 +2373,71 @@ def _build_document_support_entries(
     ]
 
 
+def _document_families(doc_ids: list[str]) -> list[str]:
+    return [
+        get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"
+        for doc_id in doc_ids
+    ]
+
+
+def _trace_payload(
+    *,
+    template_id: str,
+    matched_pattern: str,
+    matched_cues: list[str],
+    mode: str,
+    primary_doc_ids: list[str],
+    summary_type: str | None = None,
+    coverage_terms: list[str] | None = None,
+    matched_terms: list[str] | None = None,
+    relationship: str | None = None,
+    support_trace: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    contract_kwargs: dict[str, object] = {
+        "mode": mode,
+        "primary_doc_ids": primary_doc_ids,
+        "document_families": _document_families(primary_doc_ids),
+    }
+    if summary_type:
+        contract_kwargs["summary_type"] = summary_type
+    if coverage_terms:
+        contract_kwargs["coverage_terms"] = coverage_terms
+    if matched_terms:
+        contract_kwargs["matched_terms"] = matched_terms
+    if relationship:
+        contract_kwargs["relationship"] = relationship
+    return {
+        "template_id": template_id,
+        "matched_pattern": matched_pattern,
+        "matched_cues": matched_cues,
+        "answer_contract": build_answer_contract(**contract_kwargs),
+        "support_trace": support_trace or [],
+    }
+
+
+def _comparison_support_trace_item(
+    difference_summary: str | None,
+    relation_summary: str | None,
+) -> dict[str, object] | None:
+    if not difference_summary and not relation_summary:
+        return None
+    return {
+        "doc_id": "__comparison__",
+        "label": "Cross-document relationship",
+        "inventory_summary": "",
+        "document_family": "comparison",
+        "document_type": "relationship",
+        "document_purpose": "comparison",
+        "audience": "",
+        "coverage_terms": [],
+        "summary_cues": [],
+        "section_titles": [],
+        "matched_terms": [],
+        "support_sentences": [item for item in (difference_summary, relation_summary) if item],
+        "support_fragments": [item for item in (difference_summary, relation_summary) if item],
+    }
+
+
 def _base_answer_trace(
     query: str,
     query_intent: str,
@@ -2372,7 +2478,60 @@ def _document_selection_payload(selection: DocumentSelection) -> dict[str, objec
         "ranked_doc_ids": list(selection.ranked_doc_ids),
         "selected_doc_ids": list(selection.selected_doc_ids),
         "primary_doc_id": selection.primary_doc_id,
+        "shortlist_breakdown": list(selection.shortlist_breakdown),
     }
+
+
+def _resolve_candidate_doc_ids(
+    plan,
+    shortlist_breakdown: list[dict[str, object]],
+    top_k_hits: list[ChunkRecord],
+) -> list[str]:
+    candidate_doc_ids = list(plan.candidate_doc_ids) or [
+        candidate["doc_id"] for candidate in shortlist_breakdown
+    ]
+    if candidate_doc_ids:
+        return candidate_doc_ids
+
+    seen: set[str] = set()
+    for chunk in top_k_hits:
+        if chunk.doc_id not in seen:
+            candidate_doc_ids.append(chunk.doc_id)
+            seen.add(chunk.doc_id)
+    return candidate_doc_ids
+
+
+def _ranked_candidate_doc_ids(
+    answer_mode: str,
+    candidate_doc_ids: list[str],
+    query: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+) -> list[str]:
+    if answer_mode in {"document_routing", "source_listing", "cross_document_compare"}:
+        return _rank_document_candidates(candidate_doc_ids, query, top_k_hits, chunk_root)
+    return list(candidate_doc_ids)
+
+
+def _selected_doc_ids_for_mode(
+    plan,
+    ranked_doc_ids: list[str],
+    primary_doc_id: str | None,
+) -> tuple[list[str], str | None, str]:
+    answer_mode = plan.answer_mode
+    strategy = DOCUMENT_SELECTION_STRATEGIES.get(answer_mode, "preferred_doc")
+    limit = _selection_limit(
+        answer_mode,
+        plural_routing=bool(plan.query_features.get("plural_routing")),
+    )
+    if answer_mode in {"document_overview", "source_justification", "grounded_evidence"}:
+        selected_doc_ids = [primary_doc_id] if primary_doc_id else []
+        return selected_doc_ids, primary_doc_id, strategy
+
+    selected_doc_ids = ranked_doc_ids[:limit]
+    if selected_doc_ids:
+        primary_doc_id = selected_doc_ids[0]
+    return selected_doc_ids, primary_doc_id, strategy
 
 
 def _build_document_selection(
@@ -2381,45 +2540,31 @@ def _build_document_selection(
     top_k_hits: list[ChunkRecord],
     chunk_root: Path,
 ) -> DocumentSelection:
+    shortlist_breakdown = [
+        {
+            "doc_id": candidate.entry.doc_id,
+            "label": candidate.entry.label,
+            "score": round(candidate.breakdown.total, 3),
+            "matched_terms": list(candidate.matched_terms),
+            "rationale": list(candidate.rationale),
+        }
+        for candidate in plan.shortlist[:6]
+    ]
     answer_mode = plan.answer_mode
-    candidate_doc_ids = list(plan.candidate_doc_ids)
-    if not candidate_doc_ids:
-        seen: set[str] = set()
-        for chunk in top_k_hits:
-            if chunk.doc_id not in seen:
-                candidate_doc_ids.append(chunk.doc_id)
-                seen.add(chunk.doc_id)
-
-    if answer_mode in {"document_routing", "source_listing", "cross_document_compare"}:
-        ranked_doc_ids = _rank_document_candidates(candidate_doc_ids, query, top_k_hits, chunk_root)
-    else:
-        ranked_doc_ids = list(candidate_doc_ids)
-
+    candidate_doc_ids = _resolve_candidate_doc_ids(plan, shortlist_breakdown, top_k_hits)
+    ranked_doc_ids = _ranked_candidate_doc_ids(
+        answer_mode,
+        candidate_doc_ids,
+        query,
+        top_k_hits,
+        chunk_root,
+    )
     primary_doc_id = plan.preferred_doc_id or (ranked_doc_ids[0] if ranked_doc_ids else None)
-    selected_doc_ids: list[str]
-    strategy = "plan_candidates"
-
-    if answer_mode == "document_overview":
-        selected_doc_ids = [primary_doc_id] if primary_doc_id else []
-        strategy = "single_doc_overview"
-    elif answer_mode == "source_justification":
-        selected_doc_ids = [primary_doc_id] if primary_doc_id else []
-        strategy = "single_doc_justification"
-    elif answer_mode == "document_routing":
-        selected_doc_ids = ranked_doc_ids[:4] if plan.query_features.get("plural_routing") else ranked_doc_ids[:1]
-        primary_doc_id = selected_doc_ids[0] if selected_doc_ids else None
-        strategy = "ranked_routing"
-    elif answer_mode == "source_listing":
-        selected_doc_ids = ranked_doc_ids[:4]
-        primary_doc_id = selected_doc_ids[0] if selected_doc_ids else None
-        strategy = "ranked_listing"
-    elif answer_mode == "cross_document_compare":
-        selected_doc_ids = ranked_doc_ids[:3]
-        primary_doc_id = selected_doc_ids[0] if selected_doc_ids else None
-        strategy = "ranked_compare"
-    else:
-        selected_doc_ids = [primary_doc_id] if primary_doc_id else []
-        strategy = "preferred_doc"
+    selected_doc_ids, primary_doc_id, strategy = _selected_doc_ids_for_mode(
+        plan,
+        ranked_doc_ids,
+        primary_doc_id,
+    )
 
     return DocumentSelection(
         answer_mode=answer_mode,
@@ -2428,6 +2573,304 @@ def _build_document_selection(
         selected_doc_ids=selected_doc_ids,
         primary_doc_id=primary_doc_id,
         strategy=strategy,
+        shortlist_breakdown=shortlist_breakdown,
+    )
+
+
+def _document_overview_mode_answer(
+    selection: DocumentSelection,
+    query: str,
+    top_k_hits: list[ChunkRecord],
+    context_chunks: list[ChunkRecord],
+    evidence: list[EvidenceSentence],
+    chunk_root: Path,
+) -> tuple[str | None, dict[str, object] | None]:
+    if not top_k_hits:
+        return None, None
+    primary_doc_id = selection.primary_doc_id or top_k_hits[0].doc_id
+    support_entry = _build_document_support_entry(
+        query=query,
+        doc_id=primary_doc_id,
+        top_k_hits=top_k_hits,
+        context_chunks=context_chunks,
+        evidence=evidence,
+        chunk_root=chunk_root,
+    )
+    answer, cues, answer_contract = _render_document_overview(
+        primary_doc_id,
+        top_k_hits,
+        chunk_root,
+    )
+    if answer:
+        return (
+            answer,
+            {
+                "template_id": "document_level.overview",
+                "matched_pattern": "section-aware-document-summary",
+                "matched_cues": cues,
+                "answer_contract": answer_contract,
+                "support_trace": [support_entry],
+            },
+        )
+    primary_label = _document_label(primary_doc_id, chunk_root)
+    overview_fragments = _document_overview_fragments(primary_doc_id, top_k_hits, chunk_root)
+    if overview_fragments:
+        return (
+            f"{primary_label}: " + "; ".join(overview_fragments) + ".",
+            {
+                "template_id": "document_level.overview",
+                "matched_pattern": "document-facets-and-summary-cues",
+                "matched_cues": overview_fragments,
+                "support_trace": [support_entry],
+            },
+        )
+    return None, None
+
+
+def _document_routing_mode_answer(
+    plan,
+    selection: DocumentSelection,
+    query: str,
+    top_k_hits: list[ChunkRecord],
+    context_chunks: list[ChunkRecord],
+    evidence: list[EvidenceSentence],
+    chunk_root: Path,
+) -> tuple[str | None, dict[str, object] | None]:
+    if not top_k_hits or not selection.selected_doc_ids:
+        return None, None
+    if plan.query_features.get("plural_routing"):
+        chosen_doc_ids = list(selection.selected_doc_ids)
+        if len(chosen_doc_ids) >= 2:
+            support_trace = _build_document_support_entries(
+                query=query,
+                doc_ids=chosen_doc_ids,
+                top_k_hits=top_k_hits,
+                context_chunks=context_chunks,
+                evidence=evidence,
+                chunk_root=chunk_root,
+            )
+            fragments: list[str] = []
+            cues: list[str] = []
+            for support_entry in support_trace:
+                label = str(support_entry["label"])
+                inventory_summary = str(support_entry["inventory_summary"])
+                fragments.append(f"{label} ({inventory_summary})")
+                cues.extend([label, inventory_summary])
+            return (
+                "The most relevant files are " + "; ".join(fragments) + ".",
+                _trace_payload(
+                    template_id="document_level.routing_multi",
+                    matched_pattern="inventory-ranked-multi-doc-summary",
+                    matched_cues=cues,
+                    mode="document_routing",
+                    primary_doc_ids=chosen_doc_ids,
+                    summary_type="inventory_summary",
+                    support_trace=support_trace,
+                ),
+            )
+
+    primary_doc_id = selection.primary_doc_id
+    if not primary_doc_id:
+        return None, None
+    support_entry = _build_document_support_entry(
+        query=query,
+        doc_id=primary_doc_id,
+        top_k_hits=top_k_hits,
+        context_chunks=context_chunks,
+        evidence=evidence,
+        chunk_root=chunk_root,
+    )
+    primary_label = str(support_entry["label"])
+    inventory_summary = str(support_entry["inventory_summary"])
+    topical_terms = list(support_entry.get("matched_terms", []))[:4]
+    topics = list(support_entry.get("section_titles", []))[:3]
+    detail_parts: list[str] = []
+    if topical_terms:
+        detail_parts.append("grounded material on " + ", ".join(topical_terms))
+    if topics:
+        detail_parts.append("sections such as " + ", ".join(topics))
+    if not inventory_summary and not detail_parts:
+        return None, None
+    answer_sentences = [f"The most relevant file is {primary_label}."]
+    if inventory_summary:
+        answer_sentences.append(inventory_summary + ".")
+    if detail_parts:
+        answer_sentences.append("It includes " + " and ".join(detail_parts) + ".")
+    rendered_answer = " ".join(answer_sentences)
+    support_trace = [
+        _document_support_trace_item(
+            primary_doc_id,
+            top_k_hits,
+            chunk_root,
+            matched_terms=topical_terms[:4],
+            support_sentences=[rendered_answer],
+        )
+    ]
+    return (
+        rendered_answer,
+        _trace_payload(
+            template_id="document_level.routing",
+            matched_pattern="top-doc-topical-summary",
+            matched_cues=[primary_label, inventory_summary, *topical_terms[:4], *topics[:3]],
+            mode="document_routing",
+            primary_doc_ids=[primary_doc_id],
+            summary_type="inventory_summary_plus_topics",
+            coverage_terms=list(_document_semantics(primary_doc_id, top_k_hits, chunk_root).coverage_terms[:4]),
+            matched_terms=topical_terms[:4],
+            support_trace=support_trace,
+        ),
+    )
+
+
+def _source_justification_mode_answer(
+    selection: DocumentSelection,
+    query: str,
+    top_k_hits: list[ChunkRecord],
+    context_chunks: list[ChunkRecord],
+    evidence: list[EvidenceSentence],
+    chunk_root: Path,
+) -> tuple[str | None, dict[str, object] | None]:
+    if not top_k_hits:
+        return None, None
+    primary_doc_id = selection.primary_doc_id or top_k_hits[0].doc_id
+    support_entry = _build_document_support_entry(
+        query=query,
+        doc_id=primary_doc_id,
+        top_k_hits=top_k_hits,
+        context_chunks=context_chunks,
+        evidence=evidence,
+        chunk_root=chunk_root,
+    )
+    primary_label = str(support_entry["label"])
+    matched_terms = list(support_entry.get("matched_terms", []))[:4]
+    summary_cues = list(support_entry.get("section_titles", []))[:3]
+    facets = _document_facets(primary_doc_id, chunk_root)
+    parts: list[str] = []
+    inventory_summary = str(support_entry["inventory_summary"])
+    if inventory_summary:
+        parts.append(inventory_summary)
+    if matched_terms:
+        parts.append("it matches cues such as " + ", ".join(matched_terms))
+    if facets.get("document_type") or facets.get("document_purpose"):
+        facet_parts = [
+            str(value).replace("_", " ")
+            for value in (facets.get("document_type"), facets.get("document_purpose"))
+            if value
+        ]
+        if facet_parts:
+            parts.append("it is classified as " + " / ".join(facet_parts))
+    if summary_cues:
+        parts.append("it includes sections such as " + ", ".join(summary_cues[:3]))
+    if not parts:
+        parts.append("it surfaced the strongest grounded support in the current benchmark")
+    rendered_answer = f"{primary_label} is the best match because " + "; ".join(parts) + "."
+    support_trace = [
+        _document_support_trace_item(
+            primary_doc_id,
+            top_k_hits,
+            chunk_root,
+            matched_terms=matched_terms[:4],
+            support_sentences=[rendered_answer],
+        )
+    ]
+    return (
+        rendered_answer,
+        _trace_payload(
+            template_id="document_level.justification",
+            matched_pattern="doc-metadata-justification",
+            matched_cues=[primary_label, inventory_summary, *matched_terms, *summary_cues[:3]],
+            mode="source_justification",
+            primary_doc_ids=[primary_doc_id],
+            summary_type="inventory_summary_plus_cues",
+            coverage_terms=list(_document_semantics(primary_doc_id, top_k_hits, chunk_root).coverage_terms[:4]),
+            matched_terms=matched_terms[:4],
+            support_trace=support_trace,
+        ),
+    )
+
+
+def _source_listing_mode_answer(
+    selection: DocumentSelection,
+    query: str,
+    top_k_hits: list[ChunkRecord],
+    context_chunks: list[ChunkRecord],
+    evidence: list[EvidenceSentence],
+    chunk_root: Path,
+) -> tuple[str | None, dict[str, object] | None]:
+    if not selection.selected_doc_ids:
+        return None, None
+    support_trace = _build_document_support_entries(
+        query=query,
+        doc_ids=list(selection.selected_doc_ids),
+        top_k_hits=top_k_hits,
+        context_chunks=context_chunks,
+        evidence=evidence,
+        chunk_root=chunk_root,
+    )
+    labels = [
+        f"{support_entry['label']} ({support_entry['inventory_summary']})"
+        for support_entry in support_trace
+    ]
+    return (
+        "Relevant sources include: " + "; ".join(labels) + ".",
+        _trace_payload(
+            template_id="cross_doc.source_listing",
+            matched_pattern="inventory-ranked-doc-diverse-topk",
+            matched_cues=labels,
+            mode="source_listing",
+            primary_doc_ids=list(selection.selected_doc_ids),
+            summary_type="inventory_summary",
+            support_trace=support_trace,
+        ),
+    )
+
+
+def _cross_document_compare_mode_answer(
+    selection: DocumentSelection,
+    query: str,
+    top_k_hits: list[ChunkRecord],
+    context_chunks: list[ChunkRecord],
+    evidence: list[EvidenceSentence],
+    chunk_root: Path,
+) -> tuple[str | None, dict[str, object] | None]:
+    doc_ids = list(selection.selected_doc_ids[:3])
+    if len(doc_ids) < 2:
+        return None, None
+    support_entries = _build_document_support_entries(
+        query=query,
+        doc_ids=doc_ids,
+        top_k_hits=top_k_hits,
+        context_chunks=context_chunks,
+        evidence=evidence,
+        chunk_root=chunk_root,
+    )
+    fragments = [
+        f"{item['label']}: {item['inventory_summary']}. Evidence: {item['support_sentences'][0]}."
+        for item in support_entries
+        if item.get("support_sentences")
+    ]
+    support_trace = list(support_entries)
+    difference_summary = _document_difference_summary(doc_ids, chunk_root)
+    relation_label, relation_summary = _document_relationship_signal(doc_ids, chunk_root)
+    if difference_summary:
+        fragments.append(difference_summary)
+    if relation_summary:
+        fragments.append(relation_summary)
+    comparison_item = _comparison_support_trace_item(difference_summary, relation_summary)
+    if comparison_item:
+        support_trace.append(comparison_item)
+    return (
+        " ".join(fragments),
+        _trace_payload(
+            template_id="cross_doc.compare",
+            matched_pattern="doc-diverse-evidence-plus-facets",
+            matched_cues=[str(item["label"]) for item in support_entries]
+            + [_document_profile_summary(doc_id, chunk_root) for doc_id in doc_ids],
+            mode="cross_document_compare",
+            primary_doc_ids=doc_ids,
+            relationship=relation_label,
+            support_trace=support_trace,
+        ),
     )
 
 
@@ -2447,288 +2890,130 @@ def _document_mode_answer(
     explicit_source_matches = matching_source_doc_ids(query, allow_topical=False)
     if answer_mode in {"document_routing", "source_listing"} and unsupported_entities and not explicit_source_matches:
         return None, None
-    if answer_mode == "document_overview" and top_k_hits:
-        primary_doc_id = selection.primary_doc_id or top_k_hits[0].doc_id
-        support_entry = _build_document_support_entry(
-            query=query,
-            doc_id=primary_doc_id,
-            top_k_hits=top_k_hits,
-            context_chunks=context_chunks,
-            evidence=evidence,
-            chunk_root=chunk_root,
-        )
-        answer, cues, answer_contract = _render_document_overview(
-            primary_doc_id,
+    if answer_mode == "document_overview":
+        return _document_overview_mode_answer(
+            selection,
+            query,
             top_k_hits,
+            context_chunks,
+            evidence,
             chunk_root,
         )
-        if answer:
-            return (
-                answer,
-                {
-                    "template_id": "document_level.overview",
-                    "matched_pattern": "section-aware-document-summary",
-                    "matched_cues": cues,
-                    "answer_contract": answer_contract,
-                    "support_trace": [support_entry],
-                },
-            )
-        primary_label = _document_label(primary_doc_id, chunk_root)
-        overview_fragments = _document_overview_fragments(primary_doc_id, top_k_hits, chunk_root)
-        if overview_fragments:
-            return (
-                f"{primary_label}: " + "; ".join(overview_fragments) + ".",
-                {
-                    "template_id": "document_level.overview",
-                    "matched_pattern": "document-facets-and-summary-cues",
-                    "matched_cues": overview_fragments,
-                    "support_trace": [support_entry],
-                },
-            )
-    if answer_mode == "document_routing" and top_k_hits:
-        if not selection.selected_doc_ids:
-            return None, None
-        if plan.query_features.get("plural_routing"):
-            chosen_doc_ids = list(selection.selected_doc_ids)
-            if len(chosen_doc_ids) >= 2:
-                support_trace = _build_document_support_entries(
-                    query=query,
-                    doc_ids=chosen_doc_ids,
-                    top_k_hits=top_k_hits,
-                    context_chunks=context_chunks,
-                    evidence=evidence,
-                    chunk_root=chunk_root,
-                )
-                fragments: list[str] = []
-                cues: list[str] = []
-                for support_entry in support_trace:
-                    label = str(support_entry["label"])
-                    inventory_summary = str(support_entry["inventory_summary"])
-                    fragments.append(f"{label} ({inventory_summary})")
-                    cues.extend([label, inventory_summary])
-                return (
-                    "The most relevant files are " + "; ".join(fragments) + ".",
-                    {
-                        "template_id": "document_level.routing_multi",
-                        "matched_pattern": "inventory-ranked-multi-doc-summary",
-                        "matched_cues": cues,
-                        "answer_contract": build_answer_contract(
-                            mode="document_routing",
-                            primary_doc_ids=chosen_doc_ids,
-                            document_families=[
-                                get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"
-                                for doc_id in chosen_doc_ids
-                            ],
-                            summary_type="inventory_summary",
-                        ),
-                        "support_trace": support_trace,
-                    },
-                )
-
-        if selection.primary_doc_id:
-            primary_doc_id = selection.primary_doc_id
-            support_entry = _build_document_support_entry(
-                query=query,
-                doc_id=primary_doc_id,
-                top_k_hits=top_k_hits,
-                context_chunks=context_chunks,
-                evidence=evidence,
-                chunk_root=chunk_root,
-            )
-            primary_label = str(support_entry["label"])
-            inventory_summary = str(support_entry["inventory_summary"])
-            topical_terms = list(support_entry.get("matched_terms", []))[:4]
-            topics = list(support_entry.get("section_titles", []))[:3]
-            detail_parts: list[str] = []
-            if topical_terms:
-                detail_parts.append("grounded material on " + ", ".join(topical_terms))
-            if topics:
-                detail_parts.append("sections such as " + ", ".join(topics))
-            if inventory_summary or detail_parts:
-                answer_sentences = [f"The most relevant file is {primary_label}."]
-                if inventory_summary:
-                    answer_sentences.append(inventory_summary + ".")
-                if detail_parts:
-                    answer_sentences.append("It includes " + " and ".join(detail_parts) + ".")
-                rendered_answer = " ".join(answer_sentences)
-                return (
-                    rendered_answer,
-                    {
-                        "template_id": "document_level.routing",
-                        "matched_pattern": "top-doc-topical-summary",
-                        "matched_cues": [primary_label, inventory_summary, *topical_terms[:4], *topics[:3]],
-                        "answer_contract": build_answer_contract(
-                            mode="document_routing",
-                            primary_doc_ids=[primary_doc_id],
-                            document_families=[get_inventory_entry(primary_doc_id).document_family if get_inventory_entry(primary_doc_id) else "general_reference"],
-                            summary_type="inventory_summary_plus_topics",
-                            coverage_terms=list(_document_semantics(primary_doc_id, top_k_hits, chunk_root).coverage_terms[:4]),
-                            matched_terms=topical_terms[:4],
-                        ),
-                        "support_trace": [
-                            _document_support_trace_item(
-                                primary_doc_id,
-                                top_k_hits,
-                                chunk_root,
-                                matched_terms=topical_terms[:4],
-                                support_sentences=[rendered_answer],
-                            )
-                        ],
-                    },
-                )
-    if answer_mode == "source_justification" and top_k_hits:
-        primary_doc_id = selection.primary_doc_id or top_k_hits[0].doc_id
-        support_entry = _build_document_support_entry(
-            query=query,
-            doc_id=primary_doc_id,
-            top_k_hits=top_k_hits,
-            context_chunks=context_chunks,
-            evidence=evidence,
-            chunk_root=chunk_root,
+    if answer_mode == "document_routing":
+        return _document_routing_mode_answer(
+            plan,
+            selection,
+            query,
+            top_k_hits,
+            context_chunks,
+            evidence,
+            chunk_root,
         )
-        primary_label = str(support_entry["label"])
-        matched_terms = list(support_entry.get("matched_terms", []))[:4]
-        summary_cues = list(support_entry.get("section_titles", []))[:3]
-        facets = _document_facets(primary_doc_id, chunk_root)
-        parts: list[str] = []
-        inventory_summary = str(support_entry["inventory_summary"])
-        if inventory_summary:
-            parts.append(inventory_summary)
-        if matched_terms:
-            parts.append("it matches cues such as " + ", ".join(matched_terms))
-        if facets.get("document_type") or facets.get("document_purpose"):
-            facet_parts = [
-                str(value).replace("_", " ")
-                for value in (facets.get("document_type"), facets.get("document_purpose"))
-                if value
-            ]
-            if facet_parts:
-                parts.append("it is classified as " + " / ".join(facet_parts))
-        if summary_cues:
-            parts.append("it includes sections such as " + ", ".join(summary_cues[:3]))
-        if not parts:
-            parts.append("it surfaced the strongest grounded support in the current benchmark")
-        return (
-            f"{primary_label} is the best match because " + "; ".join(parts) + ".",
-            {
-                "template_id": "document_level.justification",
-                "matched_pattern": "doc-metadata-justification",
-                "matched_cues": [primary_label, inventory_summary, *matched_terms, *summary_cues[:3]],
-                "answer_contract": build_answer_contract(
-                    mode="source_justification",
-                    primary_doc_ids=[primary_doc_id],
-                    document_families=[get_inventory_entry(primary_doc_id).document_family if get_inventory_entry(primary_doc_id) else "general_reference"],
-                    summary_type="inventory_summary_plus_cues",
-                    coverage_terms=list(_document_semantics(primary_doc_id, top_k_hits, chunk_root).coverage_terms[:4]),
-                    matched_terms=matched_terms[:4],
-                ),
-                "support_trace": [
-                    _document_support_trace_item(
-                        primary_doc_id,
-                        top_k_hits,
-                        chunk_root,
-                        matched_terms=matched_terms[:4],
-                        support_sentences=[f"{primary_label} is the best match because " + "; ".join(parts) + "."],
-                    )
-                ],
-            },
+    if answer_mode == "source_justification":
+        return _source_justification_mode_answer(
+            selection,
+            query,
+            top_k_hits,
+            context_chunks,
+            evidence,
+            chunk_root,
         )
-    if answer_mode == "source_listing" and selection.selected_doc_ids:
-        support_trace = _build_document_support_entries(
-            query=query,
-            doc_ids=list(selection.selected_doc_ids),
-            top_k_hits=top_k_hits,
-            context_chunks=context_chunks,
-            evidence=evidence,
-            chunk_root=chunk_root,
+    if answer_mode == "source_listing":
+        return _source_listing_mode_answer(
+            selection,
+            query,
+            top_k_hits,
+            context_chunks,
+            evidence,
+            chunk_root,
         )
-        labels = []
-        for support_entry in support_trace:
-            labels.append(f"{support_entry['label']} ({support_entry['inventory_summary']})")
-        return (
-            "Relevant sources include: " + "; ".join(labels) + ".",
-            {
-                "template_id": "cross_doc.source_listing",
-                "matched_pattern": "inventory-ranked-doc-diverse-topk",
-                "matched_cues": labels,
-                "answer_contract": build_answer_contract(
-                    mode="source_listing",
-                    primary_doc_ids=list(selection.selected_doc_ids),
-                    document_families=[
-                        get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"
-                        for doc_id in selection.selected_doc_ids
-                    ],
-                    summary_type="inventory_summary",
-                ),
-                "support_trace": support_trace,
-            },
-        )
-
     if answer_mode == "cross_document_compare":
-        doc_ids = list(selection.selected_doc_ids[:3])
-        if len(doc_ids) >= 2:
-            support_entries = _build_document_support_entries(
-                query=query,
-                doc_ids=doc_ids,
-                top_k_hits=top_k_hits,
-                context_chunks=context_chunks,
-                evidence=evidence,
-                chunk_root=chunk_root,
-            )
-            fragments = [
-                f"{item['label']}: {item['inventory_summary']}. Evidence: {item['support_sentences'][0]}."
-                for item in support_entries
-                if item.get("support_sentences")
-            ]
-            support_trace = list(support_entries)
-            difference_summary = _document_difference_summary(doc_ids, chunk_root)
-            relation_label, relation_summary = _document_relationship_signal(doc_ids, chunk_root)
-            if difference_summary:
-                fragments.append(difference_summary)
-            if relation_summary:
-                fragments.append(relation_summary)
-            if difference_summary or relation_summary:
-                support_trace.append(
-                    {
-                        "doc_id": "__comparison__",
-                        "label": "Cross-document relationship",
-                        "inventory_summary": "",
-                        "document_family": "comparison",
-                        "document_type": "relationship",
-                        "document_purpose": "comparison",
-                        "audience": "",
-                        "coverage_terms": [],
-                        "summary_cues": [],
-                        "section_titles": [],
-                        "matched_terms": [],
-                        "support_sentences": [
-                            item for item in (difference_summary, relation_summary) if item
-                        ],
-                        "support_fragments": [
-                            item for item in (difference_summary, relation_summary) if item
-                        ],
-                    }
-                )
-            return (
-                " ".join(fragments),
-                {
-                    "template_id": "cross_doc.compare",
-                    "matched_pattern": "doc-diverse-evidence-plus-facets",
-                    "matched_cues": [str(item["label"]) for item in support_entries]
-                    + [_document_profile_summary(doc_id, chunk_root) for doc_id in doc_ids],
-                    "answer_contract": build_answer_contract(
-                        mode="cross_document_compare",
-                        primary_doc_ids=doc_ids,
-                        document_families=[
-                            get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"
-                        for doc_id in doc_ids
-                        ],
-                        relationship=relation_label,
-                    ),
-                    "support_trace": support_trace,
-                },
-            )
+        return _cross_document_compare_mode_answer(
+            selection,
+            query,
+            top_k_hits,
+            context_chunks,
+            evidence,
+            chunk_root,
+        )
     return None, None
+
+
+def _finalize_answer_result(
+    *,
+    query: str,
+    query_intent: str,
+    evidence: list[EvidenceSentence],
+    document_selection: DocumentSelection,
+    mode_answer: str | None,
+    mode_trace: dict[str, object] | None,
+) -> tuple[str, dict[str, object]]:
+    if _should_abstain(query, evidence) and not mode_answer:
+        answer = NO_GROUNDED_ANSWER
+        answer_trace = _base_answer_trace(
+            query=query,
+            query_intent=query_intent,
+            evidence=evidence,
+            document_selection=_document_selection_payload(document_selection),
+        )
+        return answer, answer_trace
+
+    structured_answer, structured_trace = _format_structured_answer(query_intent, evidence)
+    answer = mode_answer or structured_answer or _compress_sentences(evidence)
+    trace_source = mode_trace or structured_trace
+    answer_trace = _base_answer_trace(
+        query=query,
+        query_intent=query_intent,
+        evidence=evidence,
+        template_id=trace_source.get("template_id") if trace_source else None,
+        matched_pattern=trace_source.get("matched_pattern") if trace_source else None,
+        matched_cues=trace_source.get("matched_cues") if trace_source else None,
+        answer_contract=trace_source.get("answer_contract") if trace_source else None,
+        support_trace=trace_source.get("support_trace") if trace_source else None,
+        document_selection=_document_selection_payload(document_selection),
+    )
+    return answer, answer_trace
+
+
+def _filter_answer_chunks(
+    *,
+    plan,
+    query: str,
+    query_intent: str,
+    document_selection: DocumentSelection,
+    top_k_hits: list[ChunkRecord],
+    expanded_hits: list[ChunkRecord],
+) -> list[ChunkRecord]:
+    answer_chunks = expanded_hits
+    selected_doc_ids = set(document_selection.selected_doc_ids)
+    if selected_doc_ids:
+        filtered = [chunk for chunk in expanded_hits if chunk.doc_id in selected_doc_ids]
+        if filtered:
+            answer_chunks = filtered
+
+    query_terms = _query_terms(query)
+    preferred_doc_id = None if query_intent in {"source_listing", "cross_document_compare", "document_routing"} else (
+        plan.preferred_doc_id if plan.query_class != "evidence_lookup" else _preferred_source_doc_id(query)
+    )
+    if preferred_doc_id:
+        filtered = [chunk for chunk in answer_chunks if chunk.doc_id == preferred_doc_id]
+        if filtered:
+            return filtered
+
+    if (
+        top_k_hits
+        and query_terms.intersection(SOURCE_ANCHORED_HINTS)
+        and plan.answer_mode not in {"document_routing", "source_listing", "cross_document_compare"}
+    ):
+        doc_counts: dict[str, int] = {}
+        for chunk in top_k_hits:
+            doc_counts[chunk.doc_id] = doc_counts.get(chunk.doc_id, 0) + 1
+        preferred_doc_id, preferred_count = max(doc_counts.items(), key=lambda item: item[1])
+        if preferred_count >= max(2, (len(top_k_hits) // 2) + 1):
+            filtered = [chunk for chunk in expanded_hits if chunk.doc_id == preferred_doc_id]
+            if filtered:
+                return filtered
+    return answer_chunks
 
 
 def _format_structured_answer(
@@ -2742,7 +3027,51 @@ def _format_structured_answer(
     profile = get_structured_intent_profile(query_intent)
     template_id = profile.template_id if profile else None
     pattern_id = profile.pattern_id if profile else None
+    return (
+        _structured_checklist_answer(query_intent, text, template_id, pattern_id)
+        or _structured_legend_answer(query_intent, text, template_id, pattern_id)
+        or _structured_follow_up_answer(query_intent, text, template_id, pattern_id)
+        or _structured_lookup_answer(query_intent, text, template_id, pattern_id)
+        or (None, None)
+    )
 
+
+def _structured_trace_payload(
+    *,
+    template_id: str | None,
+    pattern_id: str | None,
+    matched_cues: list[str],
+) -> dict[str, object]:
+    return {
+        "template_id": template_id,
+        "matched_pattern": pattern_id,
+        "matched_cues": matched_cues,
+    }
+
+
+def _structured_answer_result(
+    *,
+    answer: str,
+    template_id: str | None,
+    pattern_id: str | None,
+    matched_cues: list[str],
+) -> tuple[str, dict[str, object]]:
+    return (
+        answer,
+        _structured_trace_payload(
+            template_id=template_id,
+            pattern_id=pattern_id,
+            matched_cues=matched_cues,
+        ),
+    )
+
+
+def _structured_checklist_answer(
+    query_intent: str,
+    text: str,
+    template_id: str | None,
+    pattern_id: str | None,
+) -> tuple[str, dict[str, object]] | None:
     if query_intent == "opioid_pre_therapy_checklist":
         checklist_fields: list[str] = []
         if "non-pharmacological therapy" in text:
@@ -2756,150 +3085,156 @@ def _format_structured_answer(
         if "urine drug screening" in text:
             checklist_fields.append("urine drug screening completed (as needed)")
         if checklist_fields:
-            return (
-                "Appendix A checklist recommends confirming: " + "; ".join(checklist_fields) + ".",
-                {
-                    "template_id": template_id,
-                    "matched_pattern": pattern_id,
-                    "matched_cues": checklist_fields,
-                },
+            return _structured_answer_result(
+                answer="Appendix A checklist recommends confirming: " + "; ".join(checklist_fields) + ".",
+                template_id=template_id,
+                pattern_id=pattern_id,
+                matched_cues=checklist_fields,
             )
-        return None, None
+        return None
 
+    if query_intent == "appendix_risk_list" and "possible risks and side effects from steroid injections" in text:
+        return _structured_answer_result(
+            answer=(
+                "The checklist lists steroid-injection risks including allergic reaction, "
+                "infections, tendon rupture/weak tissue, anaphylaxis, and post injection flare up of pain."
+            ),
+            template_id=template_id,
+            pattern_id=pattern_id,
+            matched_cues=[
+                "allergic reaction",
+                "infections",
+                "tendon rupture/weak tissue",
+                "anaphylaxis",
+                "post injection flare up of pain",
+            ],
+        )
+    return None
+
+
+def _structured_legend_answer(
+    query_intent: str,
+    text: str,
+    template_id: str | None,
+    pattern_id: str | None,
+) -> tuple[str, dict[str, object]] | None:
     if query_intent == "opioid_adverse_effect_scale":
-        has_none = "0 = none" in text
-        has_limits = "1 = limits adls" in text
-        has_prevents = "2 = prevents adls" in text
-        if has_none and has_limits and has_prevents:
-            return (
-                "Appendix B adverse-effect scale: 0 = none, 1 = limits ADLs, "
-                "2 = prevents ADLs.",
-                {
-                    "template_id": template_id,
-                    "matched_pattern": pattern_id,
-                    "matched_cues": ["0 = none", "1 = limits ADLs", "2 = prevents ADLs"],
-                },
+        if all(cue in text for cue in ("0 = none", "1 = limits adls", "2 = prevents adls")):
+            return _structured_answer_result(
+                answer="Appendix B adverse-effect scale: 0 = none, 1 = limits ADLs, 2 = prevents ADLs.",
+                template_id=template_id,
+                pattern_id=pattern_id,
+                matched_cues=["0 = none", "1 = limits ADLs", "2 = prevents ADLs"],
             )
-        return None, None
-    if query_intent == "opioid_med_legend":
-        if "morphine equivalent dose" in text:
-            return (
-                "In Appendix B, MED stands for morphine equivalent dose.",
-                {
-                    "template_id": template_id,
-                    "matched_pattern": pattern_id,
-                    "matched_cues": ["MED", "morphine equivalent dose"],
-                },
-            )
-        return None, None
+        return None
+    if query_intent == "opioid_med_legend" and "morphine equivalent dose" in text:
+        return _structured_answer_result(
+            answer="In Appendix B, MED stands for morphine equivalent dose.",
+            template_id=template_id,
+            pattern_id=pattern_id,
+            matched_cues=["MED", "morphine equivalent dose"],
+        )
+    return None
 
+
+def _structured_follow_up_answer(
+    query_intent: str,
+    text: str,
+    template_id: str | None,
+    pattern_id: str | None,
+) -> tuple[str, dict[str, object]] | None:
     if query_intent == "opioid_switch_follow_up":
         has_three_day = "3-day follow-up" in text
         has_2_4_weeks = "2-4 weeks" in text or "2–4 weeks" in text
         has_withdrawal = "withdrawal symptoms" in text
-        if has_three_day and has_2_4_weeks:
-            if has_withdrawal:
-                return (
+        if has_three_day and has_2_4_weeks and has_withdrawal:
+            return _structured_answer_result(
+                answer=(
                     "Appendix C suggests a 3-day follow-up after opioid switching to assess "
-                    "withdrawal symptoms and pain, then follow-up every 2-4 weeks.",
-                    {
-                        "template_id": template_id,
-                        "matched_pattern": pattern_id,
-                        "matched_cues": [
-                            "3-day follow-up",
-                            "withdrawal symptoms and pain",
-                            "follow-up every 2-4 weeks",
-                        ],
-                    },
-                )
-            return (
-                "Appendix C suggests a 3-day follow-up after opioid switching, "
-                "then follow-up every 2-4 weeks.",
-                {
-                    "template_id": template_id,
-                    "matched_pattern": pattern_id,
-                    "matched_cues": ["3-day follow-up", "follow-up every 2-4 weeks"],
-                },
+                    "withdrawal symptoms and pain, then follow-up every 2-4 weeks."
+                ),
+                template_id=template_id,
+                pattern_id=pattern_id,
+                matched_cues=[
+                    "3-day follow-up",
+                    "withdrawal symptoms and pain",
+                    "follow-up every 2-4 weeks",
+                ],
+            )
+        if has_three_day and has_2_4_weeks:
+            return _structured_answer_result(
+                answer=(
+                    "Appendix C suggests a 3-day follow-up after opioid switching, "
+                    "then follow-up every 2-4 weeks."
+                ),
+                template_id=template_id,
+                pattern_id=pattern_id,
+                matched_cues=["3-day follow-up", "follow-up every 2-4 weeks"],
             )
         if has_three_day:
-            return (
-                "Appendix C suggests a 3-day follow-up after opioid switching.",
-                {
-                    "template_id": template_id,
-                    "matched_pattern": pattern_id,
-                    "matched_cues": ["3-day follow-up"],
-                },
+            return _structured_answer_result(
+                answer="Appendix C suggests a 3-day follow-up after opioid switching.",
+                template_id=template_id,
+                pattern_id=pattern_id,
+                matched_cues=["3-day follow-up"],
             )
-        return None, None
+        return None
 
     if query_intent == "questionnaire_follow_up_table":
         if "sensitivity" in text and "professional: nurse" in text:
-            return (
-                "In Table I, the sensitivity row is assigned to a nurse and includes "
-                "a disease-focused interview among the listed actions.",
-                {
-                    "template_id": template_id,
-                    "matched_pattern": pattern_id,
-                    "matched_cues": ["sensitivity", "professional: nurse", "disease-focused interview"],
-                },
+            return _structured_answer_result(
+                answer=(
+                    "In Table I, the sensitivity row is assigned to a nurse and includes "
+                    "a disease-focused interview among the listed actions."
+                ),
+                template_id=template_id,
+                pattern_id=pattern_id,
+                matched_cues=["sensitivity", "professional: nurse", "disease-focused interview"],
             )
         if "uncomfortable" in text and "professional: nurse" in text:
-            return (
-                "In Table I, the uncomfortable row is assigned to a nurse "
-                "(with interview actions listed for that row).",
-                {
-                    "template_id": template_id,
-                    "matched_pattern": pattern_id,
-                    "matched_cues": ["uncomfortable", "professional: nurse"],
-                },
+            return _structured_answer_result(
+                answer=(
+                    "In Table I, the uncomfortable row is assigned to a nurse "
+                    "(with interview actions listed for that row)."
+                ),
+                template_id=template_id,
+                pattern_id=pattern_id,
+                matched_cues=["uncomfortable", "professional: nurse"],
             )
-        return None, None
-    if query_intent == "appendix_checklist_lookup":
-        if "live vaccine" in text and "within 2 weeks" in text:
-            return (
-                "Yes. The checklist lists live vaccine within 2 weeks as a caution.",
-                {
-                    "template_id": template_id,
-                    "matched_pattern": pattern_id,
-                    "matched_cues": ["live vaccine", "within 2 weeks"],
-                },
-            )
-        if "anticoagulant therapy" in text:
-            cues = ["anticoagulant therapy"]
-            if "warfarin" in text:
-                cues.append("warfarin")
-            if "noacs" in text or "doacs" in text:
-                cues.extend(["NOACs", "DOACs"])
-            return (
-                "Yes. The checklist lists anticoagulant therapy cautions, including warfarin "
-                "and separate NOACs and DOACs guidance.",
-                {
-                    "template_id": template_id,
-                    "matched_pattern": pattern_id,
-                    "matched_cues": cues,
-                },
-            )
-        return None, None
-    if query_intent == "appendix_risk_list":
-        if "possible risks and side effects from steroid injections" in text:
-            return (
-                "The checklist lists steroid-injection risks including allergic reaction, "
-                "infections, tendon rupture/weak tissue, anaphylaxis, and post injection flare up of pain.",
-                {
-                    "template_id": template_id,
-                    "matched_pattern": pattern_id,
-                    "matched_cues": [
-                        "allergic reaction",
-                        "infections",
-                        "tendon rupture/weak tissue",
-                        "anaphylaxis",
-                        "post injection flare up of pain",
-                    ],
-                },
-            )
-        return None, None
+    return None
 
-    return None, None
+
+def _structured_lookup_answer(
+    query_intent: str,
+    text: str,
+    template_id: str | None,
+    pattern_id: str | None,
+) -> tuple[str, dict[str, object]] | None:
+    if query_intent != "appendix_checklist_lookup":
+        return None
+    if "live vaccine" in text and "within 2 weeks" in text:
+        return _structured_answer_result(
+            answer="Yes. The checklist lists live vaccine within 2 weeks as a caution.",
+            template_id=template_id,
+            pattern_id=pattern_id,
+            matched_cues=["live vaccine", "within 2 weeks"],
+        )
+    if "anticoagulant therapy" in text:
+        cues = ["anticoagulant therapy"]
+        if "warfarin" in text:
+            cues.append("warfarin")
+        if "noacs" in text or "doacs" in text:
+            cues.extend(["NOACs", "DOACs"])
+        return _structured_answer_result(
+            answer=(
+                "Yes. The checklist lists anticoagulant therapy cautions, including warfarin "
+                "and separate NOACs and DOACs guidance."
+            ),
+            template_id=template_id,
+            pattern_id=pattern_id,
+            matched_cues=cues,
+        )
+    return None
 
 
 def _should_abstain(query: str, evidence: list[EvidenceSentence]) -> bool:
@@ -3047,29 +3382,14 @@ def answer_from_chunks(query: str, chunks: list[ChunkRecord]) -> GroundedAnswer:
         evidence=evidence,
         chunk_root=Path("."),
     )
-    if _should_abstain(query, evidence) and not mode_answer:
-        answer = NO_GROUNDED_ANSWER
-        answer_trace = _base_answer_trace(
-            query=query,
-            query_intent=query_intent,
-            evidence=evidence,
-            document_selection=_document_selection_payload(document_selection),
-        )
-    else:
-        structured_answer, structured_trace = _format_structured_answer(query_intent, evidence)
-        answer = mode_answer or structured_answer or _compress_sentences(evidence)
-        trace_source = mode_trace or structured_trace
-        answer_trace = _base_answer_trace(
-            query=query,
-            query_intent=query_intent,
-            evidence=evidence,
-            template_id=trace_source.get("template_id") if trace_source else None,
-            matched_pattern=trace_source.get("matched_pattern") if trace_source else None,
-            matched_cues=trace_source.get("matched_cues") if trace_source else None,
-            answer_contract=trace_source.get("answer_contract") if trace_source else None,
-            support_trace=trace_source.get("support_trace") if trace_source else None,
-            document_selection=_document_selection_payload(document_selection),
-        )
+    answer, answer_trace = _finalize_answer_result(
+        query=query,
+        query_intent=query_intent,
+        evidence=evidence,
+        document_selection=document_selection,
+        mode_answer=mode_answer,
+        mode_trace=mode_trace,
+    )
     return GroundedAnswer(
         query=query,
         answer=answer,
@@ -3105,32 +3425,14 @@ def answer_query_with_retrieval(
         top_k_hits=top_k_hits,
         chunk_root=chunk_root,
     )
-    answer_chunks = expanded_hits
-    candidate_doc_ids = set(document_selection.selected_doc_ids)
-    if candidate_doc_ids:
-        filtered = [chunk for chunk in expanded_hits if chunk.doc_id in candidate_doc_ids]
-        if filtered:
-            answer_chunks = filtered
-    preferred_doc_id = None if query_intent in {"source_listing", "cross_document_compare", "document_routing"} else (
-        plan.preferred_doc_id if plan.query_class != "evidence_lookup" else _preferred_source_doc_id(query)
+    answer_chunks = _filter_answer_chunks(
+        plan=plan,
+        query=query,
+        query_intent=query_intent,
+        document_selection=document_selection,
+        top_k_hits=top_k_hits,
+        expanded_hits=expanded_hits,
     )
-    if preferred_doc_id:
-        filtered = [chunk for chunk in answer_chunks if chunk.doc_id == preferred_doc_id]
-        if filtered:
-            answer_chunks = filtered
-    elif (
-        top_k_hits
-        and query_terms.intersection(SOURCE_ANCHORED_HINTS)
-        and plan.answer_mode not in {"document_routing", "source_listing", "cross_document_compare"}
-    ):
-        doc_counts: dict[str, int] = {}
-        for chunk in top_k_hits:
-            doc_counts[chunk.doc_id] = doc_counts.get(chunk.doc_id, 0) + 1
-        preferred_doc_id, preferred_count = max(doc_counts.items(), key=lambda item: item[1])
-        if preferred_count >= max(2, (len(top_k_hits) // 2) + 1):
-            filtered = [chunk for chunk in expanded_hits if chunk.doc_id == preferred_doc_id]
-            if filtered:
-                answer_chunks = filtered
 
     evidence = select_evidence_sentences(
         query=query,
@@ -3147,29 +3449,14 @@ def answer_query_with_retrieval(
         evidence=evidence,
         chunk_root=chunk_root,
     )
-    if _should_abstain(query, evidence) and not mode_answer:
-        answer = NO_GROUNDED_ANSWER
-        answer_trace = _base_answer_trace(
-            query=query,
-            query_intent=query_intent,
-            evidence=evidence,
-            document_selection=_document_selection_payload(document_selection),
-        )
-    else:
-        structured_answer, structured_trace = _format_structured_answer(query_intent, evidence)
-        answer = mode_answer or structured_answer or _compress_sentences(evidence)
-        trace_source = mode_trace or structured_trace
-        answer_trace = _base_answer_trace(
-            query=query,
-            query_intent=query_intent,
-            evidence=evidence,
-            template_id=trace_source.get("template_id") if trace_source else None,
-            matched_pattern=trace_source.get("matched_pattern") if trace_source else None,
-            matched_cues=trace_source.get("matched_cues") if trace_source else None,
-            answer_contract=trace_source.get("answer_contract") if trace_source else None,
-            support_trace=trace_source.get("support_trace") if trace_source else None,
-            document_selection=_document_selection_payload(document_selection),
-        )
+    answer, answer_trace = _finalize_answer_result(
+        query=query,
+        query_intent=query_intent,
+        evidence=evidence,
+        document_selection=document_selection,
+        mode_answer=mode_answer,
+        mode_trace=mode_trace,
+    )
     return GroundedAnswer(
         query=query,
         answer=answer,

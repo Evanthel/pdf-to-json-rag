@@ -178,6 +178,34 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "cmaj_zinc_prevention",
         "wat_antibiotics_review",
     ],
+    "section_reconstruction_core": [
+        "lbdl_document_overview",
+        "ocha_incident_document_overview",
+        "health_questionnaire_question5_contexts",
+        "pre_injection_checklist_side_effects",
+        "ajmedp_immersion_neck_limit",
+    ],
+    "document_selection_core": [
+        "lbdl_document_routing_backpropagation",
+        "source_listing_humanitarian_model_reports",
+        "ambiguous_document_routing_humanitarian_data_risk",
+        "model_report_niger_justification",
+        "compare_niger_chad_model_reports",
+    ],
+    "document_maintenance_core": [
+        "lbdl_document_overview",
+        "lbdl_document_routing_backpropagation",
+        "source_listing_humanitarian_model_reports",
+        "model_report_niger_justification",
+        "compare_niger_chad_model_reports",
+    ],
+    "structured_form_maintenance_core": [
+        "health_questionnaire_table1_sensitivity",
+        "pre_injection_checklist_live_vaccine",
+        "opioid_manager_appendix_a_optimized",
+        "opioid_manager_appendix_b_adverse_scale",
+        "opioid_manager_appendix_c_follow_up_timing",
+    ],
 }
 SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
     "checklist_fields": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
@@ -786,6 +814,8 @@ def _chunk_snapshot(chunk: ChunkRecord) -> dict[str, Any]:
         "page_start": chunk.page_start,
         "page_end": chunk.page_end,
         "section_title": chunk.section_title,
+        "section_path": chunk.section_path,
+        "section_kind": chunk.section_kind,
         "chunk_type": chunk.chunk_type,
         "section_content_hints": chunk.section_content_hints,
         "extraction_method": chunk.extraction_method,

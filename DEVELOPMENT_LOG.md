@@ -8,7 +8,7 @@ Internal development iterations in this file use `v1.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v0.3.9`
+Current implementation level: `v0.4.9`
 Current public version: `0.1.0-beta`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
@@ -25,20 +25,23 @@ Repo-local regression shards currently passing:
 - `answer_modes_core`
 - `document_pipeline_core`
 - `structure_chunking_core`
+- `section_reconstruction_core`
+- `document_selection_core`
+- `document_maintenance_core`
 - `evidence_anchor_core`
 - `document_family_core`
 - `document_facets_core`
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v0.3.9`:
+Broad benchmark note after `v0.4.9`:
 
 - the targeted maintainer shard set is green again
 - the new document-level simplification shard is green
 - current broad benchmark scope:
   - `Cases`: `67`
   - `Indexed sample documents`: `19`
-- latest full rerun on the current simplified `v0.3.9` baseline:
+- latest full rerun on the current structure-aware `v0.4.6` baseline:
   - `precision@5`: `0.5309`
   - `recall@5`: `1.0`
   - `MRR`: `1.0`
@@ -49,9 +52,10 @@ Broad benchmark note after `v0.3.9`:
   - `sampled_case_count`: `20`
   - `avg_supported_sentence_ratio`: `1.0`
   - `failing_case_count`: `0`
-- `release-check` now includes `document_pipeline_core`, `structure_chunking_core`, and `evidence_anchor_core` in the maintainer regression gate.
+- `release-check` now includes `document_pipeline_core`, `structure_chunking_core`, `section_reconstruction_core`, `document_selection_core`, `document_maintenance_core`, and `evidence_anchor_core` in the maintainer regression gate.
 - `release-check` now recommends the current public beta tag: `v0.1.0-beta`.
-- the current decision is to keep learned reranking deferred; the simplified baseline and the explicit `document_selection` contract are green enough that a heavier learned layer is not justified yet.
+- the current decision is to keep learned reranking deferred; the stronger structure-aware baseline and the explicit `document_selection` contract are green enough that a heavier learned layer is not justified yet.
+- the new maintenance direction is preserving document-root section context and shrinking the structured-form / document-level branching surface rather than adding heavier retrieval machinery.
 
 ## Delivered Architecture
 
@@ -197,6 +201,13 @@ Representative validation that has already been completed:
 - Made the public quickstart self-contained with `create-demo-pdf`, `doctor`, `package-check`, and `release-check`.
 - Added packaged-install verification through a temporary wheel-build and clean install path.
 - Added public-safe pre-release artifacts and aligned the repo around a first `v0.1.0-beta` release candidate.
+
+### v0.4.7-v0.4.9
+
+- Preserved document-root `section_path` context for inline headings, review-section splits, and other synthetic section boundaries created during chunking.
+- Added richer synthetic-section hints so checklist/questionnaire-like inline sections keep more useful structure metadata instead of dropping back to flat report sections.
+- Simplified structured-form answer rendering into shared helper families for checklist, legend, follow-up, and lookup patterns.
+- Added `structured_form_maintenance_core` to the maintainer regression gate and re-validated the full structure-aware benchmark baseline after the cleanup.
 
 ### v0.1.1-v0.1.2
 
@@ -392,6 +403,87 @@ Representative validation that has already been completed:
   still pass their retrieval and keyword checks under the new handoff contract.
 - Maintainer note:
   - after editing `src/`, run broad benchmark commands through `PYTHONPATH=src python -m pdf_to_json_rag ...` or reinstall the package first, otherwise the console script may still point at an older installed build.
+
+### v0.4.0-v0.4.3
+
+- Strengthened extraction-time section reconstruction so saved section records now carry:
+  - `parent_section_id`
+  - `section_path`
+  - `section_kind`
+- Tightened section detection for numbered, question-like, checklist-style, appendix-like, and table-oriented headings.
+- Pushed the richer structure layer through chunking, indexing, retrieval, and verbose answer traces:
+  - chunks now carry `section_parent_id`
+  - `section_path`
+  - `section_kind`
+  - more explicit `checklist` chunk typing for structure-sensitive sections
+- Improved structure-aware chunk boundaries for questionnaire-style, checklist-like, and section-transition-heavy content.
+- Extended the document-level selection contract with a compact shortlist breakdown and richer support-trace structure fields such as:
+  - `section_paths`
+  - `section_kinds`
+- Added two new maintainer regression shards:
+  - `section_reconstruction_core`
+  - `document_selection_core`
+- Revalidated:
+  - `python -m unittest tests.test_cli_public_surface`
+  - `evaluate-regression --shard section_reconstruction_core --top-k 5 --json`
+  - `evaluate-regression --shard document_selection_core --top-k 5 --json`
+  - `release-check --json`
+  - full `evaluate-mvp --top-k 5 --json`
+- End state:
+  - public release gates: green
+  - maintainer shard set: green
+  - full 67-case benchmark: green
+  - sampled faithfulness audit: green
+  - learned reranking remains deferred because the stronger structure-aware baseline is still green without it
+
+### v0.4.4+
+
+- Reduced document-level maintenance cost in `answering.py` by centralizing:
+  - candidate-doc resolution
+  - ranked-doc selection
+  - selected-doc strategy selection
+  - final answer assembly for retrieval and non-retrieval paths
+- Added a shared answer-chunk filtering helper so retrieval-time document locking and source-anchored filtering no longer live inline in one long answer path.
+- Kept the user-facing document-level contract unchanged while making the internal selection/assembly path shorter and easier to inspect.
+- Added `document_maintenance_core` as a compact regression shard covering:
+  - overview
+  - routing
+  - source listing
+  - source justification
+  - cross-document comparison
+- Revalidated:
+  - `python -m unittest tests.test_cli_public_surface`
+  - `evaluate-regression --shard document_maintenance_core --top-k 5 --json`
+  - `release-check --json`
+  - full `evaluate-mvp --top-k 5 --json`
+- End state:
+  - public release gates: green
+  - maintainer shard set: green
+  - full 67-case benchmark: green
+  - sampled faithfulness audit: green
+  - learned reranking remains deferred because the lower-maintenance heuristic baseline is still sufficient
+
+### v0.4.6
+
+- Split the remaining large document-level renderer into smaller shared mode-specific helpers for:
+  - overview
+  - routing
+  - source justification
+  - source listing
+  - cross-document comparison
+- Added shared trace/contract helpers so answer-contract construction and comparison support items no longer repeat across multiple answer modes.
+- Kept the public answer contract unchanged while making the internals more modular and easier to extend.
+- Revalidated:
+  - `python -m unittest tests.test_cli_public_surface`
+  - `evaluate-regression --shard document_maintenance_core --top-k 5 --json`
+  - `release-check --json`
+  - full `evaluate-mvp --top-k 5 --json`
+- End state:
+  - public release gates: green
+  - maintainer shard set: green
+  - full 67-case benchmark: green
+  - sampled faithfulness audit: green
+  - learned reranking remains deferred because the simpler mode-split baseline is still sufficient
 
 ## Deferred Features
 

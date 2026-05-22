@@ -57,6 +57,10 @@ If you want the richer structure/debug payload, add `--verbose` to `plan-query`,
 
 The default answer trace now includes a compact `document_selection` block for document-level modes so you can see which documents were considered, ranked, and finally selected without needing the full verbose payload.
 
+With `--verbose`, the same document-level commands also expose richer structure fields such as section paths, section kinds, and shortlist breakdowns.
+
+Structured-form and checklist-style answers also use the same compact default output; use `--verbose` when you want the richer support/debug fields from the current structure-aware baseline.
+
 ## Manual step-by-step path
 
 ```bash

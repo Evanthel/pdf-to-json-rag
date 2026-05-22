@@ -17,6 +17,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from pdf_to_json_rag import cli as cli_module
+from pdf_to_json_rag.chunking import chunk_document
+from pdf_to_json_rag.extraction import ExtractedBlock
+from pdf_to_json_rag.schemas import DocumentRecord
 
 
 class CliPublicSurfaceTests(unittest.TestCase):
@@ -164,6 +167,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
             str(index_dir),
             "--format",
             "json",
+            "--verbose",
         )
         answer_payload = json.loads(answer.stdout)
         self.assertTrue(answer_payload["ok"])
@@ -180,9 +184,15 @@ class CliPublicSurfaceTests(unittest.TestCase):
             answer_payload["result"]["answer_trace"]["document_selection"]["strategy"],
             "single_doc_overview",
         )
+        self.assertIn(
+            "shortlist_breakdown",
+            answer_payload["result"]["answer_trace"]["document_selection"],
+        )
         support_trace = answer_payload["result"]["answer_trace"]["support_trace"]
         self.assertGreaterEqual(len(support_trace), 1)
         self.assertTrue(support_trace[0]["section_summaries"])
+        self.assertTrue(support_trace[0]["section_paths"])
+        self.assertTrue(answer_payload["result"]["top_k_hits"][0]["section_path"])
 
     def test_error_json_for_missing_index(self) -> None:
         self._run("init", "--json")
@@ -212,6 +222,37 @@ class CliPublicSurfaceTests(unittest.TestCase):
             payload = cli_module._load_example_json("public_demo_queries.json")
             self.assertIsInstance(payload, list)
             self.assertGreaterEqual(len(payload), 1)
+
+    def test_inline_section_chunking_preserves_document_root_context(self) -> None:
+        document = DocumentRecord(
+            doc_id="demo-inline",
+            source_pdf="demo-inline.pdf",
+            page_count=1,
+            title="Demo Safety Guide",
+            detected_language="en",
+        )
+        blocks = [
+            ExtractedBlock(
+                page_num=0,
+                text="Background This guide explains field safety procedures.",
+                bbox=None,
+                reading_order_index=0,
+                block_kind="text",
+            ),
+            ExtractedBlock(
+                page_num=0,
+                text="CHECKLIST Confirm PPE and radio contact before deployment.",
+                bbox=None,
+                reading_order_index=1,
+                block_kind="text",
+                structural_flags=["structured_signal"],
+            ),
+        ]
+        chunks = chunk_document(document, blocks, target_chars=80, min_chunk_chars=40)
+        checklist_chunk = next(chunk for chunk in chunks if chunk.section_title == "CHECKLIST")
+        self.assertEqual(checklist_chunk.section_path, ["Demo Safety Guide", "CHECKLIST"])
+        self.assertEqual(checklist_chunk.section_kind, "checklist_section")
+        self.assertIn("checklist_like", checklist_chunk.section_content_hints)
 
 
 if __name__ == "__main__":

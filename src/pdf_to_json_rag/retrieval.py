@@ -1664,6 +1664,7 @@ def retrieve_top_k(
             source_block_kinds = _metadata_list(metadata, "source_block_kinds")
             section_coverage_terms = _metadata_list(metadata, "section_coverage_terms")
             section_content_hints = _metadata_list(metadata, "section_content_hints")
+            section_path = _metadata_list(metadata, "section_path")
             if not semantic_terms or not content_hints:
                 fallback_terms, fallback_hints, fallback_flags = derive_chunk_semantics(
                     text=text,
@@ -1697,6 +1698,9 @@ def retrieve_top_k(
                         if metadata.get("section_level") is not None
                         else None
                     ),
+                    section_parent_id=metadata.get("section_parent_id"),
+                    section_path=section_path,
+                    section_kind=metadata.get("section_kind"),
                     section_summary=metadata.get("section_summary"),
                     section_coverage_terms=section_coverage_terms,
                     section_content_hints=section_content_hints,

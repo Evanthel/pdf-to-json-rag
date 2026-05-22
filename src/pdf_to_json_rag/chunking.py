@@ -572,6 +572,80 @@ def _extract_inline_section_label(text: str) -> str | None:
     return label
 
 
+def _section_path_with_context(
+    *,
+    section_title: str | None,
+    base_path: list[str] | None,
+    document_title: str | None,
+) -> list[str]:
+    if not section_title:
+        return list(base_path or ([document_title] if document_title else []))
+    cleaned_base = [item for item in (base_path or []) if item]
+    if not cleaned_base and document_title:
+        cleaned_base = [document_title]
+    if cleaned_base and _normalize_for_match(cleaned_base[-1]) == _normalize_for_match(section_title):
+        return cleaned_base
+    return [*cleaned_base, section_title]
+
+
+def _inline_section_state(
+    *,
+    section_title: str,
+    segment_text: str,
+    base_path: list[str] | None,
+    document_title: str | None,
+    inherited_kind: str | None,
+    inherited_hints: list[str] | None,
+) -> tuple[list[str], str | None, str | None, list[str], list[str]]:
+    seed_text = _clean_text(segment_text) or section_title
+    coverage_terms, content_hints, _ = derive_chunk_semantics(
+        text=seed_text,
+        section_title=section_title,
+        limit=8,
+    )
+    merged_hints = list(
+        dict.fromkeys(
+            [
+                *[
+                    hint
+                    for hint in (inherited_hints or [])
+                    if hint in {"questionnaire_like", "checklist_like", "table_like", "procedural_like"}
+                ],
+                *content_hints,
+            ]
+        )
+    )
+    title_lower = section_title.lower()
+    if "appendix" in title_lower:
+        section_kind = "appendix"
+    elif "table" in title_lower or "table_like" in merged_hints:
+        section_kind = "table_section"
+    elif "questionnaire_like" in merged_hints:
+        section_kind = "questionnaire_section"
+    elif "checklist_like" in merged_hints or "checklist" in title_lower:
+        section_kind = "checklist_section"
+    elif "procedural_like" in merged_hints:
+        section_kind = "procedural_section"
+    else:
+        section_kind = inherited_kind or "report_section"
+    summary: str | None = None
+    if seed_text and _normalize_for_match(seed_text) != _normalize_for_match(section_title):
+        summary_parts = [part.strip() for part in SENTENCE_SPLIT_RE.split(seed_text) if part.strip()]
+        if summary_parts:
+            summary = " ".join(summary_parts[:2])[:220].strip()
+    return (
+        _section_path_with_context(
+            section_title=section_title,
+            base_path=base_path,
+            document_title=document_title,
+        ),
+        section_kind,
+        summary,
+        coverage_terms[:8],
+        merged_hints,
+    )
+
+
 def _infer_extraction_method(blocks: list[ExtractedBlock]) -> tuple[str, bool]:
     methods = {block.extraction_method for block in blocks}
     if methods == {"ocr"}:
@@ -772,6 +846,9 @@ def _make_chunk_record(
     section_id: str | None,
     section_title: str | None,
     section_level: int | None,
+    section_parent_id: str | None,
+    section_path: list[str] | None,
+    section_kind: str | None,
     section_summary: str | None,
     section_coverage_terms: list[str] | None,
     section_content_hints: list[str] | None,
@@ -806,6 +883,12 @@ def _make_chunk_record(
     block_kinds = sorted({block.block_kind for block in blocks if block.block_kind})
     if "table_like" in block_kinds or "table_like" in content_hints:
         chunk_type = "table"
+    elif (
+        section_kind == "checklist_section"
+        or "checklist_like" in content_hints
+        or "questionnaire_like" in content_hints
+    ):
+        chunk_type = "checklist"
     elif block_kinds == ["heading"]:
         chunk_type = "header"
     else:
@@ -821,6 +904,9 @@ def _make_chunk_record(
         section_id=section_id,
         section_title=resolved_section_title,
         section_level=section_level,
+        section_parent_id=section_parent_id,
+        section_path=list(section_path or ([resolved_section_title] if resolved_section_title else [])),
+        section_kind=section_kind,
         section_summary=section_summary,
         section_coverage_terms=list(section_coverage_terms or []),
         section_content_hints=list(section_content_hints or []),
@@ -877,6 +963,9 @@ def chunk_document(
     current_section_title: str | None = document.title
     current_section_level: int | None = 1 if document.title else None
     current_section_id: str | None = None
+    current_section_parent_id: str | None = None
+    current_section_path: list[str] = [document.title] if document.title else []
+    current_section_kind: str | None = None
     current_section_summary: str | None = None
     current_section_coverage_terms: list[str] = []
     current_section_content_hints: list[str] = []
@@ -897,6 +986,9 @@ def chunk_document(
                 section_id=current_section_id,
                 section_title=current_section_title,
                 section_level=current_section_level,
+                section_parent_id=current_section_parent_id,
+                section_path=current_section_path,
+                section_kind=current_section_kind,
                 section_summary=current_section_summary,
                 section_coverage_terms=current_section_coverage_terms,
                 section_content_hints=current_section_content_hints,
@@ -915,6 +1007,9 @@ def chunk_document(
             current_section_id = section.section_id
             current_section_title = section.title
             current_section_level = section.level
+            current_section_parent_id = section.parent_section_id
+            current_section_path = list(section.section_path)
+            current_section_kind = section.section_kind
             current_section_summary = section.summary
             current_section_coverage_terms = list(section.coverage_terms)
             current_section_content_hints = list(section.content_hints)
@@ -951,12 +1046,24 @@ def chunk_document(
             for inline_heading, scoped_segment in review_section_segments:
                 if inline_heading:
                     flush_buffer()
+                    (
+                        current_section_path,
+                        current_section_kind,
+                        current_section_summary,
+                        current_section_coverage_terms,
+                        current_section_content_hints,
+                    ) = _inline_section_state(
+                        section_title=inline_heading,
+                        segment_text=scoped_segment,
+                        base_path=current_section_path,
+                        document_title=document.title,
+                        inherited_kind=current_section_kind,
+                        inherited_hints=current_section_content_hints,
+                    )
                     current_section_id = None
                     current_section_title = inline_heading
                     current_section_level = None
-                    current_section_summary = None
-                    current_section_coverage_terms = []
-                    current_section_content_hints = []
+                    current_section_parent_id = None
                     in_key_points_summary = False
 
                 segment = scoped_segment
@@ -965,23 +1072,47 @@ def chunk_document(
                 inline_section_title = _extract_inline_section_label(segment)
                 if inline_section_title:
                     flush_buffer()
+                    (
+                        current_section_path,
+                        current_section_kind,
+                        current_section_summary,
+                        current_section_coverage_terms,
+                        current_section_content_hints,
+                    ) = _inline_section_state(
+                        section_title=inline_section_title,
+                        segment_text=segment,
+                        base_path=current_section_path,
+                        document_title=document.title,
+                        inherited_kind=current_section_kind,
+                        inherited_hints=current_section_content_hints,
+                    )
                     current_section_id = None
                     current_section_title = inline_section_title
                     current_section_level = None
-                    current_section_summary = None
-                    current_section_coverage_terms = []
-                    current_section_content_hints = []
+                    current_section_parent_id = None
 
                 if block.block_kind == "heading" or _is_probable_header(segment, toc_entries):
                     flush_buffer()
+                    (
+                        current_section_path,
+                        current_section_kind,
+                        current_section_summary,
+                        current_section_coverage_terms,
+                        current_section_content_hints,
+                    ) = _inline_section_state(
+                        section_title=segment,
+                        segment_text=segment,
+                        base_path=current_section_path[:-1] if current_section_title == segment and current_section_path else current_section_path,
+                        document_title=document.title,
+                        inherited_kind=current_section_kind,
+                        inherited_hints=current_section_content_hints,
+                    )
                     current_section_id = None
                     current_section_title = segment
                     current_section_level = (
                         1 if _normalize_for_match(segment) in toc_entries else None
                     )
-                    current_section_summary = None
-                    current_section_coverage_terms = []
-                    current_section_content_hints = []
+                    current_section_parent_id = None
                     in_key_points_summary = False
                     continue
 
@@ -992,6 +1123,13 @@ def chunk_document(
                     and block.block_kind != "table_like"
                     and any(item.block_kind == "table_like" for item in buffer)
                     and buffer_chars >= 120
+                ):
+                    flush_buffer()
+                if (
+                    buffer
+                    and current_section_kind in {"checklist_section", "questionnaire_section"}
+                    and re.match(r"^(?:[-•]|\d+[\).]?)\s+", segment.lstrip())
+                    and buffer_chars >= max(140, min_chunk_chars // 2)
                 ):
                     flush_buffer()
                 if (

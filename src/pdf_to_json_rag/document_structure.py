@@ -18,6 +18,7 @@ HEADING_PREFIX_RE = re.compile(
 )
 NUMBERED_HEADING_RE = re.compile(r"^(?P<number>\d+(?:\.\d+){0,3})(?:[\).:-]|\s)\s*")
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+QUESTION_HEADING_RE = re.compile(r"^(question\s+\d+\b|section\s+\d+\b)", re.IGNORECASE)
 
 
 def _normalize(text: str) -> str:
@@ -39,6 +40,10 @@ def _looks_like_structural_heading(text: str, toc_entries: set[str]) -> bool:
     if normalized.endswith((".", "?", "!")):
         return False
     if normalized.isupper():
+        return True
+    if NUMBERED_HEADING_RE.match(normalized):
+        return True
+    if QUESTION_HEADING_RE.match(normalized):
         return True
     title_case_words = sum(1 for word in words if word[:1].isupper())
     if words and title_case_words / len(words) >= 0.75 and len(normalized) <= 90:
@@ -68,10 +73,40 @@ def _heading_level(text: str, toc_entries: set[str]) -> int | None:
     return None
 
 
+def _section_kind(
+    title: str,
+    body_text: str,
+    content_hints: list[str],
+    blocks: list["ExtractedBlock"],
+) -> str | None:
+    title_lower = _normalize(title).lower()
+    body_lower = body_text.lower()
+    block_kinds = {block.block_kind for block in blocks if block.block_kind}
+    hint_set = set(content_hints)
+
+    if "appendix" in title_lower:
+        return "appendix"
+    if "table" in title_lower or "table_like" in block_kinds:
+        return "table_section"
+    if QUESTION_HEADING_RE.match(title_lower) or "questionnaire_like" in hint_set:
+        return "questionnaire_section"
+    if "checklist" in title_lower or "checklist_like" in hint_set:
+        return "checklist_section"
+    if "procedural_like" in hint_set:
+        return "procedural_section"
+    if "evidence_summary" in hint_set or "comparative_evidence" in hint_set:
+        return "summary_section"
+    if "introduction" in title_lower or "background" in title_lower:
+        return "intro_section"
+    if body_lower.count(":") >= 3 and "table_like" not in block_kinds:
+        return "checklist_section"
+    return "report_section"
+
+
 def _section_summary_and_terms(
     blocks: list["ExtractedBlock"],
     title: str,
-) -> tuple[str | None, list[str], list[str]]:
+) -> tuple[str | None, list[str], list[str], str | None]:
     body_parts = [
         _normalize(block.text)
         for block in blocks
@@ -79,7 +114,7 @@ def _section_summary_and_terms(
     ]
     body_text = " ".join(body_parts).strip()
     if not body_text:
-        return None, [], []
+        return None, [], [], None
     sentences = [part.strip() for part in SENTENCE_SPLIT_RE.split(body_text) if part.strip()]
     summary_sentences: list[str] = []
     summary_len = 0
@@ -96,7 +131,12 @@ def _section_summary_and_terms(
         section_title=title,
         limit=8,
     )
-    return summary, coverage_terms[:8], content_hints
+    return (
+        summary,
+        coverage_terms[:8],
+        content_hints,
+        _section_kind(title, body_text, content_hints, blocks),
+    )
 
 
 def build_document_sections(
@@ -136,15 +176,29 @@ def build_document_sections(
     sections: list[DocumentSectionRecord] = []
     for section_number, (section_title, level, start_index, end_index) in enumerate(section_ranges, start=1):
         section_blocks = ordered_blocks[start_index : end_index + 1]
-        summary, coverage_terms, content_hints = _section_summary_and_terms(
+        summary, coverage_terms, content_hints, section_kind = _section_summary_and_terms(
             section_blocks,
             section_title,
         )
+        parent_section_id: str | None = None
+        section_path: list[str] = [section_title]
+        if level is not None:
+            for previous_section in reversed(sections):
+                previous_level = previous_section.level or 1
+                if previous_level < level:
+                    parent_section_id = previous_section.section_id
+                    section_path = [*previous_section.section_path, section_title]
+                    break
+        if not sections and title and section_title != title and section_path == [section_title]:
+            section_path = [title, section_title]
         sections.append(
             DocumentSectionRecord(
                 section_id=f"{doc_id}-section-{section_number:03d}",
                 title=section_title,
                 level=level,
+                parent_section_id=parent_section_id,
+                section_path=section_path,
+                section_kind=section_kind,
                 page_start=section_blocks[0].page_num + 1,
                 page_end=section_blocks[-1].page_num + 1,
                 reading_order_start=section_blocks[0].reading_order_index,

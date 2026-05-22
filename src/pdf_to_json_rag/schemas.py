@@ -5,7 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, Field, ConfigDict
 
 
-ChunkType = Literal["text", "table", "figure", "header", "footer", "unknown"]
+ChunkType = Literal["text", "table", "checklist", "figure", "header", "footer", "unknown"]
 ExtractionMethod = Literal["native", "ocr", "mixed"]
 
 
@@ -15,6 +15,9 @@ class DocumentSectionRecord(BaseModel):
     section_id: str
     title: str
     level: int | None = None
+    parent_section_id: str | None = None
+    section_path: list[str] = Field(default_factory=list)
+    section_kind: str | None = None
     page_start: int
     page_end: int
     reading_order_start: int
@@ -37,6 +40,9 @@ class ChunkRecord(BaseModel):
     section_id: str | None = None
     section_title: str | None = None
     section_level: int | None = None
+    section_parent_id: str | None = None
+    section_path: list[str] = Field(default_factory=list)
+    section_kind: str | None = None
     section_summary: str | None = None
     section_coverage_terms: list[str] = Field(default_factory=list)
     section_content_hints: list[str] = Field(default_factory=list)
