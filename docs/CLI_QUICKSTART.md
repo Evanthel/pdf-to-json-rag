@@ -61,6 +61,10 @@ With `--verbose`, the same document-level commands also expose richer structure 
 
 Structured-form and checklist-style answers also use the same compact default output; use `--verbose` when you want the richer support/debug fields from the current structure-aware baseline.
 
+`inspect-document` and verbose answer traces now also expose simple `structure_confidence` / `layout_confidence` fields so you can see when the pipeline is less certain about an unfamiliar PDF layout.
+
+The current baseline also handles table-like and form-heavy PDFs more conservatively than earlier versions, but unfamiliar layouts are still heuristic-first rather than fully layout-aware.
+
 ## Manual step-by-step path
 
 ```bash
@@ -80,6 +84,14 @@ pdf-to-json-rag release-check --json
 ```
 
 Use these from a source checkout when you want to validate wheel packaging, public smoke behavior, and the current release gates. End users only need `doctor`, `smoke-check`, and `run-workflow`.
+
+For unfamiliar local PDFs that you do not want to add to the benchmark, use:
+
+```bash
+pdf-to-json-rag layout-sanity-check --pdfs /path/a.pdf,/path/b.pdf --json
+```
+
+That command now returns compact overview, type, purpose, and audience answers for each PDF so you can see whether an unfamiliar document is only processable or also semantically understood.
 
 If you changed code under `src/` and have not reinstalled the package yet, run maintainer checks from the source checkout like this:
 

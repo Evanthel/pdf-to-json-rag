@@ -13,7 +13,7 @@ from PIL import Image
 import pytesseract
 
 from .content_metadata import classify_block_metadata
-from .document_structure import build_document_sections
+from .document_structure import build_document_structure_analysis
 from .document_semantics import interpret_document_semantics
 from .schemas import DocumentRecord
 
@@ -370,12 +370,13 @@ def build_document_record_from_native_extraction(
         toc=extraction.toc,
         blocks=extraction.blocks,
     )
-    sections = build_document_sections(
+    structure_analysis = build_document_structure_analysis(
         doc_id=extraction.doc_id,
         title=extraction.title,
         toc=extraction.toc,
         blocks=extraction.blocks,
     )
+    sections = structure_analysis.sections
     for section in sections:
         if section.title and section.title not in summary_cues and len(summary_cues) < 12:
             summary_cues.append(section.title)
@@ -412,6 +413,8 @@ def build_document_record_from_native_extraction(
         audience=semantics.audience,
         evidence_style=semantics.evidence_style,
         structure_style=semantics.structure_style,
+        structure_confidence=structure_analysis.structure_confidence,
+        layout_confidence=structure_analysis.layout_confidence,
         facet_terms=list(semantics.facet_terms),
         extraction_summary={
             "native_blocks": len(extraction.blocks),

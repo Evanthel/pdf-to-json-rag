@@ -25,6 +25,12 @@ def classify_document_family(
         return "humanitarian_model_report"
     if dt == "technical_manual" or ss == "manual_reference":
         return "technical_manual"
+    if dt in {"financial_statement", "assessment_form", "administrative_form"} or dp in {
+        "financial_disclosure",
+        "financial_assessment",
+        "administrative_intake",
+    } or ss in {"financial_grid", "administrative_form"}:
+        return "administrative_financial_form"
     if ev == "structured_form" or ss in {"questionnaire_grid", "checklist_grid"}:
         return "structured_form"
     if dt == "review_article" or ev == "evidence_review":

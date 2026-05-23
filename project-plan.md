@@ -52,7 +52,7 @@ The first working version stayed local-first and deliberately narrow:
 ## 5. Current Baseline
 
 Current public version: `0.1.0-beta`
-Current internal implementation level: `v0.4.9`
+Current internal implementation level: `v0.6.4`
 
 What the repo now has:
 
@@ -60,15 +60,17 @@ What the repo now has:
 - structure-aware chunking and chunk metadata
 - feature-based query planning
 - explicit `document_selection` traces
+- distinct document-level type / purpose / audience / overview answers
 - compact default JSON answers with richer debug output behind `--verbose`
 - public install/release checks through `doctor`, `smoke-check`, `package-check`, and `release-check`
+- local semantic sanity checks for unfamiliar PDFs through `layout-sanity-check`
 
 Current validation snapshot:
 
 - public release gates: green
 - maintainer regression gates: green
-- full 67-case benchmark: green
-  - `precision@5 = 0.5309`
+- full 70-case benchmark: green
+  - `precision@5 = 0.5552`
   - `recall@5 = 1.0`
   - `MRR = 1.0`
   - `avg_keyword_coverage = 1.0`
@@ -99,13 +101,27 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
   - preserved document-root structure context for inline and synthetic section splits
   - simplified structured-form answer rendering into shared helper families
   - added `structured_form_maintenance_core` to the maintainer regression gate
+- `v0.5.0-v0.5.4`
+  - added document and chunk `structure_confidence` / `layout_confidence` metadata
+  - hardened single-document overview fallback on top of the current document-selection contract
+  - added `layout_robustness_core` and `single_doc_random_pdf_core` to the maintainer regression gate
+- `v0.5.5-v0.5.9`
+  - improved table-like and form-heavy chunk splitting on more unfamiliar layouts
+  - added conservative single-document wording when recovered structure is limited
+  - added `table_layout_robustness_core` and `form_layout_robustness_core` to the maintainer regression gate
+  - added a local-only `layout-sanity-check` path for unfamiliar external PDFs without hardcoding private files into the benchmark
+- `v0.6.0-v0.6.4`
+  - improved document typing and purpose inference for unfamiliar financial/admin forms
+  - split document-level answers into clearer type, purpose, audience, and overview render paths
+  - added `semantic_document_understanding_core` to the maintainer regression gate
+  - extended local `layout-sanity-check` to report overview, type, purpose, and audience answers for unfamiliar PDFs
 
 ### 6.2. Next Steps
 
-1. Continue tightening section and chunk behavior on unfamiliar layouts before considering heavier retrieval changes.
-2. Trim the remaining special cases in structured-form and document-level rendering on top of the structure-aware baseline.
-3. Keep evaluation focused on architecture gates rather than benchmark growth for its own sake.
-4. Revisit a learned reranker only if the current heuristic baseline stops passing release gates and benchmark-critical shards.
+1. Keep improving unknown-document semantic understanding before considering heavier retrieval changes.
+2. Broaden unfamiliar-layout sanity coverage with more external table-heavy and form-heavy PDFs.
+3. Keep evaluation focused on architecture gates and unknown-document sanity checks rather than benchmark growth for its own sake.
+4. Revisit a learned reranker only if the current heuristic baseline stops passing release gates and unknown-document sanity gates.
 
 ## 7. Explicitly Deferred
 

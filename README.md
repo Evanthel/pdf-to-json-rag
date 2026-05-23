@@ -23,7 +23,7 @@ Current public version: `0.1.0-beta`
 
 Internal development iterations in this repo use `v1.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
 
-Current internal milestone: `v0.4.9`
+Current internal milestone: `v0.6.4`
 
 The current baseline includes:
 
@@ -33,6 +33,13 @@ The current baseline includes:
 - shared document-level mode renderers and shared answer finalization helpers
 - preserved document-root section context for inline and synthetic section splits
 - shared structured-form answer helpers and a dedicated structured-form maintenance gate
+- document and chunk `structure_confidence` / `layout_confidence` metadata
+- sanity gates for layout robustness and single-document random-PDF behavior
+- stronger table-like and form-heavy chunk splitting on unfamiliar layouts
+- dedicated table/form layout sanity gates in the maintainer release path
+- richer document typing and purpose inference for unfamiliar financial/admin forms
+- distinct document-level answers for type, purpose, audience, and overview queries
+- a semantic document-understanding gate for source-specific type/purpose/audience questions
 - compact default JSON output with richer debug state behind `--verbose`
 - deterministic local embeddings by default, with optional `sentence-transformers`
 
@@ -40,8 +47,8 @@ Validation state:
 
 - public install/release path: green
 - maintainer release gates: green
-- full 67-case benchmark: green
-  - `precision@5 = 0.5309`
+- full 70-case benchmark: green
+  - `precision@5 = 0.5552`
   - `recall@5 = 1.0`
   - `MRR = 1.0`
   - `avg_keyword_coverage = 1.0`
@@ -53,7 +60,7 @@ Validation state:
 
 Current engineering direction:
 
-- keep improving document-processing structure signals and lower the maintenance cost of document-level and structured-form paths
+- keep improving document-processing robustness on unfamiliar layouts and single-document PDFs
 - keep learned reranking deferred until the heuristic baseline stops being sufficient
 
 ## Capabilities
@@ -79,6 +86,7 @@ Current engineering direction:
 - Expose maintainer-facing release gates through:
   - `package-check`
   - `release-check`
+  - `layout-sanity-check`
 
 ## Workflow
 
@@ -105,6 +113,8 @@ pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What do
 
 Use a fresh `PDF_TO_JSON_RAG_DATA_DIR` for quickstart and release-check runs so old local artifacts do not make `doctor` or `release-check` look greener than the current session really is.
 
+The current baseline is still heuristic-first. It now behaves more sanely on unfamiliar financial/admin forms and can separate type, purpose, audience, and overview answers, but unfamiliar layouts can still degrade section recovery and answer confidence.
+
 Optional stronger local embeddings:
 
 ```bash
@@ -123,6 +133,14 @@ Maintainer release validation:
 pdf-to-json-rag package-check --json
 pdf-to-json-rag release-check --json
 ```
+
+Local sanity check for unfamiliar PDFs:
+
+```bash
+pdf-to-json-rag layout-sanity-check --pdfs /path/a.pdf,/path/b.pdf --json
+```
+
+That local sanity path now returns compact overview, type, purpose, and audience answers so you can see whether an unfamiliar PDF is only processable or also semantically understood.
 
 When you are validating new local code in a source checkout before reinstalling the package, prefer:
 
@@ -165,15 +183,15 @@ The saved evaluation report includes:
 
 - per-case retrieval, answer-trace, and evidence snapshots
 - slice reporting for document discovery, structure-heavy inputs, and source-anchored cases
-- compact maintainer shards for planning, answer modes, structure, selection, anchors, inventory, and relationship reasoning
-- a sampled faithfulness audit for grounded and document-level answer paths
+- compact maintainer shards for planning, structure, selection, anchors, semantics, and relationship reasoning
+- extra sanity shards for layout, single-document, table-like, and form-heavy behavior, plus a sampled faithfulness audit
 
 Current gate status:
 
 - public release gates are green
 - the maintainer shard set used by `release-check` is green
 - `release-check` distinguishes public checks, maintainer checks, and benchmark-only regressions
-- the current focus is preserving the structure-aware, heuristic-first baseline rather than adding a learned reranker
+- the current focus is preserving the structure-aware, heuristic-first baseline and broadening unknown-document semantics rather than adding a learned reranker
 
 ## Limitations
 
@@ -182,7 +200,7 @@ Current gate status:
 - Chunking and document-level reasoning are still heuristic-first rather than learned
 - Retrieval still depends on heuristic scoring, structure cues, and lightweight reranking
 - Stronger local sentence-transformer embeddings are opt-in; the default public path uses deterministic fallback embeddings
-- Document facets, document families, and shortlist decisions are still handcrafted metadata layers
+- Document facets, document families, shortlist decisions, and type/purpose/audience inference are still handcrafted metadata layers
 - Grounded answers are extractive, not LLM-synthesized
 - The benchmark is still hand-built and not broad enough to prove true generalization
 - The scanned and structure-heavy coverage is still modest

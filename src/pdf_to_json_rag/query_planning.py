@@ -14,6 +14,18 @@ from .intent_config import (
 
 
 MULTI_DOC_COMPARE_TERMS = {"compare", "versus", "vs"}
+SOURCE_ENTITY_TERMS = {
+    "book",
+    "document",
+    "file",
+    "form",
+    "guide",
+    "manual",
+    "note",
+    "report",
+    "source",
+    "statement",
+}
 TREATMENT_ENTITY_TERMS = {
     "vitamin",
     "echinacea",
@@ -66,9 +78,40 @@ def has_overview_cue(query_lower: str, query_terms: set[str]) -> bool:
     return (
         ("what does" in query_lower and "cover" in query_lower)
         or ("what is" in query_lower and "about" in query_lower)
-        or ("what kind of" in query_lower and bool({"document", "file", "source"} & query_terms))
-        or ("what type of" in query_lower and bool({"document", "file", "source"} & query_terms))
-        or ("what is the purpose of" in query_lower)
+    )
+
+
+def has_type_cue(query_lower: str, query_terms: set[str], *, has_source_anchor: bool = False) -> bool:
+    return (
+        ("what kind of" in query_lower and bool(SOURCE_ENTITY_TERMS & query_terms))
+        or ("what type of" in query_lower and bool(SOURCE_ENTITY_TERMS & query_terms))
+        or (has_source_anchor and query_lower.startswith("what kind of"))
+        or (has_source_anchor and query_lower.startswith("what type of"))
+    )
+
+
+def has_purpose_cue(query_lower: str, query_terms: set[str], *, has_source_anchor: bool = False) -> bool:
+    return (
+        "what is the purpose of" in query_lower
+        or ("purpose of this" in query_lower and bool(SOURCE_ENTITY_TERMS & query_terms))
+        or ("what is this document for" in query_lower)
+        or ("what is this file for" in query_lower)
+        or (has_source_anchor and query_lower.startswith("what is ") and query_lower.endswith(" for"))
+    )
+
+
+def has_audience_cue(query_lower: str, query_terms: set[str], *, has_source_anchor: bool = False) -> bool:
+    return (
+        "who is this document for" in query_lower
+        or "who is this file for" in query_lower
+        or "who is the audience" in query_lower
+        or ("who is it for" in query_lower and bool(SOURCE_ENTITY_TERMS & query_terms))
+        or ("intended audience" in query_lower)
+        or (
+            query_lower.startswith("who is ")
+            and " for" in query_lower
+            and (has_source_anchor or bool(SOURCE_ENTITY_TERMS & query_terms))
+        )
     )
 
 
@@ -113,8 +156,12 @@ def _build_query_features(
     metadata_matches: list[str],
     shortlist: list[ShortlistCandidate],
 ) -> dict[str, bool]:
+    has_source_anchor = bool(explicit_source_doc_id or metadata_matches)
     return {
         "overview_cue": has_overview_cue(query_lower, query_terms),
+        "type_cue": has_type_cue(query_lower, query_terms, has_source_anchor=has_source_anchor),
+        "purpose_cue": has_purpose_cue(query_lower, query_terms, has_source_anchor=has_source_anchor),
+        "audience_cue": has_audience_cue(query_lower, query_terms, has_source_anchor=has_source_anchor),
         "routing_cue": has_routing_cue(query_lower, query_terms),
         "compare_cue": has_compare_cue(query_lower, query_terms),
         "plural_source_cue": has_plural_source_cue(query_lower, query_terms),
@@ -159,6 +206,18 @@ def _score_answer_modes(
             scores["document_overview"] += 1.0
         if features["explicit_source_anchor"]:
             scores["document_overview"] += 0.5
+    if features["type_cue"]:
+        scores["document_overview"] += 4.5
+        if shortlist_count:
+            scores["document_overview"] += 1.0
+    if features["purpose_cue"]:
+        scores["document_overview"] += 4.5
+        if shortlist_count:
+            scores["document_overview"] += 1.0
+    if features["audience_cue"]:
+        scores["document_overview"] += 4.5
+        if shortlist_count:
+            scores["document_overview"] += 1.0
     if features["routing_cue"]:
         scores["document_routing"] += 4.0
         if shortlist_count:
@@ -201,6 +260,12 @@ def _rationale_for_mode(answer_mode: str, features: dict[str, bool], shortlist: 
     if answer_mode == "document_overview":
         if features["overview_cue"]:
             rationale.append("overview_cue")
+        if features["type_cue"]:
+            rationale.append("type_cue")
+        if features["purpose_cue"]:
+            rationale.append("purpose_cue")
+        if features["audience_cue"]:
+            rationale.append("audience_cue")
         if shortlist:
             rationale.append("shortlist_available")
     elif answer_mode == "document_routing":
@@ -296,7 +361,14 @@ def plan_query(query: str) -> QueryPlan:
 
     if answer_mode == "document_overview":
         query_class = "document_facet"
-        query_intent = "document_overview"
+        if features["type_cue"]:
+            query_intent = "document_type"
+        elif features["purpose_cue"]:
+            query_intent = "document_purpose"
+        elif features["audience_cue"]:
+            query_intent = "document_audience"
+        else:
+            query_intent = "document_overview"
         preferred_doc_id = explicit_source_doc_id or (inventory_doc_ids[0] if inventory_doc_ids else None)
         matched_doc_ids = (preferred_doc_id,) if preferred_doc_id else tuple()
         candidate_doc_ids = matched_doc_ids or inventory_doc_ids[:3]

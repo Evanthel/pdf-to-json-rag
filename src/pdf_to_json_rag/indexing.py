@@ -153,6 +153,8 @@ def _chunk_metadata(chunk: ChunkRecord) -> dict[str, str | int | bool | None]:
         "section_summary": chunk.section_summary,
         "section_coverage_terms": "|".join(chunk.section_coverage_terms) if chunk.section_coverage_terms else None,
         "section_content_hints": "|".join(chunk.section_content_hints) if chunk.section_content_hints else None,
+        "structure_confidence": chunk.structure_confidence,
+        "layout_confidence": chunk.layout_confidence,
         "chunk_type": chunk.chunk_type,
         "reading_order_index": chunk.reading_order_index,
         "preceding_chunk_id": chunk.preceding_chunk_id,

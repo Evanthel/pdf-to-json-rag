@@ -18,6 +18,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from pdf_to_json_rag import cli as cli_module
 from pdf_to_json_rag.chunking import chunk_document
+from pdf_to_json_rag.document_facets import derive_document_facets
 from pdf_to_json_rag.extraction import ExtractedBlock
 from pdf_to_json_rag.schemas import DocumentRecord
 
@@ -145,6 +146,8 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(inspect_payload["result"]["doc_id"], doc_id)
         self.assertEqual(inspect_payload["result"]["document_type"], "guidance_note")
         self.assertGreaterEqual(inspect_payload["result"]["section_count"], 1)
+        self.assertIsNotNone(inspect_payload["result"]["structure_confidence"])
+        self.assertIsNotNone(inspect_payload["result"]["layout_confidence"])
         smoke = self._run(
             "smoke-check",
             "--pdf",
@@ -157,6 +160,8 @@ class CliPublicSurfaceTests(unittest.TestCase):
         smoke_payload = json.loads(smoke.stdout)
         self.assertTrue(smoke_payload["ok"])
         self.assertTrue(smoke_payload["result"]["all_pass"])
+        self.assertIsNotNone(smoke_payload["result"]["document"]["structure_confidence"])
+        self.assertIsNotNone(smoke_payload["result"]["document"]["layout_confidence"])
 
         index_dir = self.data_dir / "index" / "workflow_smoke"
         answer = self._run(
@@ -192,7 +197,40 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertGreaterEqual(len(support_trace), 1)
         self.assertTrue(support_trace[0]["section_summaries"])
         self.assertTrue(support_trace[0]["section_paths"])
+        self.assertIsNotNone(support_trace[0]["structure_confidence"])
+        self.assertIsNotNone(support_trace[0]["layout_confidence"])
         self.assertTrue(answer_payload["result"]["top_k_hits"][0]["section_path"])
+        self.assertIsNotNone(answer_payload["result"]["top_k_hits"][0]["structure_confidence"])
+        self.assertIsNotNone(answer_payload["result"]["top_k_hits"][0]["layout_confidence"])
+
+    def test_plan_query_distinguishes_type_purpose_and_audience(self) -> None:
+        type_payload = json.loads(
+            self._run(
+                "plan-query",
+                "--query",
+                "What kind of document is this?",
+                "--json",
+            ).stdout
+        )
+        purpose_payload = json.loads(
+            self._run(
+                "plan-query",
+                "--query",
+                "What is the purpose of this document?",
+                "--json",
+            ).stdout
+        )
+        audience_payload = json.loads(
+            self._run(
+                "plan-query",
+                "--query",
+                "Who is this document for?",
+                "--json",
+            ).stdout
+        )
+        self.assertEqual(type_payload["result"]["query_intent"], "document_type")
+        self.assertEqual(purpose_payload["result"]["query_intent"], "document_purpose")
+        self.assertEqual(audience_payload["result"]["query_intent"], "document_audience")
 
     def test_error_json_for_missing_index(self) -> None:
         self._run("init", "--json")
@@ -253,6 +291,91 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(checklist_chunk.section_path, ["Demo Safety Guide", "CHECKLIST"])
         self.assertEqual(checklist_chunk.section_kind, "checklist_section")
         self.assertIn("checklist_like", checklist_chunk.section_content_hints)
+        self.assertIsNotNone(checklist_chunk.structure_confidence)
+        self.assertIsNotNone(checklist_chunk.layout_confidence)
+
+    def test_structured_form_segments_split_into_row_like_chunks(self) -> None:
+        document = DocumentRecord(
+            doc_id="demo-form",
+            source_pdf="demo-form.pdf",
+            page_count=1,
+            title="Appendix Example",
+            detected_language="en",
+            structure_confidence=0.7,
+            layout_confidence=0.7,
+        )
+        blocks = [
+            ExtractedBlock(
+                page_num=0,
+                text=(
+                    "Appendix A – Checklist pre-opioid checklist fields: has non-pharmacological therapy been optimized; "
+                    "has non-opioid pharmacotherapy been optimized; informed consent obtained; opioid safety explained; "
+                    "urine drug screening completed."
+                ),
+                bbox=None,
+                reading_order_index=0,
+                block_kind="table_like",
+                structural_flags=["structured_signal"],
+            ),
+        ]
+        chunks = chunk_document(document, blocks, target_chars=200, min_chunk_chars=80)
+        self.assertGreaterEqual(len(chunks), 3)
+        self.assertTrue(all(chunk.chunk_type in {"table", "checklist"} for chunk in chunks))
+        self.assertTrue(any("informed consent obtained" in chunk.text for chunk in chunks))
+
+    def test_financial_form_semantics_are_not_generic(self) -> None:
+        facets = derive_document_facets(
+            source_pdf="Financial-Statement.pdf",
+            title="Personal Financial Statement",
+            toc=[],
+            summary_cues=["Net Worth", "Total Assets", "Total Liabilities"],
+            leading_block_lines=[
+                "PERSONAL FINANCIAL STATEMENT",
+                "Net Worth (Total Assets - Total Liabilities)",
+                "Cash in Banks and Notes Due to Banks",
+            ],
+            metadata_values=[],
+            page_count=2,
+        )
+        self.assertEqual(facets["document_type"], "financial_statement")
+        self.assertEqual(facets["document_purpose"], "financial_disclosure")
+        self.assertEqual(facets["audience"], "applicants")
+
+    def test_layout_sanity_check_json_for_multiple_pdfs(self) -> None:
+        second_pdf = self.workspace / "financial-form.pdf"
+        doc = fitz.open()
+        page = doc.new_page()
+        page.insert_text(
+            (72, 72),
+            "Personal Financial Statement\n\n"
+            "Cash in bank; notes due to banks; accounts payable; real estate mortgage payable.\n"
+            "Section A: Assets\n"
+            "Section B: Liabilities\n",
+        )
+        doc.save(second_pdf)
+        doc.close()
+
+        self._run("init", "--json")
+        process = self._run(
+            "layout-sanity-check",
+            "--pdfs",
+            f"{self.pdf_path},{second_pdf}",
+            "--json",
+        )
+        payload = json.loads(process.stdout)
+        self.assertTrue(payload["ok"])
+        result = payload["result"]
+        self.assertEqual(result["pdf_count"], 2)
+        self.assertEqual(len(result["results"]), 2)
+        self.assertTrue(result["all_pass"])
+        for item in result["results"]:
+            self.assertTrue(item["all_pass"])
+            self.assertTrue(item["overview_answer"])
+            self.assertTrue(item["type_answer"])
+            self.assertTrue(item["purpose_answer"])
+            self.assertTrue(item["audience_answer"])
+            self.assertIsNotNone(item["structure_confidence"])
+            self.assertIsNotNone(item["layout_confidence"])
 
 
 if __name__ == "__main__":

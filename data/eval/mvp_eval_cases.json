@@ -1146,6 +1146,28 @@
     "notes": "This should answer at the document level with type and purpose, not only topical chapter cues."
   },
   {
+    "case_id": "lbdl_document_audience",
+    "case_type": "grounded",
+    "query": "Who is The Little Book of Deep Learning for?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "lbdl"
+    ],
+    "expected_keywords": [
+      "The Little Book of Deep Learning",
+      "learners",
+      "teaching reference"
+    ],
+    "case_tags": [
+      "document_overview",
+      "document_discovery",
+      "document_facets",
+      "non_medical",
+      "deep_learning_book"
+    ],
+    "notes": "This should answer at the document level with audience-focused wording rather than a generic overview."
+  },
+  {
     "case_id": "ocha_incident_document_purpose",
     "case_type": "grounded",
     "query": "What is the purpose of the Data Incident Management guidance note?",
@@ -1168,6 +1190,28 @@
     "notes": "This should use document facets and overview metadata to explain purpose and intended audience."
   },
   {
+    "case_id": "ocha_incident_document_audience",
+    "case_type": "grounded",
+    "query": "Who is the Data Incident Management guidance note for?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "guidance-note-data-incident-management"
+    ],
+    "expected_keywords": [
+      "Data Incident Management",
+      "humanitarian responders",
+      "procedural guidance"
+    ],
+    "case_tags": [
+      "document_overview",
+      "document_discovery",
+      "document_facets",
+      "non_medical",
+      "humanitarian_data_guidance"
+    ],
+    "notes": "This should answer at the document level with audience-focused wording rather than only replaying the overview summary."
+  },
+  {
     "case_id": "model_report_niger_document_type",
     "case_type": "grounded",
     "query": "What type of document is the Niger AA Trigger for Drought source?",
@@ -1188,5 +1232,27 @@
       "model_report_family"
     ],
     "notes": "This should identify the source as a model-report style document and explain its purpose at a document level."
+  },
+  {
+    "case_id": "model_report_niger_document_audience",
+    "case_type": "grounded",
+    "query": "Who is the Niger AA Trigger for Drought source for?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "niger-aa-trigger-for-drought-model-report"
+    ],
+    "expected_keywords": [
+      "Niger AA Trigger for Drought - Model Report",
+      "analysts",
+      "risk or trigger assessment"
+    ],
+    "case_tags": [
+      "document_overview",
+      "document_discovery",
+      "document_facets",
+      "non_medical",
+      "model_report_family"
+    ],
+    "notes": "This should answer at the document level with audience-focused wording for the model-report family."
   }
 ]

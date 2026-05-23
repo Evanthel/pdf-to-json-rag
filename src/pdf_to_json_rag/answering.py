@@ -510,6 +510,13 @@ DOCUMENT_SELECTION_STRATEGIES: dict[str, str] = {
     "grounded_evidence": "preferred_doc",
 }
 
+DOCUMENT_SEMANTIC_INTENTS = {
+    "document_overview",
+    "document_type",
+    "document_purpose",
+    "document_audience",
+}
+
 
 def _selection_limit(answer_mode: str, *, plural_routing: bool) -> int:
     if answer_mode in {"document_overview", "source_justification", "grounded_evidence"}:
@@ -521,6 +528,10 @@ def _selection_limit(answer_mode: str, *, plural_routing: bool) -> int:
     if answer_mode == "cross_document_compare":
         return 3
     return 1
+
+
+def _is_document_semantic_intent(query_intent: str) -> bool:
+    return query_intent in DOCUMENT_SEMANTIC_INTENTS
 
 
 def _normalize_text(text: str) -> str:
@@ -827,7 +838,7 @@ def _score_sentence(
         hint_set = set(chunk.content_hints)
         if query_intent == "definition" and "definition_like" in hint_set:
             score += 1.0
-        if query_intent in {"document_overview", "document_routing", "source_listing"} and "overview_like" in hint_set:
+        if query_intent in DOCUMENT_SEMANTIC_INTENTS.union({"document_routing", "source_listing"}) and "overview_like" in hint_set:
             score += 1.0
         if query_intent in {
             "questionnaire_performance",
@@ -1425,7 +1436,7 @@ def _answer_sentence_budget(query: str) -> int:
         return 4
     if query_intent == "cross_document_compare":
         return 6
-    if query_intent == "document_overview":
+    if _is_document_semantic_intent(query_intent):
         return 4
     if query_intent == "document_routing":
         return 3
@@ -1988,6 +1999,19 @@ def _document_inventory_summary(
     return summary
 
 
+def _document_confidence(doc_id: str, chunk_root: Path) -> tuple[float | None, float | None]:
+    record = _load_document_record(doc_id, chunk_root)
+    if not record:
+        return None, None
+    return record.structure_confidence, record.layout_confidence
+
+
+def _semantic_phrase(value: str | None, fallback: str = "document") -> str:
+    if not value:
+        return fallback
+    return value.replace("_", " ")
+
+
 def _render_document_overview(
     doc_id: str,
     top_k_hits: list[ChunkRecord],
@@ -1997,18 +2021,23 @@ def _render_document_overview(
     semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
     fragments: list[str] = []
     cues: list[str] = []
+    structure_confidence, layout_confidence = _document_confidence(doc_id, chunk_root)
+    low_confidence = (
+        (structure_confidence is not None and structure_confidence < 0.62)
+        or (layout_confidence is not None and layout_confidence < 0.55)
+    )
 
     type_label = semantics.document_type.replace("_", " ") if semantics.document_type else "document"
-    fragments.append(f"{label} is a {type_label}")
+    fragments.append(f"{label} {'appears to be a' if low_confidence else 'is a'} {type_label}")
     cues.append(type_label)
 
     if semantics.document_purpose:
         purpose = semantics.document_purpose.replace("_", " ")
-        fragments.append(f"its main purpose is {purpose}")
+        fragments.append(f"{'its likely purpose is' if low_confidence else 'its main purpose is'} {purpose}")
         cues.append(purpose)
     if semantics.audience and semantics.audience != "general_professional":
         audience = semantics.audience.replace("_", " ")
-        fragments.append(f"it is aimed at {audience}")
+        fragments.append(f"{'it likely targets' if low_confidence else 'it is aimed at'} {audience}")
         cues.append(audience)
 
     coverage_terms = list(semantics.coverage_terms[:4])
@@ -2025,6 +2054,8 @@ def _render_document_overview(
     if section_titles:
         fragments.append("key sections include " + ", ".join(section_titles))
         cues.extend(section_titles)
+    elif low_confidence:
+        fragments.append("the recovered structure is limited, so this overview should be treated as provisional")
 
     answer = ". ".join(part[:1].upper() + part[1:] if index else part for index, part in enumerate(fragments)) + "."
     contract = build_answer_contract(
@@ -2035,6 +2066,95 @@ def _render_document_overview(
         coverage_terms=coverage_terms,
     )
     return answer, cues, contract
+
+
+def _render_document_type(
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+) -> tuple[str, list[str], dict[str, object]]:
+    label = _document_label(doc_id, chunk_root)
+    semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
+    structure_confidence, layout_confidence = _document_confidence(doc_id, chunk_root)
+    low_confidence = (
+        (structure_confidence is not None and structure_confidence < 0.62)
+        or (layout_confidence is not None and layout_confidence < 0.55)
+    )
+    type_label = _semantic_phrase(semantics.document_type)
+    answer = (
+        f"{label} appears to be a {type_label}."
+        if low_confidence
+        else f"{label} is a {type_label}."
+    )
+    if semantics.document_purpose:
+        answer += f" Its main purpose is {_semantic_phrase(semantics.document_purpose)}."
+    contract = build_answer_contract(
+        mode="document_type",
+        primary_doc_ids=[doc_id],
+        document_families=[get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"],
+        summary_type="type_focused",
+    )
+    return answer, [type_label, _semantic_phrase(semantics.document_purpose, "")], contract
+
+
+def _render_document_purpose(
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+) -> tuple[str, list[str], dict[str, object]]:
+    label = _document_label(doc_id, chunk_root)
+    semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
+    structure_confidence, layout_confidence = _document_confidence(doc_id, chunk_root)
+    low_confidence = (
+        (structure_confidence is not None and structure_confidence < 0.62)
+        or (layout_confidence is not None and layout_confidence < 0.55)
+    )
+    purpose = _semantic_phrase(semantics.document_purpose, "reference lookup")
+    type_label = _semantic_phrase(semantics.document_type)
+    answer = (
+        f"The main purpose of {label} appears to be {purpose}."
+        if low_confidence
+        else f"The main purpose of {label} is {purpose}."
+    )
+    answer += f" It is structured as a {type_label}."
+    if semantics.audience and semantics.audience != "general_professional":
+        answer += f" It is aimed at {_semantic_phrase(semantics.audience)}."
+    contract = build_answer_contract(
+        mode="document_purpose",
+        primary_doc_ids=[doc_id],
+        document_families=[get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"],
+        summary_type="purpose_focused",
+    )
+    return answer, [purpose, type_label, _semantic_phrase(semantics.audience, "")], contract
+
+
+def _render_document_audience(
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+) -> tuple[str, list[str], dict[str, object]]:
+    label = _document_label(doc_id, chunk_root)
+    semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
+    structure_confidence, layout_confidence = _document_confidence(doc_id, chunk_root)
+    low_confidence = (
+        (structure_confidence is not None and structure_confidence < 0.62)
+        or (layout_confidence is not None and layout_confidence < 0.55)
+    )
+    audience = _semantic_phrase(semantics.audience, "general professionals")
+    purpose = _semantic_phrase(semantics.document_purpose, "reference lookup")
+    answer = (
+        f"{label} appears to be intended for {audience}."
+        if low_confidence
+        else f"{label} is intended for {audience}."
+    )
+    answer += f" Its main purpose is {purpose}."
+    contract = build_answer_contract(
+        mode="document_audience",
+        primary_doc_ids=[doc_id],
+        document_families=[get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"],
+        summary_type="audience_focused",
+    )
+    return answer, [audience, purpose], contract
 
 
 def _document_support_trace_item(
@@ -2076,6 +2196,7 @@ def _document_support_trace_item(
     coverage_terms = list(semantics.coverage_terms[:4])
     summary_cues = list(semantics.summary_cues[:4])
     inventory_summary = _document_inventory_summary(doc_id, top_k_hits, chunk_root, include_label=True)
+    structure_confidence, layout_confidence = _document_confidence(doc_id, chunk_root)
 
     support_fragments: list[str] = []
     if semantics.document_type:
@@ -2101,6 +2222,10 @@ def _document_support_trace_item(
         support_fragments.append("section kinds: " + ", ".join(section_kinds))
     if section_content_hints:
         support_fragments.append("section hints: " + ", ".join(section_content_hints))
+    if structure_confidence is not None:
+        support_fragments.append(f"structure confidence: {structure_confidence:.3f}")
+    if layout_confidence is not None:
+        support_fragments.append(f"layout confidence: {layout_confidence:.3f}")
     if matched_terms:
         support_fragments.append("matched terms: " + ", ".join(matched_terms[:4]))
     if support_sentences:
@@ -2114,6 +2239,8 @@ def _document_support_trace_item(
         "document_type": semantics.document_type,
         "document_purpose": semantics.document_purpose,
         "audience": semantics.audience,
+        "structure_confidence": structure_confidence,
+        "layout_confidence": layout_confidence,
         "coverage_terms": coverage_terms,
         "summary_cues": summary_cues,
         "section_titles": section_titles,
@@ -2580,14 +2707,17 @@ def _build_document_selection(
 def _document_overview_mode_answer(
     selection: DocumentSelection,
     query: str,
+    query_intent: str,
     top_k_hits: list[ChunkRecord],
     context_chunks: list[ChunkRecord],
     evidence: list[EvidenceSentence],
     chunk_root: Path,
 ) -> tuple[str | None, dict[str, object] | None]:
-    if not top_k_hits:
+    primary_doc_id = selection.primary_doc_id or (selection.selected_doc_ids[0] if selection.selected_doc_ids else None)
+    if primary_doc_id is None and top_k_hits:
+        primary_doc_id = top_k_hits[0].doc_id
+    if primary_doc_id is None:
         return None, None
-    primary_doc_id = selection.primary_doc_id or top_k_hits[0].doc_id
     support_entry = _build_document_support_entry(
         query=query,
         doc_id=primary_doc_id,
@@ -2596,17 +2726,28 @@ def _document_overview_mode_answer(
         evidence=evidence,
         chunk_root=chunk_root,
     )
-    answer, cues, answer_contract = _render_document_overview(
-        primary_doc_id,
-        top_k_hits,
-        chunk_root,
-    )
+    if query_intent == "document_type":
+        answer, cues, answer_contract = _render_document_type(primary_doc_id, top_k_hits, chunk_root)
+        template_id = "document_level.type"
+        matched_pattern = "document-type-facet-summary"
+    elif query_intent == "document_purpose":
+        answer, cues, answer_contract = _render_document_purpose(primary_doc_id, top_k_hits, chunk_root)
+        template_id = "document_level.purpose"
+        matched_pattern = "document-purpose-facet-summary"
+    elif query_intent == "document_audience":
+        answer, cues, answer_contract = _render_document_audience(primary_doc_id, top_k_hits, chunk_root)
+        template_id = "document_level.audience"
+        matched_pattern = "document-audience-facet-summary"
+    else:
+        answer, cues, answer_contract = _render_document_overview(primary_doc_id, top_k_hits, chunk_root)
+        template_id = "document_level.overview"
+        matched_pattern = "section-aware-document-summary"
     if answer:
         return (
             answer,
             {
-                "template_id": "document_level.overview",
-                "matched_pattern": "section-aware-document-summary",
+                "template_id": template_id,
+                "matched_pattern": matched_pattern,
                 "matched_cues": cues,
                 "answer_contract": answer_contract,
                 "support_trace": [support_entry],
@@ -2894,6 +3035,7 @@ def _document_mode_answer(
         return _document_overview_mode_answer(
             selection,
             query,
+            query_intent,
             top_k_hits,
             context_chunks,
             evidence,
@@ -3244,7 +3386,7 @@ def _should_abstain(query: str, evidence: list[EvidenceSentence]) -> bool:
     query_terms = _query_terms(query)
     specific_terms = _specific_query_terms(query_terms)
     query_intent = _detect_query_intent(query, query_terms)
-    if query_intent in {"source_listing", "cross_document_compare", "document_overview", "document_routing"}:
+    if query_intent in {"source_listing", "cross_document_compare", "document_routing"} | DOCUMENT_SEMANTIC_INTENTS:
         evidence_text = " ".join(item.sentence.lower() for item in evidence)
         if query_intent in {"source_listing", "document_routing"} and not _matching_source_doc_ids(query):
             return True
@@ -3254,7 +3396,7 @@ def _should_abstain(query: str, evidence: list[EvidenceSentence]) -> bool:
         if len(evidence) < 1:
             return True
         top_score = max(item.score for item in evidence)
-        return top_score < 2.0
+        return top_score < (1.0 if _is_document_semantic_intent(query_intent) else 2.0)
     structured_profile = get_structured_intent_profile(query_intent)
     intent_support_terms = {
         "review_prevention": REVIEW_PREVENTION_HINTS,
@@ -3311,9 +3453,13 @@ def _should_abstain(query: str, evidence: list[EvidenceSentence]) -> bool:
 def format_grounded_answer(result: GroundedAnswer) -> str:
     """Format a deterministic grounded answer with explicit evidence."""
     answer_mode = result.answer_trace.get("answer_mode", "grounded_evidence")
+    query_intent = result.answer_trace.get("query_intent", result.query_intent)
     support_trace = result.answer_trace.get("support_trace") or []
     heading_map = {
         "document_overview": "Document overview:",
+        "document_type": "Document type:",
+        "document_purpose": "Document purpose:",
+        "document_audience": "Document audience:",
         "document_routing": "Recommended source:",
         "source_listing": "Relevant sources:",
         "source_justification": "Why this source:",
@@ -3321,7 +3467,7 @@ def format_grounded_answer(result: GroundedAnswer) -> str:
         "grounded_evidence": "Answer:",
     }
     lines = [
-        heading_map.get(answer_mode, "Answer:"),
+        heading_map.get(query_intent, heading_map.get(answer_mode, "Answer:")),
         result.answer,
         "",
     ]

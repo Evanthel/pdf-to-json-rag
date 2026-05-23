@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,13 @@ HEADING_PREFIX_RE = re.compile(
 NUMBERED_HEADING_RE = re.compile(r"^(?P<number>\d+(?:\.\d+){0,3})(?:[\).:-]|\s)\s*")
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
 QUESTION_HEADING_RE = re.compile(r"^(question\s+\d+\b|section\s+\d+\b)", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class DocumentStructureAnalysis:
+    sections: list[DocumentSectionRecord]
+    layout_confidence: float
+    structure_confidence: float
 
 
 def _normalize(text: str) -> str:
@@ -139,16 +147,90 @@ def _section_summary_and_terms(
     )
 
 
-def build_document_sections(
+def _clamp_confidence(value: float) -> float:
+    return max(0.0, min(1.0, round(value, 3)))
+
+
+def _section_confidence(
+    *,
+    title: str,
+    level: int | None,
+    summary: str | None,
+    coverage_terms: list[str],
+    content_hints: list[str],
+    section_path: list[str],
+    toc_entries: set[str],
+) -> float:
+    confidence = 0.4
+    if _looks_like_structural_heading(title, toc_entries):
+        confidence += 0.15
+    if level is not None:
+        confidence += 0.15
+    if len(section_path) > 1:
+        confidence += 0.1
+    if summary:
+        confidence += 0.1
+    if coverage_terms:
+        confidence += 0.05
+    if content_hints:
+        confidence += 0.05
+    if {"questionnaire_like", "checklist_like", "table_like"} & set(content_hints):
+        confidence += 0.05
+    return _clamp_confidence(confidence)
+
+
+def _layout_confidence(
+    *,
+    blocks: list["ExtractedBlock"],
+    sections: list[DocumentSectionRecord],
+    toc_entries: set[str],
+) -> float:
+    if not blocks:
+        return 0.0
+    block_count = len(blocks)
+    bbox_ratio = sum(1 for block in blocks if block.bbox is not None) / block_count
+    heading_like_blocks = sum(1 for block in blocks if _looks_like_structural_heading(_normalize(block.text), toc_entries))
+    question_or_table_blocks = sum(
+        1
+        for block in blocks
+        if block.block_kind in {"table_like", "heading"} or "question_like" in set(block.structural_flags)
+    )
+    confidence = 0.35
+    confidence += 0.2 * bbox_ratio
+    confidence += 0.15 if toc_entries else 0.0
+    confidence += 0.15 if heading_like_blocks >= 2 else 0.05 if heading_like_blocks >= 1 else 0.0
+    confidence += 0.1 if len(sections) >= 2 else 0.0
+    confidence += 0.05 if question_or_table_blocks >= max(2, block_count // 8) else 0.0
+    if block_count >= 20 and len(sections) <= 1:
+        confidence -= 0.15
+    if bbox_ratio < 0.3:
+        confidence -= 0.1
+    return _clamp_confidence(confidence)
+
+
+def _structure_confidence(
+    *,
+    sections: list[DocumentSectionRecord],
+    layout_confidence: float,
+) -> float:
+    if not sections:
+        return _clamp_confidence(layout_confidence * 0.6)
+    avg_section_confidence = sum(section.structure_confidence or 0.0 for section in sections) / len(sections)
+    hierarchical_bonus = 0.08 if any((section.level or 0) > 1 for section in sections) else 0.0
+    summary_bonus = 0.07 if sum(1 for section in sections if section.summary) >= max(1, len(sections) // 2) else 0.0
+    return _clamp_confidence((avg_section_confidence * 0.65) + (layout_confidence * 0.2) + hierarchical_bonus + summary_bonus)
+
+
+def build_document_structure_analysis(
     *,
     doc_id: str,
     title: str | None,
     toc: list[str],
     blocks: list["ExtractedBlock"],
-) -> list[DocumentSectionRecord]:
+) -> DocumentStructureAnalysis:
     ordered_blocks = sorted(blocks, key=lambda block: (block.page_num, block.reading_order_index))
     if not ordered_blocks:
-        return []
+        return DocumentStructureAnalysis(sections=[], layout_confidence=0.0, structure_confidence=0.0)
 
     toc_entries = {_normalize(item).lower() for item in toc if _normalize(item)}
     section_ranges: list[tuple[str, int | None, int, int]] = []
@@ -191,6 +273,15 @@ def build_document_sections(
                     break
         if not sections and title and section_title != title and section_path == [section_title]:
             section_path = [title, section_title]
+        confidence = _section_confidence(
+            title=section_title,
+            level=level,
+            summary=summary,
+            coverage_terms=coverage_terms,
+            content_hints=content_hints,
+            section_path=section_path,
+            toc_entries=toc_entries,
+        )
         sections.append(
             DocumentSectionRecord(
                 section_id=f"{doc_id}-section-{section_number:03d}",
@@ -206,9 +297,31 @@ def build_document_sections(
                 summary=summary,
                 coverage_terms=coverage_terms,
                 content_hints=content_hints,
+                structure_confidence=confidence,
             )
         )
-    return sections
+    layout_confidence = _layout_confidence(blocks=ordered_blocks, sections=sections, toc_entries=toc_entries)
+    structure_confidence = _structure_confidence(sections=sections, layout_confidence=layout_confidence)
+    return DocumentStructureAnalysis(
+        sections=sections,
+        layout_confidence=layout_confidence,
+        structure_confidence=structure_confidence,
+    )
 
 
-__all__ = ["build_document_sections"]
+def build_document_sections(
+    *,
+    doc_id: str,
+    title: str | None,
+    toc: list[str],
+    blocks: list["ExtractedBlock"],
+) -> list[DocumentSectionRecord]:
+    return build_document_structure_analysis(
+        doc_id=doc_id,
+        title=title,
+        toc=toc,
+        blocks=blocks,
+    ).sections
+
+
+__all__ = ["DocumentStructureAnalysis", "build_document_sections", "build_document_structure_analysis"]

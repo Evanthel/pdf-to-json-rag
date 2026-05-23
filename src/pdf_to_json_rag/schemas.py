@@ -25,6 +25,7 @@ class DocumentSectionRecord(BaseModel):
     summary: str | None = None
     coverage_terms: list[str] = Field(default_factory=list)
     content_hints: list[str] = Field(default_factory=list)
+    structure_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class ChunkRecord(BaseModel):
@@ -46,6 +47,8 @@ class ChunkRecord(BaseModel):
     section_summary: str | None = None
     section_coverage_terms: list[str] = Field(default_factory=list)
     section_content_hints: list[str] = Field(default_factory=list)
+    structure_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    layout_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     chunk_type: ChunkType = "text"
     reading_order_index: int
     preceding_chunk_id: str | None = None
@@ -83,6 +86,8 @@ class DocumentRecord(BaseModel):
     audience: str | None = None
     evidence_style: str | None = None
     structure_style: str | None = None
+    structure_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    layout_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     facet_terms: list[str] = Field(default_factory=list)
     detected_language: str | None = None
     extraction_summary: dict[str, str | int | bool | None] = Field(default_factory=dict)

@@ -55,6 +55,7 @@ COMMAND_ALIASES = {
     "answer": "answer-query",
     "demo": "demo-profile",
     "self-check": "doctor",
+    "layout-check": "layout-sanity-check",
 }
 
 COMMAND_HELP: dict[str, dict[str, object]] = {
@@ -133,6 +134,10 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
     "release-check": {
         "summary": "Maintainer check: run public-surface smoke checks plus package/test/regression release gates.",
         "example": "pdf-to-json-rag release-check --json",
+    },
+    "layout-sanity-check": {
+        "summary": "Maintainer check: run isolated local sanity workflows on one or more external PDFs without adding them to the benchmark.",
+        "example": "pdf-to-json-rag layout-sanity-check --pdfs /path/a.pdf,/path/b.pdf --json",
     },
     "help": {
         "summary": "Show command summaries or detailed help for one command.",
@@ -220,6 +225,8 @@ def _chunk_payload(chunk) -> dict[str, object]:
         "section_summary": chunk.section_summary,
         "section_coverage_terms": list(chunk.section_coverage_terms),
         "section_content_hints": list(chunk.section_content_hints),
+        "structure_confidence": chunk.structure_confidence,
+        "layout_confidence": chunk.layout_confidence,
         "chunk_type": chunk.chunk_type,
         "preceding_chunk_id": chunk.preceding_chunk_id,
         "following_chunk_id": chunk.following_chunk_id,
@@ -254,6 +261,8 @@ def _document_payload(entry) -> dict[str, object]:
         "audience": entry.audience,
         "evidence_style": entry.evidence_style,
         "structure_style": entry.structure_style,
+        "structure_confidence": None,
+        "layout_confidence": None,
         "inventory_summary": entry.inventory_summary,
         "coverage_summary": entry.coverage_summary,
         "coverage_terms": list(entry.coverage_terms),
@@ -273,6 +282,7 @@ def _section_payload(section) -> dict[str, object]:
         "summary": section.summary,
         "coverage_terms": list(section.coverage_terms),
         "content_hints": list(section.content_hints),
+        "structure_confidence": section.structure_confidence,
     }
 
 
@@ -421,6 +431,17 @@ def _resolve_pdf_path(value: str) -> Path:
     return pdf_path
 
 
+def _resolve_pdf_paths(value: str) -> list[Path]:
+    raw_items = [item.strip() for item in value.split(",") if item.strip()]
+    if not raw_items:
+        raise CliError(
+            "missing_pdf",
+            "At least one PDF path is required",
+            {"pdfs": value},
+        )
+    return [_resolve_pdf_path(item) for item in raw_items]
+
+
 def _resolve_index_dir(value: str | None, default: Path) -> Path:
     return Path(value).expanduser().resolve() if value else default
 
@@ -510,6 +531,115 @@ def _run_public_surface_release_smoke() -> dict[str, object]:
             "smoke_all_pass": bool(smoke_payload.get("result", {}).get("all_pass")),
             "smoke_checks": smoke_payload.get("result", {}).get("checks", []),
         }
+
+
+def _run_layout_sanity_check(pdf_paths: list[Path], k: int = 5) -> dict[str, object]:
+    results: list[dict[str, object]] = []
+
+    for pdf_path in pdf_paths:
+        with tempfile.TemporaryDirectory() as temp_dir_name:
+            workspace = Path(temp_dir_name)
+            data_dir = workspace / "data"
+            smoke_process = _run_cli_subprocess(
+                [
+                    "smoke-check",
+                    "--pdf",
+                    str(pdf_path),
+                    "--query",
+                    "What does this file cover?",
+                    "--json",
+                ],
+                data_dir=data_dir,
+            )
+            smoke_payload = json.loads(smoke_process.stdout) if smoke_process.stdout.strip() else {}
+
+            result: dict[str, object] = {
+                "pdf": str(pdf_path),
+                "workspace": str(workspace),
+                "data_dir": str(data_dir),
+                "smoke_returncode": smoke_process.returncode,
+                "smoke_ok": bool(smoke_payload.get("ok")),
+                "smoke_all_pass": bool(smoke_payload.get("result", {}).get("all_pass")),
+            }
+
+            if not smoke_payload.get("ok"):
+                result["error"] = smoke_payload.get("error", {})
+                result["checks"] = [
+                    {"name": "smoke_ok", "passed": False},
+                    {"name": "smoke_all_pass", "passed": False},
+                ]
+                results.append(result)
+                continue
+
+            smoke_result = smoke_payload.get("result", {})
+            doc_id = str(smoke_result.get("doc_id", ""))
+            inspect_process = _run_cli_subprocess(
+                ["inspect-document", "--doc-id", doc_id, "--json"],
+                data_dir=data_dir,
+            )
+            inspect_payload = json.loads(inspect_process.stdout) if inspect_process.stdout.strip() else {}
+            type_process = _run_cli_subprocess(
+                ["answer-query", "--query", "What kind of document is this?", "--json"],
+                data_dir=data_dir,
+            )
+            type_payload = json.loads(type_process.stdout) if type_process.stdout.strip() else {}
+            purpose_process = _run_cli_subprocess(
+                ["answer-query", "--query", "What is the purpose of this document?", "--json"],
+                data_dir=data_dir,
+            )
+            purpose_payload = json.loads(purpose_process.stdout) if purpose_process.stdout.strip() else {}
+            audience_process = _run_cli_subprocess(
+                ["answer-query", "--query", "Who is this document for?", "--json"],
+                data_dir=data_dir,
+            )
+            audience_payload = json.loads(audience_process.stdout) if audience_process.stdout.strip() else {}
+
+            inspect_result = inspect_payload.get("result", {}) if inspect_payload.get("ok") else {}
+            overview_answer = smoke_result.get("answer", {}).get("answer", "")
+            type_answer = type_payload.get("result", {}).get("answer", "") if type_payload.get("ok") else ""
+            purpose_answer = purpose_payload.get("result", {}).get("answer", "") if purpose_payload.get("ok") else ""
+            audience_answer = audience_payload.get("result", {}).get("answer", "") if audience_payload.get("ok") else ""
+            structure_confidence = inspect_result.get("structure_confidence")
+            layout_confidence = inspect_result.get("layout_confidence")
+
+            checks = [
+                {"name": "smoke_ok", "passed": bool(smoke_payload.get("ok"))},
+                {"name": "smoke_all_pass", "passed": bool(smoke_result.get("all_pass"))},
+                {"name": "inspect_ok", "passed": bool(inspect_payload.get("ok"))},
+                {"name": "structure_confidence_present", "passed": structure_confidence is not None},
+                {"name": "layout_confidence_present", "passed": layout_confidence is not None},
+                {"name": "overview_answer_present", "passed": bool(overview_answer)},
+                {"name": "type_answer_present", "passed": bool(type_answer)},
+                {"name": "purpose_answer_present", "passed": bool(purpose_answer)},
+                {"name": "audience_answer_present", "passed": bool(audience_answer)},
+            ]
+
+            result.update(
+                {
+                    "doc_id": doc_id,
+                    "document_type": inspect_result.get("document_type") or smoke_result.get("document", {}).get("document_type"),
+                    "document_purpose": inspect_result.get("document_purpose") or smoke_result.get("document", {}).get("document_purpose"),
+                    "document_family": inspect_result.get("document_family") or smoke_result.get("document", {}).get("document_family"),
+                    "structure_confidence": structure_confidence,
+                    "layout_confidence": layout_confidence,
+                    "section_count": inspect_result.get("section_count"),
+                    "chunk_count": smoke_result.get("index", {}).get("chunk_count"),
+                    "overview_answer": overview_answer,
+                    "type_answer": type_answer,
+                    "purpose_answer": purpose_answer,
+                    "audience_answer": audience_answer,
+                    "smoke_checks": smoke_result.get("checks", []),
+                    "checks": checks,
+                    "all_pass": all(item["passed"] for item in checks),
+                }
+            )
+            results.append(result)
+
+    return {
+        "pdf_count": len(pdf_paths),
+        "results": results,
+        "all_pass": all(bool(item.get("all_pass")) for item in results),
+    }
 
 
 def _run_public_surface_unittests() -> dict[str, object]:
@@ -740,8 +870,13 @@ RELEASE_CHECK_SHARDS = [
     "structure_chunking_core",
     "section_reconstruction_core",
     "document_selection_core",
+    "semantic_document_understanding_core",
     "document_maintenance_core",
     "structured_form_maintenance_core",
+    "layout_robustness_core",
+    "single_doc_random_pdf_core",
+    "table_layout_robustness_core",
+    "form_layout_robustness_core",
     "evidence_anchor_core",
     "document_family_core",
     "inventory_coverage_core",
@@ -1160,6 +1295,10 @@ def main() -> None:
         help="Path to a local PDF file.",
     )
     parser.add_argument(
+        "--pdfs",
+        help="Comma-separated local PDF paths for layout-sanity-check.",
+    )
+    parser.add_argument(
         "--path",
         help="Optional output path for generated local assets such as create-demo-pdf.",
     )
@@ -1353,6 +1492,27 @@ def main() -> None:
                 print(f"- {reason}")
             return
 
+        if command == "layout-sanity-check":
+            pdf_values = _require_arg(args.pdfs, "--pdfs", "layout-sanity-check")
+            PATHS.ensure_dirs()
+            pdf_paths = _resolve_pdf_paths(pdf_values)
+            payload = _run_layout_sanity_check(pdf_paths, k=args.k)
+            if json_output:
+                _emit_json("layout-sanity-check", payload, output_path=output_path)
+                return
+            print(f"Layout sanity check: {_human_status(payload['all_pass'])}")
+            for item in payload["results"]:
+                print("")
+                print(f"{Path(str(item['pdf'])).name}: {_human_status(bool(item.get('all_pass')))}")
+                print(
+                    f"  type={item.get('document_type')} | purpose={item.get('document_purpose')} | "
+                    f"structure_confidence={item.get('structure_confidence')} | "
+                    f"layout_confidence={item.get('layout_confidence')}"
+                )
+                if item.get("audience_answer"):
+                    print(f"  audience: {item.get('audience_answer')}")
+            return
+
         if command == "init":
             PATHS.ensure_dirs()
             if json_output:
@@ -1532,19 +1692,23 @@ def main() -> None:
                     "index_dir": str(workflow_index_dir),
                     "first_chunk_file": str(saved_paths[0]) if saved_paths else None,
                 },
-                "document": _document_payload(inventory_entry) if inventory_entry else {
-                    "doc_id": document.doc_id,
-                    "label": document.title or document.doc_id,
-                    "document_family": document.document_family,
-                    "document_type": document.document_type,
-                    "document_purpose": document.document_purpose,
-                    "audience": document.audience,
-                    "evidence_style": document.evidence_style,
-                    "structure_style": document.structure_style,
-                    "inventory_summary": document.inventory_summary,
-                    "coverage_summary": document.coverage_summary,
-                    "coverage_terms": list(document.coverage_terms),
-                    "discovery_terms": list(document.discovery_terms),
+                "document": {
+                    **(_document_payload(inventory_entry) if inventory_entry else {
+                        "doc_id": document.doc_id,
+                        "label": document.title or document.doc_id,
+                        "document_family": document.document_family,
+                        "document_type": document.document_type,
+                        "document_purpose": document.document_purpose,
+                        "audience": document.audience,
+                        "evidence_style": document.evidence_style,
+                        "structure_style": document.structure_style,
+                        "inventory_summary": document.inventory_summary,
+                        "coverage_summary": document.coverage_summary,
+                        "coverage_terms": list(document.coverage_terms),
+                        "discovery_terms": list(document.discovery_terms),
+                    }),
+                    "structure_confidence": document.structure_confidence,
+                    "layout_confidence": document.layout_confidence,
                 },
                 "plan": {
                     **_plan_payload(plan, verbose=args.verbose),
@@ -1618,6 +1782,7 @@ def main() -> None:
                     {"doc_id": doc_id},
                 )
             section_payloads: list[dict[str, object]] = []
+            document_record = None
             try:
                 _, document_path = _resolve_document_paths(doc_id)
                 document_record = load_document_record(document_path)
@@ -1626,6 +1791,8 @@ def main() -> None:
                 section_payloads = []
             payload = {
                 **_document_payload(entry),
+                "structure_confidence": getattr(document_record, "structure_confidence", None),
+                "layout_confidence": getattr(document_record, "layout_confidence", None),
                 "section_count": len(section_payloads),
                 "sections": section_payloads,
             }

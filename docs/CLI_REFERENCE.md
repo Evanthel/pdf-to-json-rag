@@ -38,6 +38,7 @@ Maintainer validation commands:
 
 - `package-check`
 - `release-check`
+- `layout-sanity-check`
 
 Benchmark/debug commands:
 
@@ -59,6 +60,7 @@ Helpful aliases:
 - `demo` -> `demo-profile`
 - `create-demo` -> `create-demo-pdf`
 - `self-check` -> `doctor`
+- `layout-check` -> `layout-sanity-check`
 
 Focused help:
 
@@ -84,5 +86,8 @@ pdf-to-json-rag package-check --json
 pdf-to-json-rag plan-query --query "Which file is most relevant for drought triggers?" --json
 pdf-to-json-rag answer-query --query "What does this file cover?" --json
 pdf-to-json-rag release-check --json
+pdf-to-json-rag layout-sanity-check --pdfs /path/a.pdf,/path/b.pdf --json
 pdf-to-json-rag answer-query --query "What does this file cover?" --format json
 ```
+
+`layout-sanity-check` returns compact overview, type, purpose, and audience answers for each unfamiliar PDF in addition to the usual structure/layout confidence and smoke-style checks.

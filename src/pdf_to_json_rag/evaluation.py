@@ -192,6 +192,14 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "model_report_niger_justification",
         "compare_niger_chad_model_reports",
     ],
+    "semantic_document_understanding_core": [
+        "lbdl_document_type",
+        "lbdl_document_audience",
+        "ocha_incident_document_purpose",
+        "ocha_incident_document_audience",
+        "model_report_niger_document_type",
+        "model_report_niger_document_audience",
+    ],
     "document_maintenance_core": [
         "lbdl_document_overview",
         "lbdl_document_routing_backpropagation",
@@ -205,6 +213,34 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "opioid_manager_appendix_a_optimized",
         "opioid_manager_appendix_b_adverse_scale",
         "opioid_manager_appendix_c_follow_up_timing",
+    ],
+    "layout_robustness_core": [
+        "health_questionnaire_question5_contexts",
+        "health_questionnaire_table1_sensitivity",
+        "pre_injection_checklist_side_effects",
+        "ajmedp_immersion_neck_limit",
+        "lbdl_document_overview",
+    ],
+    "single_doc_random_pdf_core": [
+        "lbdl_document_overview",
+        "lbdl_document_type",
+        "ocha_incident_document_overview",
+        "model_report_niger_document_type",
+        "pre_injection_checklist_live_vaccine",
+    ],
+    "table_layout_robustness_core": [
+        "health_questionnaire_table1_sensitivity",
+        "opioid_manager_appendix_b_adverse_scale",
+        "ajmedp_immersion_neck_limit",
+        "ct_follow_up_improvement",
+        "pre_injection_checklist_side_effects",
+    ],
+    "form_layout_robustness_core": [
+        "health_questionnaire_question5_contexts",
+        "pre_injection_checklist_live_vaccine",
+        "opioid_manager_appendix_a_optimized",
+        "opioid_manager_appendix_c_follow_up_timing",
+        "lbdl_document_overview",
     ],
 }
 SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {

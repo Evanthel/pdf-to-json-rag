@@ -63,6 +63,11 @@ REVIEW_INLINE_HEADING_RE = re.compile(
 QUESTION_INLINE_HEADING_RE = re.compile(
     r"(?P<label>(?:How|What|Which|When|Why)[^?]{12,140}\?)\s+(?=[A-Z])"
 )
+STRUCTURED_ROW_PREFIX_RE = re.compile(
+    r"^(?:question\s+\d+|table\s+[ivxlcdm\d]+|appendix\b|section\s+\d+|[A-Z][A-Za-z0-9/\-\s]{2,40}\s*[:\-]|[A-Za-z][A-Za-z0-9/\-\s]{2,40}\s*->)\b",
+    re.IGNORECASE,
+)
+FIELD_VALUE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9/\-\s]{2,40}\s*[:\-]\s+\S")
 TREATMENT_SEGMENT_SPLIT_MARKERS = (
     "But a subgroup of",
 )
@@ -523,6 +528,79 @@ def _collect_subtopic_cues(text: str, section_title: str | None) -> list[str]:
     return sorted(set(cues))
 
 
+def _looks_like_structured_row(text: str) -> bool:
+    normalized = _clean_text(text)
+    if not normalized:
+        return False
+    if "->" in normalized:
+        return True
+    if FIELD_VALUE_RE.match(normalized):
+        return True
+    if normalized.lower().startswith(("question ", "table ", "appendix ")):
+        return True
+    return False
+
+
+def _split_structured_form_segments(
+    text: str,
+    *,
+    block_kind: str,
+    section_kind: str | None,
+    section_hints: list[str] | None,
+) -> list[str]:
+    segment = _clean_text(text)
+    if not segment:
+        return []
+    hint_set = set(section_hints or [])
+    structured_context = (
+        block_kind == "table_like"
+        or section_kind in {"table_section", "checklist_section", "questionnaire_section", "appendix"}
+        or {"table_like", "checklist_like", "questionnaire_like", "structured_signal"} & hint_set
+        or STRUCTURED_ROW_PREFIX_RE.match(segment) is not None
+    )
+    if not structured_context:
+        return [segment]
+
+    pieces: list[str] = []
+    if segment.count(";") >= 3:
+        for part in segment.split(";"):
+            part = _clean_text(part)
+            if part:
+                pieces.append(part)
+    elif " | " in segment and segment.count(" | ") >= 2:
+        for part in segment.split(" | "):
+            part = _clean_text(part)
+            if part:
+                pieces.append(part)
+    else:
+        return [segment]
+
+    if len(pieces) < 2:
+        return [segment]
+
+    normalized_rows: list[str] = []
+    carry_prefix: str | None = None
+    for idx, part in enumerate(pieces):
+        if idx == 0:
+            normalized_rows.append(part)
+            if ":" in part:
+                carry_prefix = part.split(":", 1)[0].strip()
+            elif "->" in part:
+                carry_prefix = part.split("->", 1)[0].strip()
+            continue
+        if _looks_like_structured_row(part):
+            normalized_rows.append(part)
+            continue
+        if carry_prefix and len(part.split()) <= 14:
+            normalized_rows.append(f"{carry_prefix}: {part}")
+        else:
+            normalized_rows.append(part)
+
+    if sum(1 for item in normalized_rows if _looks_like_structured_row(item)) >= 2:
+        return normalized_rows
+    return [segment]
+
+
 def _looks_like_title_case(text: str) -> bool:
     words = [word for word in re.split(r"\s+", text) if word]
     if not words:
@@ -596,7 +674,7 @@ def _inline_section_state(
     document_title: str | None,
     inherited_kind: str | None,
     inherited_hints: list[str] | None,
-) -> tuple[list[str], str | None, str | None, list[str], list[str]]:
+) -> tuple[list[str], str | None, str | None, list[str], list[str], float]:
     seed_text = _clean_text(segment_text) or section_title
     coverage_terms, content_hints, _ = derive_chunk_semantics(
         text=seed_text,
@@ -633,6 +711,17 @@ def _inline_section_state(
         summary_parts = [part.strip() for part in SENTENCE_SPLIT_RE.split(seed_text) if part.strip()]
         if summary_parts:
             summary = " ".join(summary_parts[:2])[:220].strip()
+    structure_confidence = 0.48
+    if summary:
+        structure_confidence += 0.12
+    if coverage_terms:
+        structure_confidence += 0.08
+    if merged_hints:
+        structure_confidence += 0.12
+    if len(_section_path_with_context(section_title=section_title, base_path=base_path, document_title=document_title)) > 1:
+        structure_confidence += 0.1
+    if "questionnaire_like" in merged_hints or "checklist_like" in merged_hints:
+        structure_confidence += 0.1
     return (
         _section_path_with_context(
             section_title=section_title,
@@ -643,6 +732,7 @@ def _inline_section_state(
         summary,
         coverage_terms[:8],
         merged_hints,
+        round(min(structure_confidence, 0.9), 3),
     )
 
 
@@ -653,6 +743,21 @@ def _infer_extraction_method(blocks: list[ExtractedBlock]) -> tuple[str, bool]:
     if "ocr" in methods:
         return "mixed", True
     return "native", False
+
+
+def _chunk_layout_confidence(blocks: list[ExtractedBlock]) -> float:
+    if not blocks:
+        return 0.0
+    bbox_ratio = sum(1 for block in blocks if block.bbox is not None) / len(blocks)
+    heading_or_structured = sum(
+        1
+        for block in blocks
+        if block.block_kind in {"heading", "table_like"} or "structured_signal" in set(block.structural_flags)
+    )
+    confidence = 0.45 + (0.2 * bbox_ratio)
+    if heading_or_structured:
+        confidence += 0.1
+    return round(min(confidence, 0.85), 3)
 
 
 def _apply_health_check_form_assist(
@@ -852,6 +957,7 @@ def _make_chunk_record(
     section_summary: str | None,
     section_coverage_terms: list[str] | None,
     section_content_hints: list[str] | None,
+    section_structure_confidence: float | None,
 ) -> ChunkRecord:
     text = "\n\n".join(block.text for block in blocks)
     inferred_title = _extract_inline_section_label(blocks[0].text)
@@ -893,6 +999,12 @@ def _make_chunk_record(
         chunk_type = "header"
     else:
         chunk_type = "text"
+    chunk_structure_confidence = section_structure_confidence
+    if chunk_structure_confidence is None:
+        chunk_structure_confidence = document.structure_confidence
+    elif document.structure_confidence is not None:
+        chunk_structure_confidence = round((chunk_structure_confidence * 0.7) + (document.structure_confidence * 0.3), 3)
+    chunk_layout_confidence = document.layout_confidence if document.layout_confidence is not None else _chunk_layout_confidence(blocks)
     return ChunkRecord(
         doc_id=document.doc_id,
         chunk_id=f"{document.doc_id}-chunk-{chunk_number:04d}",
@@ -910,6 +1022,8 @@ def _make_chunk_record(
         section_summary=section_summary,
         section_coverage_terms=list(section_coverage_terms or []),
         section_content_hints=list(section_content_hints or []),
+        structure_confidence=chunk_structure_confidence,
+        layout_confidence=chunk_layout_confidence,
         chunk_type=chunk_type,
         reading_order_index=blocks[0].reading_order_index,
         language=document.detected_language,
@@ -969,6 +1083,7 @@ def chunk_document(
     current_section_summary: str | None = None
     current_section_coverage_terms: list[str] = []
     current_section_content_hints: list[str] = []
+    current_section_structure_confidence: float | None = document.structure_confidence
     in_key_points_summary = False
     last_buffer_page_num: int | None = None
     buffer_treatment_subtopic: str | None = None
@@ -992,6 +1107,7 @@ def chunk_document(
                 section_summary=current_section_summary,
                 section_coverage_terms=current_section_coverage_terms,
                 section_content_hints=current_section_content_hints,
+                section_structure_confidence=current_section_structure_confidence,
             )
         )
         chunk_number += 1
@@ -1013,6 +1129,7 @@ def chunk_document(
             current_section_summary = section.summary
             current_section_coverage_terms = list(section.coverage_terms)
             current_section_content_hints = list(section.content_hints)
+            current_section_structure_confidence = section.structure_confidence
             in_key_points_summary = False
 
         raw_block_text = _clean_text(block.text)
@@ -1052,6 +1169,7 @@ def chunk_document(
                         current_section_summary,
                         current_section_coverage_terms,
                         current_section_content_hints,
+                        current_section_structure_confidence,
                     ) = _inline_section_state(
                         section_title=inline_heading,
                         segment_text=scoped_segment,
@@ -1069,6 +1187,32 @@ def chunk_document(
                 segment = scoped_segment
                 if not segment:
                     continue
+                structured_segments = _split_structured_form_segments(
+                    segment,
+                    block_kind=block.block_kind,
+                    section_kind=current_section_kind,
+                    section_hints=current_section_content_hints,
+                )
+                if len(structured_segments) > 1:
+                    for structured_segment in structured_segments:
+                        if (
+                            buffer
+                            and (
+                                current_section_kind in {"table_section", "checklist_section", "questionnaire_section", "appendix"}
+                                or block.block_kind == "table_like"
+                            )
+                            and buffer_chars >= max(120, min_chunk_chars // 3)
+                        ):
+                            flush_buffer()
+                        buffer.append(
+                            _rebuild_block(
+                                source_block=block,
+                                text=structured_segment,
+                            )
+                        )
+                        buffer_chars += len(structured_segment)
+                        last_buffer_page_num = block.page_num
+                    continue
                 inline_section_title = _extract_inline_section_label(segment)
                 if inline_section_title:
                     flush_buffer()
@@ -1078,6 +1222,7 @@ def chunk_document(
                         current_section_summary,
                         current_section_coverage_terms,
                         current_section_content_hints,
+                        current_section_structure_confidence,
                     ) = _inline_section_state(
                         section_title=inline_section_title,
                         segment_text=segment,
@@ -1099,6 +1244,7 @@ def chunk_document(
                         current_section_summary,
                         current_section_coverage_terms,
                         current_section_content_hints,
+                        current_section_structure_confidence,
                     ) = _inline_section_state(
                         section_title=segment,
                         segment_text=segment,
@@ -1137,6 +1283,16 @@ def chunk_document(
                     and "questionnaire_like" in current_section_content_hints
                     and re.match(r"^\d+[\).]?\s+", segment.lstrip())
                     and buffer_chars >= min_chunk_chars
+                ):
+                    flush_buffer()
+                if (
+                    buffer
+                    and (
+                        current_section_kind in {"table_section", "appendix"}
+                        or block.block_kind == "table_like"
+                    )
+                    and _looks_like_structured_row(segment)
+                    and buffer_chars >= max(120, min_chunk_chars // 3)
                 ):
                     flush_buffer()
 

@@ -66,6 +66,13 @@ LOW_SIGNAL_PHRASES = {
 }
 
 QUERY_FAMILY_HINTS = {
+    "administrative_financial_form": (
+        "financial statement",
+        "financial assessment",
+        "assessment form",
+        "administrative form",
+        "service user",
+    ),
     "structured_form": ("questionnaire", "checklist", "appendix", "form", "grid"),
     "technical_manual": ("manual", "technical", "field manual"),
     "humanitarian_guidance": (
@@ -81,6 +88,9 @@ QUERY_FAMILY_HINTS = {
 }
 
 QUERY_PURPOSE_HINTS = {
+    "financial_disclosure": ("financial statement", "net worth", "assets", "liabilities"),
+    "financial_assessment": ("financial assessment", "care charge", "local authority"),
+    "administrative_intake": ("personal details", "representative details", "date of birth"),
     "teaching_reference": ("learn", "learning", "teach", "chapter"),
     "procedural_guidance": ("guidance", "procedure", "should", "policy"),
     "structured_data_capture": ("questionnaire", "survey", "capture", "form"),

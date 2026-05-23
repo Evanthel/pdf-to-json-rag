@@ -1704,6 +1704,16 @@ def retrieve_top_k(
                     section_summary=metadata.get("section_summary"),
                     section_coverage_terms=section_coverage_terms,
                     section_content_hints=section_content_hints,
+                    structure_confidence=(
+                        float(metadata["structure_confidence"])
+                        if metadata.get("structure_confidence") is not None
+                        else None
+                    ),
+                    layout_confidence=(
+                        float(metadata["layout_confidence"])
+                        if metadata.get("layout_confidence") is not None
+                        else None
+                    ),
                     chunk_type=metadata.get("chunk_type", "text"),
                     reading_order_index=int(metadata["reading_order_index"]),
                     preceding_chunk_id=metadata.get("preceding_chunk_id"),

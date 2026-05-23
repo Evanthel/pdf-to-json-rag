@@ -8,7 +8,7 @@ Internal development iterations in this file use `v1.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v0.4.9`
+Current implementation level: `v0.6.4`
 Current public version: `0.1.0-beta`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
@@ -28,21 +28,27 @@ Repo-local regression shards currently passing:
 - `section_reconstruction_core`
 - `document_selection_core`
 - `document_maintenance_core`
+- `structured_form_maintenance_core`
+- `layout_robustness_core`
+- `single_doc_random_pdf_core`
+- `table_layout_robustness_core`
+- `form_layout_robustness_core`
+- `semantic_document_understanding_core`
 - `evidence_anchor_core`
 - `document_family_core`
 - `document_facets_core`
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v0.4.9`:
+Broad benchmark note after `v0.6.4`:
 
 - the targeted maintainer shard set is green again
 - the new document-level simplification shard is green
 - current broad benchmark scope:
-  - `Cases`: `67`
-  - `Indexed sample documents`: `19`
-- latest full rerun on the current structure-aware `v0.4.6` baseline:
-  - `precision@5`: `0.5309`
+  - `Cases`: `70`
+  - `Indexed sample documents`: `25`
+- latest full rerun on the current `v0.6.4` semantic baseline:
+  - `precision@5`: `0.5552`
   - `recall@5`: `1.0`
   - `MRR`: `1.0`
   - `avg_keyword_coverage`: `1.0`
@@ -53,9 +59,13 @@ Broad benchmark note after `v0.4.9`:
   - `avg_supported_sentence_ratio`: `1.0`
   - `failing_case_count`: `0`
 - `release-check` now includes `document_pipeline_core`, `structure_chunking_core`, `section_reconstruction_core`, `document_selection_core`, `document_maintenance_core`, and `evidence_anchor_core` in the maintainer regression gate.
+- `release-check` now also includes `structured_form_maintenance_core`, `layout_robustness_core`, and `single_doc_random_pdf_core`.
+- `release-check` now also includes `table_layout_robustness_core` and `form_layout_robustness_core`.
 - `release-check` now recommends the current public beta tag: `v0.1.0-beta`.
 - the current decision is to keep learned reranking deferred; the stronger structure-aware baseline and the explicit `document_selection` contract are green enough that a heavier learned layer is not justified yet.
 - the new maintenance direction is preserving document-root section context and shrinking the structured-form / document-level branching surface rather than adding heavier retrieval machinery.
+- the new robustness direction is exposing simple structure/layout confidence signals and testing single-document behavior on a more diverse sanity slice before considering a heavier learned retrieval layer.
+- the new semantics direction is improving document type, purpose, and audience understanding on unfamiliar PDFs before considering a learned reranker.
 
 ## Delivered Architecture
 
@@ -208,6 +218,28 @@ Representative validation that has already been completed:
 - Added richer synthetic-section hints so checklist/questionnaire-like inline sections keep more useful structure metadata instead of dropping back to flat report sections.
 - Simplified structured-form answer rendering into shared helper families for checklist, legend, follow-up, and lookup patterns.
 - Added `structured_form_maintenance_core` to the maintainer regression gate and re-validated the full structure-aware benchmark baseline after the cleanup.
+
+### v0.5.0-v0.5.4
+
+- Added simple `structure_confidence` and `layout_confidence` signals to document, section, and chunk metadata so the pipeline can expose how trustworthy its recovered structure is.
+- Hardened single-document overview behavior so document-level answers can still fall back to metadata and selection traces when chunk evidence is sparse but document semantics remain usable.
+- Kept the heuristic-first baseline explicit by softening overview phrasing when structure/layout confidence is lower instead of pretending the system is equally certain on every PDF.
+- Added `layout_robustness_core` and `single_doc_random_pdf_core` as sanity gates for unfamiliar layouts and single-document behavior on a more diverse slice than the original curated benchmark path.
+
+### v0.5.5-v0.5.9
+
+- Improved table-like and form-heavy chunk reconstruction so semicolon-heavy rows, checklist-style fields, and questionnaire-like segments split more cleanly instead of collapsing into one paragraph chunk.
+- Preserved the current heuristic-first baseline by making single-document overview wording more conservative when the recovered structure is weak.
+- Added `table_layout_robustness_core` and `form_layout_robustness_core` to the maintainer release gate so unfamiliar layout behavior is tracked explicitly instead of only through the broad benchmark.
+- Kept the public release path green while pushing more of the random-PDF risk into targeted layout sanity gates rather than a learned reranker.
+- Added a local-only `layout-sanity-check` maintainer path so unfamiliar external PDFs can be exercised in isolated temp workspaces without embedding private file paths into the benchmark assets.
+
+### v0.6.0-v0.6.4
+
+- Improved document typing and purpose inference so unfamiliar financial/admin PDFs classify more specifically as `financial_statement`, `assessment_form`, or `administrative_form` instead of collapsing back to a generic document bucket.
+- Split document-level answers into clearer type, purpose, audience, and overview render paths while keeping the default public JSON compact.
+- Added `semantic_document_understanding_core` so source-specific type/purpose/audience questions are tracked in the maintainer regression gate.
+- Extended the local `layout-sanity-check` path to return overview, type, purpose, and audience answers on unfamiliar PDFs without embedding private files into the benchmark.
 
 ### v0.1.1-v0.1.2
 
