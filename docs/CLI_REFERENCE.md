@@ -39,6 +39,7 @@ Maintainer validation commands:
 - `package-check`
 - `release-check`
 - `layout-sanity-check`
+- `corpus-sanity-check`
 
 Benchmark/debug commands:
 
@@ -61,6 +62,7 @@ Helpful aliases:
 - `create-demo` -> `create-demo-pdf`
 - `self-check` -> `doctor`
 - `layout-check` -> `layout-sanity-check`
+- `corpus-check` -> `corpus-sanity-check`
 
 Focused help:
 
@@ -90,4 +92,10 @@ pdf-to-json-rag layout-sanity-check --pdfs /path/a.pdf,/path/b.pdf --json
 pdf-to-json-rag answer-query --query "What does this file cover?" --format json
 ```
 
-`layout-sanity-check` returns compact overview, type, purpose, and audience answers for each unfamiliar PDF in addition to the usual structure/layout confidence and smoke-style checks.
+`layout-sanity-check` returns compact overview, type, purpose, audience, and confidence answers for each unfamiliar PDF in addition to structure/layout confidence, semantic confidence, and smoke-style checks.
+
+```bash
+pdf-to-json-rag corpus-sanity-check --sample-size 12 --json
+```
+
+`corpus-sanity-check` samples the repo-local `pdf/` corpus through `pdf/lcwa_gov_pdf_metadata.csv`, runs isolated workflow checks on the sampled PDFs, and returns aggregate counts for buckets, semantic confidence labels, classification status, and trust-policy outcomes.

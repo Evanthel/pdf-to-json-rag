@@ -515,6 +515,9 @@ DOCUMENT_SEMANTIC_INTENTS = {
     "document_type",
     "document_purpose",
     "document_audience",
+    "document_confidence",
+    "document_classification_rationale",
+    "document_classification_limits",
 }
 
 
@@ -2006,10 +2009,86 @@ def _document_confidence(doc_id: str, chunk_root: Path) -> tuple[float | None, f
     return record.structure_confidence, record.layout_confidence
 
 
+def _classification_assessment(doc_id: str, top_k_hits: list[ChunkRecord], chunk_root: Path) -> dict[str, object]:
+    record = _load_document_record(doc_id, chunk_root)
+    semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
+    structure_confidence = getattr(record, "structure_confidence", None)
+    layout_confidence = getattr(record, "layout_confidence", None)
+    semantic_confidence = getattr(record, "semantic_confidence", None)
+    if semantic_confidence is None:
+        semantic_confidence = semantics.semantic_confidence
+    weighted_total = 0.65 * float(semantic_confidence)
+    weight_sum = 0.65
+    if structure_confidence is not None:
+        weighted_total += 0.2 * float(structure_confidence)
+        weight_sum += 0.2
+    if layout_confidence is not None:
+        weighted_total += 0.15 * float(layout_confidence)
+        weight_sum += 0.15
+    classification_confidence = round(min(0.95, weighted_total / max(weight_sum, 0.01)), 3)
+    if classification_confidence >= 0.8:
+        label = "high"
+        status = "well_supported"
+    elif classification_confidence >= 0.62:
+        label = "moderate"
+        status = "provisional"
+    else:
+        label = "low"
+        status = "uncertain"
+    semantic_warnings = list(getattr(record, "semantic_warnings", []) or semantics.semantic_warnings)
+    trust_policy = "stable_semantic_classification"
+    if status == "uncertain":
+        trust_policy = "heuristic_semantic_guess"
+    elif status == "provisional" or semantic_warnings:
+        trust_policy = "confidence_aware_provisional_classification"
+    return {
+        "classification_confidence": classification_confidence,
+        "classification_confidence_label": label,
+        "classification_status": status,
+        "trust_policy": trust_policy,
+        "semantic_confidence": round(float(semantic_confidence), 3),
+        "semantic_confidence_label": getattr(record, "semantic_confidence_label", None) or semantics.semantic_confidence_label,
+        "structure_confidence": structure_confidence,
+        "layout_confidence": layout_confidence,
+        "semantic_rationale": list(getattr(record, "semantic_rationale", []) or semantics.semantic_rationale),
+        "semantic_warnings": semantic_warnings,
+    }
+
+
 def _semantic_phrase(value: str | None, fallback: str = "document") -> str:
     if not value:
         return fallback
     return value.replace("_", " ")
+
+
+def _confidence_aware_language(assessment: dict[str, object]) -> dict[str, str]:
+    label = assessment.get("classification_confidence_label")
+    if label == "high":
+        return {
+            "type_verb": "is a",
+            "purpose_verb": "is",
+            "audience_verb": "is intended for",
+            "overview_type_verb": "is a",
+            "overview_purpose_verb": "its main purpose is",
+            "overview_audience_verb": "it is aimed at",
+        }
+    if label == "moderate":
+        return {
+            "type_verb": "appears to be a",
+            "purpose_verb": "appears to be",
+            "audience_verb": "appears intended for",
+            "overview_type_verb": "appears to be a",
+            "overview_purpose_verb": "its likely purpose is",
+            "overview_audience_verb": "it likely targets",
+        }
+    return {
+        "type_verb": "is likely a",
+        "purpose_verb": "is provisionally",
+        "audience_verb": "is provisionally intended for",
+        "overview_type_verb": "is likely a",
+        "overview_purpose_verb": "its apparent purpose is",
+        "overview_audience_verb": "it may be aimed at",
+    }
 
 
 def _render_document_overview(
@@ -2021,23 +2100,21 @@ def _render_document_overview(
     semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
     fragments: list[str] = []
     cues: list[str] = []
-    structure_confidence, layout_confidence = _document_confidence(doc_id, chunk_root)
-    low_confidence = (
-        (structure_confidence is not None and structure_confidence < 0.62)
-        or (layout_confidence is not None and layout_confidence < 0.55)
-    )
+    assessment = _classification_assessment(doc_id, top_k_hits, chunk_root)
+    low_confidence = assessment["classification_confidence_label"] == "low"
+    language = _confidence_aware_language(assessment)
 
     type_label = semantics.document_type.replace("_", " ") if semantics.document_type else "document"
-    fragments.append(f"{label} {'appears to be a' if low_confidence else 'is a'} {type_label}")
+    fragments.append(f"{label} {language['overview_type_verb']} {type_label}")
     cues.append(type_label)
 
     if semantics.document_purpose:
         purpose = semantics.document_purpose.replace("_", " ")
-        fragments.append(f"{'its likely purpose is' if low_confidence else 'its main purpose is'} {purpose}")
+        fragments.append(f"{language['overview_purpose_verb']} {purpose}")
         cues.append(purpose)
     if semantics.audience and semantics.audience != "general_professional":
         audience = semantics.audience.replace("_", " ")
-        fragments.append(f"{'it likely targets' if low_confidence else 'it is aimed at'} {audience}")
+        fragments.append(f"{language['overview_audience_verb']} {audience}")
         cues.append(audience)
 
     coverage_terms = list(semantics.coverage_terms[:4])
@@ -2075,17 +2152,10 @@ def _render_document_type(
 ) -> tuple[str, list[str], dict[str, object]]:
     label = _document_label(doc_id, chunk_root)
     semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
-    structure_confidence, layout_confidence = _document_confidence(doc_id, chunk_root)
-    low_confidence = (
-        (structure_confidence is not None and structure_confidence < 0.62)
-        or (layout_confidence is not None and layout_confidence < 0.55)
-    )
+    assessment = _classification_assessment(doc_id, top_k_hits, chunk_root)
+    language = _confidence_aware_language(assessment)
     type_label = _semantic_phrase(semantics.document_type)
-    answer = (
-        f"{label} appears to be a {type_label}."
-        if low_confidence
-        else f"{label} is a {type_label}."
-    )
+    answer = f"{label} {language['type_verb']} {type_label}."
     if semantics.document_purpose:
         answer += f" Its main purpose is {_semantic_phrase(semantics.document_purpose)}."
     contract = build_answer_contract(
@@ -2104,18 +2174,12 @@ def _render_document_purpose(
 ) -> tuple[str, list[str], dict[str, object]]:
     label = _document_label(doc_id, chunk_root)
     semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
-    structure_confidence, layout_confidence = _document_confidence(doc_id, chunk_root)
-    low_confidence = (
-        (structure_confidence is not None and structure_confidence < 0.62)
-        or (layout_confidence is not None and layout_confidence < 0.55)
-    )
+    assessment = _classification_assessment(doc_id, top_k_hits, chunk_root)
     purpose = _semantic_phrase(semantics.document_purpose, "reference lookup")
     type_label = _semantic_phrase(semantics.document_type)
-    answer = (
-        f"The main purpose of {label} appears to be {purpose}."
-        if low_confidence
-        else f"The main purpose of {label} is {purpose}."
-    )
+    confidence_label = assessment["classification_confidence_label"]
+    purpose_verb = "is" if confidence_label == "high" else "appears to be" if confidence_label == "moderate" else "is provisionally"
+    answer = f"The main purpose of {label} {purpose_verb} {purpose}."
     answer += f" It is structured as a {type_label}."
     if semantics.audience and semantics.audience != "general_professional":
         answer += f" It is aimed at {_semantic_phrase(semantics.audience)}."
@@ -2135,18 +2199,11 @@ def _render_document_audience(
 ) -> tuple[str, list[str], dict[str, object]]:
     label = _document_label(doc_id, chunk_root)
     semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
-    structure_confidence, layout_confidence = _document_confidence(doc_id, chunk_root)
-    low_confidence = (
-        (structure_confidence is not None and structure_confidence < 0.62)
-        or (layout_confidence is not None and layout_confidence < 0.55)
-    )
+    assessment = _classification_assessment(doc_id, top_k_hits, chunk_root)
+    language = _confidence_aware_language(assessment)
     audience = _semantic_phrase(semantics.audience, "general professionals")
     purpose = _semantic_phrase(semantics.document_purpose, "reference lookup")
-    answer = (
-        f"{label} appears to be intended for {audience}."
-        if low_confidence
-        else f"{label} is intended for {audience}."
-    )
+    answer = f"{label} {language['audience_verb']} {audience}."
     answer += f" Its main purpose is {purpose}."
     contract = build_answer_contract(
         mode="document_audience",
@@ -2155,6 +2212,108 @@ def _render_document_audience(
         summary_type="audience_focused",
     )
     return answer, [audience, purpose], contract
+
+
+def _render_document_confidence(
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+) -> tuple[str, list[str], dict[str, object]]:
+    label = _document_label(doc_id, chunk_root)
+    semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
+    assessment = _classification_assessment(doc_id, top_k_hits, chunk_root)
+    status = assessment["classification_status"]
+    confidence_label = str(assessment["classification_confidence_label"])
+    type_label = _semantic_phrase(semantics.document_type)
+    purpose = _semantic_phrase(semantics.document_purpose, "reference lookup")
+    warnings = [item.replace("_", " ") for item in assessment.get("semantic_warnings", [])]
+    rationale = [item.replace("_", " ") for item in assessment.get("semantic_rationale", [])]
+    if status == "well_supported":
+        answer = (
+            f"The current classification of {label} is well-supported. "
+            f"It is being treated as a {type_label} with {confidence_label} confidence, and its main purpose is {purpose}."
+        )
+    elif status == "provisional":
+        answer = (
+            f"The current classification of {label} is provisional. "
+            f"It is being treated as a {type_label} with {confidence_label} confidence, and its main purpose appears to be {purpose}."
+        )
+    else:
+        answer = (
+            f"The current classification of {label} is uncertain. "
+            f"It is tentatively being treated as a {type_label} with {confidence_label} confidence, and this should be treated as a heuristic guess."
+        )
+    if rationale:
+        answer += " Supporting cues include " + ", ".join(rationale[:2]) + "."
+    if warnings:
+        answer += " Current limits include " + ", ".join(warnings[:2]) + "."
+    contract = build_answer_contract(
+        mode="document_confidence",
+        primary_doc_ids=[doc_id],
+        document_families=[get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"],
+        summary_type="confidence_focused",
+    )
+    cues = [confidence_label, type_label, purpose, *rationale[:2]]
+    return answer, cues, contract
+
+
+def _render_document_classification_rationale(
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+) -> tuple[str, list[str], dict[str, object]]:
+    label = _document_label(doc_id, chunk_root)
+    semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
+    assessment = _classification_assessment(doc_id, top_k_hits, chunk_root)
+    type_label = _semantic_phrase(semantics.document_type)
+    purpose = _semantic_phrase(semantics.document_purpose, "reference lookup")
+    rationale = [item.replace("_", " ") for item in assessment.get("semantic_rationale", [])]
+    if rationale:
+        cue_text = ", ".join(rationale[:3])
+    else:
+        cue_text = "recovered title, section structure, and document metadata"
+    answer = (
+        f"{label} is currently classified as a {type_label} because the strongest supporting cues point in that direction. "
+        f"Its main purpose is being interpreted as {purpose}. "
+        f"The main supporting cues are {cue_text}."
+    )
+    contract = build_answer_contract(
+        mode="document_classification_rationale",
+        primary_doc_ids=[doc_id],
+        document_families=[get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"],
+        summary_type="classification_rationale",
+    )
+    cues = [type_label, purpose, *rationale[:3]]
+    return answer, cues, contract
+
+
+def _render_document_classification_limits(
+    doc_id: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
+) -> tuple[str, list[str], dict[str, object]]:
+    label = _document_label(doc_id, chunk_root)
+    semantics = _document_semantics(doc_id, top_k_hits, chunk_root)
+    assessment = _classification_assessment(doc_id, top_k_hits, chunk_root)
+    type_label = _semantic_phrase(semantics.document_type)
+    warnings = [item.replace("_", " ") for item in assessment.get("semantic_warnings", [])]
+    answer = (
+        f"The current classification of {label} still has limits. "
+        f"It is being treated as a {type_label} with {assessment['classification_confidence_label']} confidence, "
+        f"and that judgment still depends on recovered structure, layout, and semantic cues."
+    )
+    if warnings:
+        answer += " The main current limits are " + ", ".join(warnings[:3]) + "."
+    else:
+        answer += " No major semantic warnings are present, but the result is still heuristic rather than authoritative."
+    contract = build_answer_contract(
+        mode="document_classification_limits",
+        primary_doc_ids=[doc_id],
+        document_families=[get_inventory_entry(doc_id).document_family if get_inventory_entry(doc_id) else "general_reference"],
+        summary_type="classification_limits",
+    )
+    cues = [type_label, str(assessment["classification_confidence_label"]), *warnings[:3]]
+    return answer, cues, contract
 
 
 def _document_support_trace_item(
@@ -2196,7 +2355,9 @@ def _document_support_trace_item(
     coverage_terms = list(semantics.coverage_terms[:4])
     summary_cues = list(semantics.summary_cues[:4])
     inventory_summary = _document_inventory_summary(doc_id, top_k_hits, chunk_root, include_label=True)
-    structure_confidence, layout_confidence = _document_confidence(doc_id, chunk_root)
+    assessment = _classification_assessment(doc_id, top_k_hits, chunk_root)
+    structure_confidence = assessment["structure_confidence"]
+    layout_confidence = assessment["layout_confidence"]
 
     support_fragments: list[str] = []
     if semantics.document_type:
@@ -2226,6 +2387,21 @@ def _document_support_trace_item(
         support_fragments.append(f"structure confidence: {structure_confidence:.3f}")
     if layout_confidence is not None:
         support_fragments.append(f"layout confidence: {layout_confidence:.3f}")
+    support_fragments.append(
+        "classification confidence: "
+        f"{assessment['classification_confidence']:.3f} ({assessment['classification_confidence_label']})"
+    )
+    support_fragments.append("trust policy: " + str(assessment["trust_policy"]).replace("_", " "))
+    if assessment["semantic_rationale"]:
+        support_fragments.append(
+            "semantic rationale: "
+            + ", ".join(item.replace("_", " ") for item in assessment["semantic_rationale"][:3])
+        )
+    if assessment["semantic_warnings"]:
+        support_fragments.append(
+            "semantic warnings: "
+            + ", ".join(item.replace("_", " ") for item in assessment["semantic_warnings"][:3])
+        )
     if matched_terms:
         support_fragments.append("matched terms: " + ", ".join(matched_terms[:4]))
     if support_sentences:
@@ -2241,6 +2417,14 @@ def _document_support_trace_item(
         "audience": semantics.audience,
         "structure_confidence": structure_confidence,
         "layout_confidence": layout_confidence,
+        "semantic_confidence": assessment["semantic_confidence"],
+        "semantic_confidence_label": assessment["semantic_confidence_label"],
+        "classification_confidence": assessment["classification_confidence"],
+        "classification_confidence_label": assessment["classification_confidence_label"],
+        "classification_status": assessment["classification_status"],
+        "trust_policy": assessment["trust_policy"],
+        "semantic_rationale": list(assessment["semantic_rationale"]),
+        "semantic_warnings": list(assessment["semantic_warnings"]),
         "coverage_terms": coverage_terms,
         "summary_cues": summary_cues,
         "section_titles": section_titles,
@@ -2738,6 +2922,18 @@ def _document_overview_mode_answer(
         answer, cues, answer_contract = _render_document_audience(primary_doc_id, top_k_hits, chunk_root)
         template_id = "document_level.audience"
         matched_pattern = "document-audience-facet-summary"
+    elif query_intent == "document_confidence":
+        answer, cues, answer_contract = _render_document_confidence(primary_doc_id, top_k_hits, chunk_root)
+        template_id = "document_level.confidence"
+        matched_pattern = "document-confidence-facet-summary"
+    elif query_intent == "document_classification_rationale":
+        answer, cues, answer_contract = _render_document_classification_rationale(primary_doc_id, top_k_hits, chunk_root)
+        template_id = "document_level.classification_rationale"
+        matched_pattern = "document-classification-rationale-summary"
+    elif query_intent == "document_classification_limits":
+        answer, cues, answer_contract = _render_document_classification_limits(primary_doc_id, top_k_hits, chunk_root)
+        template_id = "document_level.classification_limits"
+        matched_pattern = "document-classification-limits-summary"
     else:
         answer, cues, answer_contract = _render_document_overview(primary_doc_id, top_k_hits, chunk_root)
         template_id = "document_level.overview"
@@ -3460,6 +3656,9 @@ def format_grounded_answer(result: GroundedAnswer) -> str:
         "document_type": "Document type:",
         "document_purpose": "Document purpose:",
         "document_audience": "Document audience:",
+        "document_confidence": "Document confidence:",
+        "document_classification_rationale": "Classification rationale:",
+        "document_classification_limits": "Classification limits:",
         "document_routing": "Recommended source:",
         "source_listing": "Relevant sources:",
         "source_justification": "Why this source:",

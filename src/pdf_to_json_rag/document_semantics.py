@@ -108,6 +108,10 @@ class DocumentSemantics:
     evidence_style: str
     structure_style: str
     document_family: str
+    semantic_confidence: float
+    semantic_confidence_label: str
+    semantic_rationale: tuple[str, ...]
+    semantic_warnings: tuple[str, ...]
     facet_terms: tuple[str, ...]
     summary_cues: tuple[str, ...]
     discovery_terms: tuple[str, ...]
@@ -339,6 +343,14 @@ def interpret_document_semantics(
         evidence_style=resolved_evidence_style,
         structure_style=resolved_structure_style,
         document_family=resolved_document_family,
+        semantic_confidence=float(derived_facets["semantic_confidence"]),
+        semantic_confidence_label=str(derived_facets["semantic_confidence_label"]),
+        semantic_rationale=tuple(
+            item for item in derived_facets["semantic_rationale"] if isinstance(item, str)
+        ),
+        semantic_warnings=tuple(
+            item for item in derived_facets["semantic_warnings"] if isinstance(item, str)
+        ),
         facet_terms=resolved_facet_terms,
         summary_cues=resolved_summary_cues,
         discovery_terms=resolved_discovery_terms,

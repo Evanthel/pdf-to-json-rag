@@ -91,7 +91,13 @@ For unfamiliar local PDFs that you do not want to add to the benchmark, use:
 pdf-to-json-rag layout-sanity-check --pdfs /path/a.pdf,/path/b.pdf --json
 ```
 
-That command now returns compact overview, type, purpose, and audience answers for each PDF so you can see whether an unfamiliar document is only processable or also semantically understood.
+If you are working from the source checkout and want a broader local-only sanity pass over the repo-local PDF corpus:
+
+```bash
+pdf-to-json-rag corpus-sanity-check --sample-size 12 --json
+```
+
+That command now returns compact overview, type, purpose, audience, and confidence answers for each PDF so you can see whether an unfamiliar document is only processable or also semantically understood.
 
 If you changed code under `src/` and have not reinstalled the package yet, run maintainer checks from the source checkout like this:
 

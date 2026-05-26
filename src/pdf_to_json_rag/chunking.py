@@ -1344,6 +1344,30 @@ def chunk_document(
                     buffer_treatment_subtopic = segment_treatment_subtopic
 
     flush_buffer()
+    if not chunks and ordered_blocks:
+        fallback_blocks = [
+            _rebuild_block(source_block=block, text=_clean_text(block.text))
+            for block in ordered_blocks
+            if _clean_text(block.text)
+        ]
+        if fallback_blocks:
+            chunks.append(
+                _make_chunk_record(
+                    document=document,
+                    chunk_number=chunk_number,
+                    blocks=fallback_blocks,
+                    section_id=current_section_id,
+                    section_title=current_section_title,
+                    section_level=current_section_level,
+                    section_parent_id=current_section_parent_id,
+                    section_path=current_section_path,
+                    section_kind=current_section_kind,
+                    section_summary=current_section_summary,
+                    section_coverage_terms=current_section_coverage_terms,
+                    section_content_hints=current_section_content_hints,
+                    section_structure_confidence=current_section_structure_confidence,
+                )
+            )
     return _link_adjacent_chunks(chunks)
 
 

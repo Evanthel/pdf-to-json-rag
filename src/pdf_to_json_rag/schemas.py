@@ -88,6 +88,10 @@ class DocumentRecord(BaseModel):
     structure_style: str | None = None
     structure_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     layout_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    semantic_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    semantic_confidence_label: str | None = None
+    semantic_rationale: list[str] = Field(default_factory=list)
+    semantic_warnings: list[str] = Field(default_factory=list)
     facet_terms: list[str] = Field(default_factory=list)
     detected_language: str | None = None
     extraction_summary: dict[str, str | int | bool | None] = Field(default_factory=dict)

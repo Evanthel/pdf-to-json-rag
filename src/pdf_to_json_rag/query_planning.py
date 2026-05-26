@@ -115,6 +115,66 @@ def has_audience_cue(query_lower: str, query_terms: set[str], *, has_source_anch
     )
 
 
+def has_confidence_cue(query_lower: str, query_terms: set[str], *, has_source_anchor: bool = False) -> bool:
+    return (
+        "how confident" in query_lower
+        or "how certain" in query_lower
+        or "how sure" in query_lower
+        or "confidence in this classification" in query_lower
+        or (
+            has_source_anchor
+            and (
+                "how confident is" in query_lower
+                or "how certain is" in query_lower
+                or "how sure is" in query_lower
+            )
+        )
+        or (
+            ("classification" in query_terms or "overview" in query_terms)
+            and bool(SOURCE_ENTITY_TERMS & query_terms)
+            and ("confidence" in query_terms or "certain" in query_terms or "sure" in query_terms)
+        )
+    )
+
+
+def has_rationale_cue(query_lower: str, query_terms: set[str], *, has_source_anchor: bool = False) -> bool:
+    return (
+        "why is this document classified" in query_lower
+        or "why is this file classified" in query_lower
+        or "what supports this classification" in query_lower
+        or "why is this classified" in query_lower
+        or "why is it classified" in query_lower
+        or (
+            has_source_anchor
+            and (
+                "why is" in query_lower
+                and ("classified" in query_lower or "treated as" in query_lower)
+            )
+        )
+        or (
+            ("classification" in query_terms or "classified" in query_terms)
+            and ("why" in query_terms or "supports" in query_terms or "support" in query_terms)
+        )
+    )
+
+
+def has_uncertainty_cue(query_lower: str, query_terms: set[str], *, has_source_anchor: bool = False) -> bool:
+    return (
+        "what are the main limits of this document classification" in query_lower
+        or "what are the limits of this classification" in query_lower
+        or "what is uncertain about this document classification" in query_lower
+        or "what are you unsure about" in query_lower
+        or "what are the limitations of this classification" in query_lower
+        or (
+            has_source_anchor
+            and (
+                ("limits" in query_terms or "limitations" in query_terms or "uncertain" in query_terms)
+                and "classification" in query_terms
+            )
+        )
+    )
+
+
 def has_routing_cue(query_lower: str, query_terms: set[str]) -> bool:
     return (
         bool({"file", "document", "source"} & query_terms)
@@ -162,6 +222,9 @@ def _build_query_features(
         "type_cue": has_type_cue(query_lower, query_terms, has_source_anchor=has_source_anchor),
         "purpose_cue": has_purpose_cue(query_lower, query_terms, has_source_anchor=has_source_anchor),
         "audience_cue": has_audience_cue(query_lower, query_terms, has_source_anchor=has_source_anchor),
+        "confidence_cue": has_confidence_cue(query_lower, query_terms, has_source_anchor=has_source_anchor),
+        "rationale_cue": has_rationale_cue(query_lower, query_terms, has_source_anchor=has_source_anchor),
+        "uncertainty_cue": has_uncertainty_cue(query_lower, query_terms, has_source_anchor=has_source_anchor),
         "routing_cue": has_routing_cue(query_lower, query_terms),
         "compare_cue": has_compare_cue(query_lower, query_terms),
         "plural_source_cue": has_plural_source_cue(query_lower, query_terms),
@@ -218,6 +281,24 @@ def _score_answer_modes(
         scores["document_overview"] += 4.5
         if shortlist_count:
             scores["document_overview"] += 1.0
+    if features["confidence_cue"]:
+        scores["document_overview"] += 4.5
+        if shortlist_count:
+            scores["document_overview"] += 0.75
+        if features["explicit_source_anchor"] or features["metadata_matches"]:
+            scores["document_overview"] += 0.5
+    if features["rationale_cue"]:
+        scores["document_overview"] += 4.25
+        if shortlist_count:
+            scores["document_overview"] += 0.75
+        if features["explicit_source_anchor"] or features["metadata_matches"]:
+            scores["document_overview"] += 0.5
+    if features["uncertainty_cue"]:
+        scores["document_overview"] += 4.25
+        if shortlist_count:
+            scores["document_overview"] += 0.75
+        if features["explicit_source_anchor"] or features["metadata_matches"]:
+            scores["document_overview"] += 0.5
     if features["routing_cue"]:
         scores["document_routing"] += 4.0
         if shortlist_count:
@@ -266,6 +347,12 @@ def _rationale_for_mode(answer_mode: str, features: dict[str, bool], shortlist: 
             rationale.append("purpose_cue")
         if features["audience_cue"]:
             rationale.append("audience_cue")
+        if features["confidence_cue"]:
+            rationale.append("confidence_cue")
+        if features["rationale_cue"]:
+            rationale.append("rationale_cue")
+        if features["uncertainty_cue"]:
+            rationale.append("uncertainty_cue")
         if shortlist:
             rationale.append("shortlist_available")
     elif answer_mode == "document_routing":
@@ -367,6 +454,12 @@ def plan_query(query: str) -> QueryPlan:
             query_intent = "document_purpose"
         elif features["audience_cue"]:
             query_intent = "document_audience"
+        elif features["confidence_cue"]:
+            query_intent = "document_confidence"
+        elif features["rationale_cue"]:
+            query_intent = "document_classification_rationale"
+        elif features["uncertainty_cue"]:
+            query_intent = "document_classification_limits"
         else:
             query_intent = "document_overview"
         preferred_doc_id = explicit_source_doc_id or (inventory_doc_ids[0] if inventory_doc_ids else None)

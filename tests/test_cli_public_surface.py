@@ -148,6 +148,8 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertGreaterEqual(inspect_payload["result"]["section_count"], 1)
         self.assertIsNotNone(inspect_payload["result"]["structure_confidence"])
         self.assertIsNotNone(inspect_payload["result"]["layout_confidence"])
+        self.assertIsNotNone(inspect_payload["result"]["semantic_confidence"])
+        self.assertTrue(inspect_payload["result"]["semantic_confidence_label"])
         smoke = self._run(
             "smoke-check",
             "--pdf",
@@ -162,6 +164,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertTrue(smoke_payload["result"]["all_pass"])
         self.assertIsNotNone(smoke_payload["result"]["document"]["structure_confidence"])
         self.assertIsNotNone(smoke_payload["result"]["document"]["layout_confidence"])
+        self.assertIsNotNone(smoke_payload["result"]["document"]["semantic_confidence"])
 
         index_dir = self.data_dir / "index" / "workflow_smoke"
         answer = self._run(
@@ -199,11 +202,15 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertTrue(support_trace[0]["section_paths"])
         self.assertIsNotNone(support_trace[0]["structure_confidence"])
         self.assertIsNotNone(support_trace[0]["layout_confidence"])
+        self.assertIsNotNone(support_trace[0]["semantic_confidence"])
+        self.assertIsNotNone(support_trace[0]["classification_confidence"])
+        self.assertTrue(support_trace[0]["trust_policy"])
+        self.assertTrue(support_trace[0]["semantic_rationale"])
         self.assertTrue(answer_payload["result"]["top_k_hits"][0]["section_path"])
         self.assertIsNotNone(answer_payload["result"]["top_k_hits"][0]["structure_confidence"])
         self.assertIsNotNone(answer_payload["result"]["top_k_hits"][0]["layout_confidence"])
 
-    def test_plan_query_distinguishes_type_purpose_and_audience(self) -> None:
+    def test_plan_query_distinguishes_type_purpose_audience_confidence_rationale_and_limits(self) -> None:
         type_payload = json.loads(
             self._run(
                 "plan-query",
@@ -228,9 +235,36 @@ class CliPublicSurfaceTests(unittest.TestCase):
                 "--json",
             ).stdout
         )
+        confidence_payload = json.loads(
+            self._run(
+                "plan-query",
+                "--query",
+                "How confident is this document classification?",
+                "--json",
+            ).stdout
+        )
+        rationale_payload = json.loads(
+            self._run(
+                "plan-query",
+                "--query",
+                "Why is this document classified this way?",
+                "--json",
+            ).stdout
+        )
+        limits_payload = json.loads(
+            self._run(
+                "plan-query",
+                "--query",
+                "What are the main limits of this document classification?",
+                "--json",
+            ).stdout
+        )
         self.assertEqual(type_payload["result"]["query_intent"], "document_type")
         self.assertEqual(purpose_payload["result"]["query_intent"], "document_purpose")
         self.assertEqual(audience_payload["result"]["query_intent"], "document_audience")
+        self.assertEqual(confidence_payload["result"]["query_intent"], "document_confidence")
+        self.assertEqual(rationale_payload["result"]["query_intent"], "document_classification_rationale")
+        self.assertEqual(limits_payload["result"]["query_intent"], "document_classification_limits")
 
     def test_error_json_for_missing_index(self) -> None:
         self._run("init", "--json")
@@ -340,6 +374,8 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(facets["document_type"], "financial_statement")
         self.assertEqual(facets["document_purpose"], "financial_disclosure")
         self.assertEqual(facets["audience"], "applicants")
+        self.assertGreaterEqual(facets["semantic_confidence"], 0.75)
+        self.assertEqual(facets["semantic_confidence_label"], "high")
 
     def test_layout_sanity_check_json_for_multiple_pdfs(self) -> None:
         second_pdf = self.workspace / "financial-form.pdf"
@@ -374,8 +410,106 @@ class CliPublicSurfaceTests(unittest.TestCase):
             self.assertTrue(item["type_answer"])
             self.assertTrue(item["purpose_answer"])
             self.assertTrue(item["audience_answer"])
+            self.assertTrue(item["confidence_answer"])
+            self.assertTrue(item["rationale_answer"])
+            self.assertTrue(item["limits_answer"])
             self.assertIsNotNone(item["structure_confidence"])
             self.assertIsNotNone(item["layout_confidence"])
+            self.assertIsNotNone(item["semantic_confidence"])
+            self.assertTrue(item["semantic_confidence_label"])
+            self.assertTrue(item["classification_status"])
+            self.assertTrue(item["trust_policy"])
+
+    def test_corpus_sanity_check_with_local_override(self) -> None:
+        corpus_dir = self.workspace / "pdf-corpus"
+        corpus_dir.mkdir(parents=True, exist_ok=True)
+
+        entries = [
+            (
+                "FORMENTRY",
+                "http://example.test/forms/financial_statement.pdf",
+                "Personal Financial Statement\n\nTotal Assets\nTotal Liabilities\nNet Worth\n",
+                2,
+                "Acrobat PDFMaker",
+                "Adobe PDF Library",
+            ),
+            (
+                "SCANENTRY",
+                "http://example.test/scans/checklist.pdf",
+                "Checklist Appendix\n\nConfirm identity\nConfirm medication\nConfirm follow-up\n",
+                1,
+                "Acrobat Capture 3.0",
+                "Scan Producer",
+            ),
+            (
+                "GUIDEENTRY",
+                "http://example.test/guidance/incident_guide.pdf",
+                "Guidance Note\n\nThis guidance explains incident management and reporting.\n",
+                4,
+                "Word",
+                "Microsoft Print to PDF",
+            ),
+        ]
+
+        for digest, _, text, pages, _, _ in entries:
+            doc = fitz.open()
+            for _ in range(pages):
+                page = doc.new_page()
+                page.insert_text((72, 72), text)
+            doc.save(corpus_dir / f"{digest}.pdf")
+            doc.close()
+
+        metadata_lines = [
+            "urlkey,timestamp,original,mimetype,statuscode,digest,pdf_version,creator_tool,producer,date_created,pages,page_width,page_height,surface_area,file_size,sha256,sha512"
+        ]
+        for digest, original, _, pages, creator_tool, producer in entries:
+            metadata_lines.append(
+                ",".join(
+                    [
+                        original.removeprefix("http://"),
+                        "20260526000000",
+                        original,
+                        "application/pdf",
+                        "200",
+                        digest,
+                        "1.4",
+                        creator_tool,
+                        producer,
+                        "2026-05-26T00:00:00Z",
+                        str(pages),
+                        "612",
+                        "792",
+                        "94",
+                        "12000",
+                        "sha256",
+                        "sha512",
+                    ]
+                )
+            )
+        (corpus_dir / "lcwa_gov_pdf_metadata.csv").write_text("\n".join(metadata_lines) + "\n", encoding="utf-8")
+
+        self._run("init", "--json")
+        process = self._run(
+            "corpus-sanity-check",
+            "--corpus-dir",
+            str(corpus_dir),
+            "--sample-size",
+            "3",
+            "--json",
+        )
+        payload = json.loads(process.stdout)
+        self.assertTrue(payload["ok"])
+        result = payload["result"]
+        self.assertTrue(result["all_pass"])
+        self.assertEqual(result["corpus_pdf_count"], 3)
+        self.assertEqual(result["sample_size"], 3)
+        self.assertEqual(len(result["results"]), 3)
+        self.assertIn("classification_status_counts", result["summary"])
+        self.assertIn("trust_policy_counts", result["summary"])
+        self.assertIn("bucket_counts", result["summary"])
+        self.assertGreaterEqual(result["summary"]["bucket_counts"].get("form_like", 0), 1)
+        self.assertTrue(all(item["overview_answer"] for item in result["results"]))
+        self.assertTrue(all(item["confidence_answer"] for item in result["results"]))
 
 
 if __name__ == "__main__":

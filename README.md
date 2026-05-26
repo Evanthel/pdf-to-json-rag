@@ -23,7 +23,7 @@ Current public version: `0.1.0-beta`
 
 Internal development iterations in this repo use `v1.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
 
-Current internal milestone: `v0.6.4`
+Current internal milestone: `v0.7.0`
 
 The current baseline includes:
 
@@ -40,6 +40,9 @@ The current baseline includes:
 - richer document typing and purpose inference for unfamiliar financial/admin forms
 - distinct document-level answers for type, purpose, audience, and overview queries
 - a semantic document-understanding gate for source-specific type/purpose/audience questions
+- semantic confidence signals and confidence-aware document classification answers
+- explicit classification-rationale and classification-limits answers for trust-aware document semantics
+- a local corpus sampler over repo-local `pdf/` artifacts and metadata for unknown-document sanity checks
 - compact default JSON output with richer debug state behind `--verbose`
 - deterministic local embeddings by default, with optional `sentence-transformers`
 
@@ -47,8 +50,8 @@ Validation state:
 
 - public install/release path: green
 - maintainer release gates: green
-- full 70-case benchmark: green
-  - `precision@5 = 0.5552`
+- full 77-case benchmark: green
+  - `precision@5 = 0.6031`
   - `recall@5 = 1.0`
   - `MRR = 1.0`
   - `avg_keyword_coverage = 1.0`
@@ -60,7 +63,7 @@ Validation state:
 
 Current engineering direction:
 
-- keep improving document-processing robustness on unfamiliar layouts and single-document PDFs
+- keep improving document-processing robustness and unknown-document semantics on unfamiliar PDFs
 - keep learned reranking deferred until the heuristic baseline stops being sufficient
 
 ## Capabilities
@@ -87,6 +90,7 @@ Current engineering direction:
   - `package-check`
   - `release-check`
   - `layout-sanity-check`
+  - `corpus-sanity-check`
 
 ## Workflow
 
@@ -140,7 +144,13 @@ Local sanity check for unfamiliar PDFs:
 pdf-to-json-rag layout-sanity-check --pdfs /path/a.pdf,/path/b.pdf --json
 ```
 
-That local sanity path now returns compact overview, type, purpose, and audience answers so you can see whether an unfamiliar PDF is only processable or also semantically understood.
+That local sanity path now returns compact overview, type, purpose, audience, and confidence answers so you can see whether an unfamiliar PDF is only processable or also semantically understood.
+
+Local corpus sanity check over the repo-local `pdf/` directory:
+
+```bash
+pdf-to-json-rag corpus-sanity-check --sample-size 12 --json
+```
 
 When you are validating new local code in a source checkout before reinstalling the package, prefer:
 
@@ -183,7 +193,8 @@ The saved evaluation report includes:
 
 - per-case retrieval, answer-trace, and evidence snapshots
 - slice reporting for document discovery, structure-heavy inputs, and source-anchored cases
-- compact maintainer shards for planning, structure, selection, anchors, semantics, and relationship reasoning
+- compact maintainer shards for planning, structure, selection, anchors, semantics, confidence-aware document understanding, and relationship reasoning
+- a trust-policy shard for classification rationale and classification limits answers
 - extra sanity shards for layout, single-document, table-like, and form-heavy behavior, plus a sampled faithfulness audit
 
 Current gate status:

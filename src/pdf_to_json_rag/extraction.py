@@ -415,6 +415,10 @@ def build_document_record_from_native_extraction(
         structure_style=semantics.structure_style,
         structure_confidence=structure_analysis.structure_confidence,
         layout_confidence=structure_analysis.layout_confidence,
+        semantic_confidence=semantics.semantic_confidence,
+        semantic_confidence_label=semantics.semantic_confidence_label,
+        semantic_rationale=list(semantics.semantic_rationale),
+        semantic_warnings=list(semantics.semantic_warnings),
         facet_terms=list(semantics.facet_terms),
         extraction_summary={
             "native_blocks": len(extraction.blocks),

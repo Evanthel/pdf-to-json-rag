@@ -52,7 +52,7 @@ The first working version stayed local-first and deliberately narrow:
 ## 5. Current Baseline
 
 Current public version: `0.1.0-beta`
-Current internal implementation level: `v0.6.4`
+Current internal implementation level: `v0.7.0`
 
 What the repo now has:
 
@@ -61,16 +61,19 @@ What the repo now has:
 - feature-based query planning
 - explicit `document_selection` traces
 - distinct document-level type / purpose / audience / overview answers
+- confidence-aware document classification answers and semantic confidence signals
+- explicit classification-rationale and classification-limits answers
 - compact default JSON answers with richer debug output behind `--verbose`
 - public install/release checks through `doctor`, `smoke-check`, `package-check`, and `release-check`
 - local semantic sanity checks for unfamiliar PDFs through `layout-sanity-check`
+- a local corpus sampler over repo-local `pdf/` artifacts through `corpus-sanity-check`
 
 Current validation snapshot:
 
 - public release gates: green
 - maintainer regression gates: green
-- full 70-case benchmark: green
-  - `precision@5 = 0.5552`
+- full 77-case benchmark: green
+  - `precision@5 = 0.6031`
   - `recall@5 = 1.0`
   - `MRR = 1.0`
   - `avg_keyword_coverage = 1.0`
@@ -115,11 +118,19 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
   - split document-level answers into clearer type, purpose, audience, and overview render paths
   - added `semantic_document_understanding_core` to the maintainer regression gate
   - extended local `layout-sanity-check` to report overview, type, purpose, and audience answers for unfamiliar PDFs
+- `v0.6.5-v0.6.8`
+  - added semantic confidence signals and confidence-aware document classification answers
+  - added `confidence_aware_document_core` to the maintainer regression gate
+  - extended local `layout-sanity-check` to report confidence answers and semantic-confidence metadata for unfamiliar PDFs
+- `v0.6.9-v0.7.0`
+  - added classification-rationale and classification-limits answers to the document-level trust layer
+  - added `trust_policy_document_core` to the maintainer regression gate
+  - added a local-only `corpus-sanity-check` path that samples repo-local `pdf/` artifacts through `lcwa_gov_pdf_metadata.csv`
 
 ### 6.2. Next Steps
 
-1. Keep improving unknown-document semantic understanding before considering heavier retrieval changes.
-2. Broaden unfamiliar-layout sanity coverage with more external table-heavy and form-heavy PDFs.
+1. Keep improving unknown-document semantic understanding and trust signalling before considering heavier retrieval changes.
+2. Use the local `pdf/` corpus more systematically to find failure slices beyond the curated benchmark.
 3. Keep evaluation focused on architecture gates and unknown-document sanity checks rather than benchmark growth for its own sake.
 4. Revisit a learned reranker only if the current heuristic baseline stops passing release gates and unknown-document sanity gates.
 

@@ -1,6 +1,8 @@
 """CLI entry points for the local PDF-to-JSON RAG tool."""
 
 import argparse
+import csv
+from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from importlib import resources as importlib_resources
 import json
@@ -56,6 +58,7 @@ COMMAND_ALIASES = {
     "demo": "demo-profile",
     "self-check": "doctor",
     "layout-check": "layout-sanity-check",
+    "corpus-check": "corpus-sanity-check",
 }
 
 COMMAND_HELP: dict[str, dict[str, object]] = {
@@ -139,6 +142,10 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
         "summary": "Maintainer check: run isolated local sanity workflows on one or more external PDFs without adding them to the benchmark.",
         "example": "pdf-to-json-rag layout-sanity-check --pdfs /path/a.pdf,/path/b.pdf --json",
     },
+    "corpus-sanity-check": {
+        "summary": "Maintainer check: sample the local pdf/ corpus and run compact semantic sanity workflows on unfamiliar PDFs.",
+        "example": "pdf-to-json-rag corpus-sanity-check --sample-size 12 --json",
+    },
     "help": {
         "summary": "Show command summaries or detailed help for one command.",
         "example": "pdf-to-json-rag help --topic answer-query",
@@ -164,6 +171,19 @@ EXPECTED_EXAMPLE_FILES = (
     "plan_query.example.json",
     "answer_query.example.json",
 )
+
+
+@dataclass(frozen=True)
+class LocalPdfCorpusEntry:
+    digest: str
+    pdf_path: Path
+    urlkey: str
+    original: str
+    pages: int
+    file_size: int
+    creator_tool: str
+    producer: str
+    bucket: str
 
 
 def _human_status(passed: bool) -> str:
@@ -263,6 +283,10 @@ def _document_payload(entry) -> dict[str, object]:
         "structure_style": entry.structure_style,
         "structure_confidence": None,
         "layout_confidence": None,
+        "semantic_confidence": None,
+        "semantic_confidence_label": None,
+        "semantic_rationale": [],
+        "semantic_warnings": [],
         "inventory_summary": entry.inventory_summary,
         "coverage_summary": entry.coverage_summary,
         "coverage_terms": list(entry.coverage_terms),
@@ -442,6 +466,127 @@ def _resolve_pdf_paths(value: str) -> list[Path]:
     return [_resolve_pdf_path(item) for item in raw_items]
 
 
+def _local_pdf_corpus_paths(corpus_dir: Path | None = None) -> tuple[Path, Path] | None:
+    if corpus_dir is not None:
+        metadata_path = corpus_dir / "lcwa_gov_pdf_metadata.csv"
+        return (corpus_dir, metadata_path) if corpus_dir.exists() and metadata_path.exists() else None
+    project_root = _discover_project_root(PATHS.root) or _discover_project_root(Path.cwd())
+    if project_root is None:
+        return None
+    pdf_dir = project_root / "pdf"
+    metadata_path = pdf_dir / "lcwa_gov_pdf_metadata.csv"
+    if pdf_dir.exists() and metadata_path.exists():
+        return pdf_dir, metadata_path
+    return None
+
+
+def _safe_int(value: str | None) -> int:
+    try:
+        return int(str(value or "0").strip())
+    except ValueError:
+        return 0
+
+
+def _pdf_corpus_bucket(url_text: str, *, pages: int, creator_tool: str, producer: str) -> str:
+    lowered = " ".join((url_text, creator_tool, producer)).lower()
+    if any(term in lowered for term in ("scan", "scanning", "capture", "ocr")):
+        return "scan_like"
+    if any(term in lowered for term in ("form", "statement", "application", "questionnaire", "checklist", "appendix")):
+        return "form_like"
+    if pages <= 2:
+        return "short_doc"
+    if pages >= 20:
+        return "long_doc"
+    return "medium_doc"
+
+
+def _load_local_pdf_corpus(corpus_dir: Path | None = None) -> list[LocalPdfCorpusEntry]:
+    corpus_paths = _local_pdf_corpus_paths(corpus_dir)
+    if corpus_paths is None:
+        location = str(corpus_dir) if corpus_dir else "repo-local pdf/"
+        raise CliError(
+            "missing_local_pdf_corpus",
+            f"Local PDF corpus was not found: {location}",
+            {"corpus_dir": location},
+        )
+    pdf_dir, metadata_path = corpus_paths
+    entries: list[LocalPdfCorpusEntry] = []
+    try:
+        metadata_text = metadata_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        metadata_text = metadata_path.read_text(encoding="latin-1")
+    with tempfile.NamedTemporaryFile("w+", encoding="utf-8", newline="", delete=True) as handle:
+        handle.write(metadata_text)
+        handle.flush()
+        handle.seek(0)
+        reader = csv.DictReader(handle)
+        for row in reader:
+            digest = str(row.get("digest", "")).strip()
+            if not digest:
+                continue
+            pdf_path = pdf_dir / f"{digest}.pdf"
+            if not pdf_path.exists():
+                continue
+            pages = _safe_int(row.get("pages"))
+            file_size = _safe_int(row.get("file_size"))
+            if pages <= 0 or file_size <= 0:
+                continue
+            creator_tool = str(row.get("creator_tool", "") or "").strip()
+            producer = str(row.get("producer", "") or "").strip()
+            urlkey = str(row.get("urlkey", "") or "").strip()
+            original = str(row.get("original", "") or "").strip()
+            entries.append(
+                LocalPdfCorpusEntry(
+                    digest=digest,
+                    pdf_path=pdf_path.resolve(),
+                    urlkey=urlkey,
+                    original=original,
+                    pages=pages,
+                    file_size=file_size,
+                    creator_tool=creator_tool,
+                    producer=producer,
+                    bucket=_pdf_corpus_bucket(
+                        f"{urlkey} {original}",
+                        pages=pages,
+                        creator_tool=creator_tool,
+                        producer=producer,
+                    ),
+                )
+            )
+    entries.sort(key=lambda item: (item.bucket, item.pages, item.file_size, item.digest))
+    return entries
+
+
+def _sample_local_pdf_corpus(entries: list[LocalPdfCorpusEntry], sample_size: int) -> list[LocalPdfCorpusEntry]:
+    if sample_size <= 0:
+        raise CliError(
+            "invalid_sample_size",
+            "Sample size must be a positive integer",
+            {"sample_size": sample_size},
+        )
+    buckets = ("scan_like", "form_like", "short_doc", "medium_doc", "long_doc")
+    grouped: dict[str, list[LocalPdfCorpusEntry]] = {bucket: [] for bucket in buckets}
+    for entry in entries:
+        grouped.setdefault(entry.bucket, []).append(entry)
+    for bucket_entries in grouped.values():
+        bucket_entries.sort(key=lambda item: (item.pages, item.file_size, item.digest))
+
+    sampled: list[LocalPdfCorpusEntry] = []
+    while len(sampled) < sample_size:
+        progressed = False
+        for bucket in buckets:
+            bucket_entries = grouped.get(bucket, [])
+            if not bucket_entries:
+                continue
+            sampled.append(bucket_entries.pop(0))
+            progressed = True
+            if len(sampled) >= sample_size:
+                break
+        if not progressed:
+            break
+    return sampled
+
+
 def _resolve_index_dir(value: str | None, default: Path) -> Path:
     return Path(value).expanduser().resolve() if value else default
 
@@ -593,14 +738,36 @@ def _run_layout_sanity_check(pdf_paths: list[Path], k: int = 5) -> dict[str, obj
                 data_dir=data_dir,
             )
             audience_payload = json.loads(audience_process.stdout) if audience_process.stdout.strip() else {}
+            confidence_process = _run_cli_subprocess(
+                ["answer-query", "--query", "How confident is this document classification?", "--json"],
+                data_dir=data_dir,
+            )
+            confidence_payload = json.loads(confidence_process.stdout) if confidence_process.stdout.strip() else {}
+            rationale_process = _run_cli_subprocess(
+                ["answer-query", "--query", "Why is this document classified this way?", "--json"],
+                data_dir=data_dir,
+            )
+            rationale_payload = json.loads(rationale_process.stdout) if rationale_process.stdout.strip() else {}
+            limits_process = _run_cli_subprocess(
+                ["answer-query", "--query", "What are the main limits of this document classification?", "--json"],
+                data_dir=data_dir,
+            )
+            limits_payload = json.loads(limits_process.stdout) if limits_process.stdout.strip() else {}
 
             inspect_result = inspect_payload.get("result", {}) if inspect_payload.get("ok") else {}
             overview_answer = smoke_result.get("answer", {}).get("answer", "")
             type_answer = type_payload.get("result", {}).get("answer", "") if type_payload.get("ok") else ""
             purpose_answer = purpose_payload.get("result", {}).get("answer", "") if purpose_payload.get("ok") else ""
             audience_answer = audience_payload.get("result", {}).get("answer", "") if audience_payload.get("ok") else ""
+            confidence_answer = confidence_payload.get("result", {}).get("answer", "") if confidence_payload.get("ok") else ""
+            rationale_answer = rationale_payload.get("result", {}).get("answer", "") if rationale_payload.get("ok") else ""
+            limits_answer = limits_payload.get("result", {}).get("answer", "") if limits_payload.get("ok") else ""
+            confidence_support = confidence_payload.get("result", {}).get("answer_trace", {}).get("support_trace", [])
+            confidence_support_item = confidence_support[0] if confidence_support else {}
             structure_confidence = inspect_result.get("structure_confidence")
             layout_confidence = inspect_result.get("layout_confidence")
+            semantic_confidence = inspect_result.get("semantic_confidence")
+            semantic_confidence_label = inspect_result.get("semantic_confidence_label")
 
             checks = [
                 {"name": "smoke_ok", "passed": bool(smoke_payload.get("ok"))},
@@ -608,10 +775,15 @@ def _run_layout_sanity_check(pdf_paths: list[Path], k: int = 5) -> dict[str, obj
                 {"name": "inspect_ok", "passed": bool(inspect_payload.get("ok"))},
                 {"name": "structure_confidence_present", "passed": structure_confidence is not None},
                 {"name": "layout_confidence_present", "passed": layout_confidence is not None},
+                {"name": "semantic_confidence_present", "passed": semantic_confidence is not None},
                 {"name": "overview_answer_present", "passed": bool(overview_answer)},
                 {"name": "type_answer_present", "passed": bool(type_answer)},
                 {"name": "purpose_answer_present", "passed": bool(purpose_answer)},
                 {"name": "audience_answer_present", "passed": bool(audience_answer)},
+                {"name": "confidence_answer_present", "passed": bool(confidence_answer)},
+                {"name": "rationale_answer_present", "passed": bool(rationale_answer)},
+                {"name": "limits_answer_present", "passed": bool(limits_answer)},
+                {"name": "type_vs_purpose_distinct", "passed": bool(type_answer and purpose_answer and type_answer != purpose_answer)},
             ]
 
             result.update(
@@ -622,12 +794,21 @@ def _run_layout_sanity_check(pdf_paths: list[Path], k: int = 5) -> dict[str, obj
                     "document_family": inspect_result.get("document_family") or smoke_result.get("document", {}).get("document_family"),
                     "structure_confidence": structure_confidence,
                     "layout_confidence": layout_confidence,
+                    "semantic_confidence": semantic_confidence,
+                    "semantic_confidence_label": semantic_confidence_label,
+                    "classification_status": confidence_support_item.get("classification_status"),
+                    "trust_policy": confidence_support_item.get("trust_policy"),
+                    "semantic_rationale": inspect_result.get("semantic_rationale", []),
+                    "semantic_warnings": inspect_result.get("semantic_warnings", []),
                     "section_count": inspect_result.get("section_count"),
                     "chunk_count": smoke_result.get("index", {}).get("chunk_count"),
                     "overview_answer": overview_answer,
                     "type_answer": type_answer,
                     "purpose_answer": purpose_answer,
                     "audience_answer": audience_answer,
+                    "confidence_answer": confidence_answer,
+                    "rationale_answer": rationale_answer,
+                    "limits_answer": limits_answer,
                     "smoke_checks": smoke_result.get("checks", []),
                     "checks": checks,
                     "all_pass": all(item["passed"] for item in checks),
@@ -639,6 +820,73 @@ def _run_layout_sanity_check(pdf_paths: list[Path], k: int = 5) -> dict[str, obj
         "pdf_count": len(pdf_paths),
         "results": results,
         "all_pass": all(bool(item.get("all_pass")) for item in results),
+    }
+
+
+def _count_values(values: list[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        if not value:
+            continue
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None, k: int = 5) -> dict[str, object]:
+    corpus_entries = _load_local_pdf_corpus(corpus_dir)
+    sampled_entries = _sample_local_pdf_corpus(corpus_entries, sample_size)
+    layout_payload = _run_layout_sanity_check([entry.pdf_path for entry in sampled_entries], k=k)
+    by_pdf = {str(item["pdf"]): item for item in layout_payload["results"]}
+
+    sampled_results: list[dict[str, object]] = []
+    for entry in sampled_entries:
+        payload = dict(by_pdf.get(str(entry.pdf_path), {}))
+        payload.update(
+            {
+                "digest": entry.digest,
+                "bucket": entry.bucket,
+                "pages": entry.pages,
+                "file_size": entry.file_size,
+                "creator_tool": entry.creator_tool,
+                "producer": entry.producer,
+                "urlkey": entry.urlkey,
+                "original": entry.original,
+            }
+        )
+        sampled_results.append(payload)
+
+    structure_values = [float(item["structure_confidence"]) for item in sampled_results if item.get("structure_confidence") is not None]
+    layout_values = [float(item["layout_confidence"]) for item in sampled_results if item.get("layout_confidence") is not None]
+    semantic_values = [float(item["semantic_confidence"]) for item in sampled_results if item.get("semantic_confidence") is not None]
+    generic_warning_count = sum(
+        1
+        for item in sampled_results
+        if any(
+            warning in {"generic_document_type", "generic_document_purpose", "generic_audience"}
+            for warning in item.get("semantic_warnings", [])
+        )
+    )
+    summary = {
+        "avg_structure_confidence": round(sum(structure_values) / len(structure_values), 3) if structure_values else None,
+        "avg_layout_confidence": round(sum(layout_values) / len(layout_values), 3) if layout_values else None,
+        "avg_semantic_confidence": round(sum(semantic_values) / len(semantic_values), 3) if semantic_values else None,
+        "bucket_counts": _count_values([str(item.get("bucket", "")) for item in sampled_results]),
+        "document_type_counts": _count_values([str(item.get("document_type", "")) for item in sampled_results]),
+        "document_purpose_counts": _count_values([str(item.get("document_purpose", "")) for item in sampled_results]),
+        "classification_status_counts": _count_values([str(item.get("classification_status", "")) for item in sampled_results]),
+        "trust_policy_counts": _count_values([str(item.get("trust_policy", "")) for item in sampled_results]),
+        "semantic_confidence_label_counts": _count_values([str(item.get("semantic_confidence_label", "")) for item in sampled_results]),
+        "generic_warning_count": generic_warning_count,
+    }
+    corpus_paths = _local_pdf_corpus_paths(corpus_dir)
+    return {
+        "corpus_dir": str(corpus_paths[0]) if corpus_paths else (str(corpus_dir) if corpus_dir else None),
+        "metadata_path": str(corpus_paths[1]) if corpus_paths else None,
+        "corpus_pdf_count": len(corpus_entries),
+        "sample_size": len(sampled_entries),
+        "results": sampled_results,
+        "summary": summary,
+        "all_pass": bool(layout_payload["all_pass"]),
     }
 
 
@@ -871,6 +1119,8 @@ RELEASE_CHECK_SHARDS = [
     "section_reconstruction_core",
     "document_selection_core",
     "semantic_document_understanding_core",
+    "confidence_aware_document_core",
+    "trust_policy_document_core",
     "document_maintenance_core",
     "structured_form_maintenance_core",
     "layout_robustness_core",
@@ -1051,6 +1301,10 @@ def _smoke_checks(payload: dict[str, object]) -> list[dict[str, object]]:
         {
             "name": "inventory_summary_present",
             "passed": bool(payload["document"].get("inventory_summary")),
+        },
+        {
+            "name": "semantic_confidence_present",
+            "passed": payload["document"].get("semantic_confidence") is not None,
         },
         {
             "name": "plan_classified",
@@ -1299,6 +1553,10 @@ def main() -> None:
         help="Comma-separated local PDF paths for layout-sanity-check.",
     )
     parser.add_argument(
+        "--corpus-dir",
+        help="Optional local corpus directory override for corpus-sanity-check.",
+    )
+    parser.add_argument(
         "--path",
         help="Optional output path for generated local assets such as create-demo-pdf.",
     )
@@ -1319,6 +1577,12 @@ def main() -> None:
         dest="k",
         default=5,
         help="Number of retrieval hits to return.",
+    )
+    parser.add_argument(
+        "--sample-size",
+        type=int,
+        default=12,
+        help="Number of local corpus PDFs to sample for corpus-sanity-check.",
     )
     parser.add_argument(
         "--index-dir",
@@ -1507,10 +1771,44 @@ def main() -> None:
                 print(
                     f"  type={item.get('document_type')} | purpose={item.get('document_purpose')} | "
                     f"structure_confidence={item.get('structure_confidence')} | "
-                    f"layout_confidence={item.get('layout_confidence')}"
+                    f"layout_confidence={item.get('layout_confidence')} | "
+                    f"semantic_confidence={item.get('semantic_confidence')} ({item.get('semantic_confidence_label')})"
                 )
+                if item.get("classification_status") or item.get("trust_policy"):
+                    print(
+                        f"  trust: status={item.get('classification_status')} | "
+                        f"policy={item.get('trust_policy')}"
+                    )
                 if item.get("audience_answer"):
                     print(f"  audience: {item.get('audience_answer')}")
+                if item.get("confidence_answer"):
+                    print(f"  confidence: {item.get('confidence_answer')}")
+                if item.get("rationale_answer"):
+                    print(f"  rationale: {item.get('rationale_answer')}")
+                if item.get("limits_answer"):
+                    print(f"  limits: {item.get('limits_answer')}")
+            return
+
+        if command == "corpus-sanity-check":
+            PATHS.ensure_dirs()
+            corpus_dir = Path(args.corpus_dir).expanduser().resolve() if args.corpus_dir else None
+            payload = _run_corpus_sanity_check(args.sample_size, corpus_dir=corpus_dir, k=args.k)
+            if json_output:
+                _emit_json("corpus-sanity-check", payload, output_path=output_path)
+                return
+            print(f"Corpus sanity check: {_human_status(payload['all_pass'])}")
+            print(f"Corpus PDFs available: {payload['corpus_pdf_count']}")
+            print(f"Sampled PDFs: {payload['sample_size']}")
+            summary = payload["summary"]
+            print(
+                "Average confidences: "
+                f"structure={summary.get('avg_structure_confidence')} | "
+                f"layout={summary.get('avg_layout_confidence')} | "
+                f"semantic={summary.get('avg_semantic_confidence')}"
+            )
+            print(f"Classification status counts: {summary.get('classification_status_counts')}")
+            print(f"Trust policy counts: {summary.get('trust_policy_counts')}")
+            print(f"Generic warning count: {summary.get('generic_warning_count')}")
             return
 
         if command == "init":
@@ -1546,9 +1844,9 @@ def main() -> None:
             if json_output:
                 _emit_json(
                     "extract-native",
-                    {
-                        "pdf": str(pdf_path),
-                        "doc_id": extraction.doc_id,
+                {
+                    "pdf": str(pdf_path),
+                    "doc_id": extraction.doc_id,
                         "page_count": extraction.page_count,
                         "native_block_count": len(extraction.blocks),
                         "pages_requiring_ocr": document_record.extraction_summary["pages_requiring_ocr"],
@@ -1709,6 +2007,10 @@ def main() -> None:
                     }),
                     "structure_confidence": document.structure_confidence,
                     "layout_confidence": document.layout_confidence,
+                    "semantic_confidence": document.semantic_confidence,
+                    "semantic_confidence_label": document.semantic_confidence_label,
+                    "semantic_rationale": list(document.semantic_rationale),
+                    "semantic_warnings": list(document.semantic_warnings),
                 },
                 "plan": {
                     **_plan_payload(plan, verbose=args.verbose),
@@ -1793,6 +2095,10 @@ def main() -> None:
                 **_document_payload(entry),
                 "structure_confidence": getattr(document_record, "structure_confidence", None),
                 "layout_confidence": getattr(document_record, "layout_confidence", None),
+                "semantic_confidence": getattr(document_record, "semantic_confidence", None),
+                "semantic_confidence_label": getattr(document_record, "semantic_confidence_label", None),
+                "semantic_rationale": list(getattr(document_record, "semantic_rationale", []) or []),
+                "semantic_warnings": list(getattr(document_record, "semantic_warnings", []) or []),
                 "section_count": len(section_payloads),
                 "sections": section_payloads,
             }

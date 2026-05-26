@@ -141,6 +141,14 @@ def _contains_any(text: str, hints: tuple[str, ...]) -> bool:
     return any(hint in text for hint in hints)
 
 
+def _confidence_label(score: float) -> str:
+    if score >= 0.8:
+        return "high"
+    if score >= 0.62:
+        return "moderate"
+    return "low"
+
+
 def derive_document_facets(
     *,
     source_pdf: str,
@@ -263,6 +271,56 @@ def derive_document_facets(
         }
         structure_style = fallback_structure_style.get(document_type, "report_sections")
 
+    type_matches = _count_hint_matches(signal_text, DOCUMENT_TYPE_HINTS.get(document_type, ()))
+    purpose_matches = _count_hint_matches(signal_text, DOCUMENT_PURPOSE_HINTS.get(document_purpose, ()))
+    audience_matches = _count_hint_matches(signal_text, AUDIENCE_HINTS.get(audience, ()))
+    evidence_matches = _count_hint_matches(signal_text, EVIDENCE_STYLE_HINTS.get(evidence_style, ()))
+    structure_matches = _count_hint_matches(signal_text, STRUCTURE_STYLE_HINTS.get(structure_style, ()))
+
+    semantic_confidence = 0.32
+    semantic_confidence += min(type_matches, 3) * 0.12
+    semantic_confidence += min(purpose_matches, 3) * 0.1
+    semantic_confidence += min(audience_matches, 2) * 0.08
+    semantic_confidence += min(evidence_matches, 2) * 0.06
+    semantic_confidence += min(structure_matches, 2) * 0.05
+    if title and title.strip():
+        semantic_confidence += 0.06
+    if summary_cues:
+        semantic_confidence += 0.05
+    if toc:
+        semantic_confidence += 0.04
+    if metadata_values:
+        semantic_confidence += 0.04
+    semantic_confidence = round(min(0.95, semantic_confidence), 3)
+
+    semantic_rationale: list[str] = []
+    if type_matches:
+        semantic_rationale.append("explicit_document_type_cues")
+    if purpose_matches:
+        semantic_rationale.append("explicit_document_purpose_cues")
+    if audience_matches:
+        semantic_rationale.append("explicit_audience_cues")
+    if evidence_matches:
+        semantic_rationale.append("evidence_style_cues")
+    if structure_matches:
+        semantic_rationale.append("structure_style_cues")
+    if summary_cues or toc:
+        semantic_rationale.append("section_or_toc_support")
+    if metadata_values:
+        semantic_rationale.append("metadata_support")
+
+    semantic_warnings: list[str] = []
+    if document_type == "document":
+        semantic_warnings.append("generic_document_type")
+    if document_purpose == "reference_lookup":
+        semantic_warnings.append("generic_document_purpose")
+    if audience == "general_professional":
+        semantic_warnings.append("generic_audience")
+    if type_matches == 0 and purpose_matches == 0:
+        semantic_warnings.append("limited_explicit_semantic_cues")
+    if not summary_cues and not toc:
+        semantic_warnings.append("limited_structural_semantic_support")
+
     facet_terms = [
         document_type,
         document_purpose,
@@ -276,6 +334,10 @@ def derive_document_facets(
         "audience": audience,
         "evidence_style": evidence_style,
         "structure_style": structure_style,
+        "semantic_confidence": semantic_confidence,
+        "semantic_confidence_label": _confidence_label(semantic_confidence),
+        "semantic_rationale": semantic_rationale,
+        "semantic_warnings": semantic_warnings,
         "facet_terms": facet_terms,
     }
 

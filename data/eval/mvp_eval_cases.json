@@ -1254,5 +1254,163 @@
       "model_report_family"
     ],
     "notes": "This should answer at the document level with audience-focused wording for the model-report family."
+  },
+  {
+    "case_id": "lbdl_document_confidence",
+    "case_type": "grounded",
+    "query": "How confident is the classification of The Little Book of Deep Learning?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "lbdl"
+    ],
+    "expected_keywords": [
+      "well-supported",
+      "book",
+      "teaching reference"
+    ],
+    "case_tags": [
+      "document_overview",
+      "document_discovery",
+      "document_facets",
+      "confidence_aware",
+      "deep_learning_book"
+    ],
+    "notes": "This should explain confidence in the current document-level classification instead of replaying a generic overview."
+  },
+  {
+    "case_id": "ocha_incident_document_confidence",
+    "case_type": "grounded",
+    "query": "How confident is the classification of the Data Incident Management guidance note?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "guidance-note-data-incident-management"
+    ],
+    "expected_keywords": [
+      "well-supported",
+      "guidance note",
+      "procedural guidance"
+    ],
+    "case_tags": [
+      "document_overview",
+      "document_discovery",
+      "document_facets",
+      "confidence_aware",
+      "humanitarian_data_guidance"
+    ],
+    "notes": "This should explain confidence in the current guidance-note classification and summarize the main purpose."
+  },
+  {
+    "case_id": "model_report_niger_document_confidence",
+    "case_type": "grounded",
+    "query": "How confident is the classification of the Niger AA Trigger for Drought source?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "niger-aa-trigger-for-drought-model-report"
+    ],
+    "expected_keywords": [
+      "well-supported",
+      "model report",
+      "risk or trigger assessment"
+    ],
+    "case_tags": [
+      "document_overview",
+      "document_discovery",
+      "document_facets",
+      "confidence_aware",
+      "model_report_family"
+    ],
+    "notes": "This should explain confidence in the current model-report classification rather than only repeating topical coverage."
+  },
+  {
+    "case_id": "lbdl_document_classification_rationale",
+    "case_type": "grounded",
+    "query": "Why is The Little Book of Deep Learning classified this way?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "lbdl"
+    ],
+    "expected_keywords": [
+      "book",
+      "teaching reference",
+      "supporting cues"
+    ],
+    "case_tags": [
+      "document_overview",
+      "document_discovery",
+      "document_facets",
+      "confidence_aware",
+      "trust_policy",
+      "deep_learning_book"
+    ],
+    "notes": "This should explain the classification rationale instead of only restating the overview."
+  },
+  {
+    "case_id": "ocha_incident_document_classification_rationale",
+    "case_type": "grounded",
+    "query": "Why is the Data Incident Management guidance note classified this way?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "guidance-note-data-incident-management"
+    ],
+    "expected_keywords": [
+      "guidance note",
+      "procedural guidance",
+      "supporting cues"
+    ],
+    "case_tags": [
+      "document_overview",
+      "document_discovery",
+      "document_facets",
+      "confidence_aware",
+      "trust_policy",
+      "humanitarian_data_guidance"
+    ],
+    "notes": "This should explain why the guidance note is classified as procedural guidance."
+  },
+  {
+    "case_id": "lbdl_document_classification_limits",
+    "case_type": "grounded",
+    "query": "What are the main limits of the classification of The Little Book of Deep Learning?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "lbdl"
+    ],
+    "expected_keywords": [
+      "limits",
+      "high confidence",
+      "semantic cues"
+    ],
+    "case_tags": [
+      "document_overview",
+      "document_discovery",
+      "document_facets",
+      "confidence_aware",
+      "trust_policy",
+      "deep_learning_book"
+    ],
+    "notes": "This should communicate residual uncertainty and heuristic limits even for a well-supported classification."
+  },
+  {
+    "case_id": "model_report_niger_document_classification_limits",
+    "case_type": "grounded",
+    "query": "What are the main limits of the classification of the Niger AA Trigger for Drought source?",
+    "relevant_chunk_ids": [],
+    "relevant_doc_ids": [
+      "niger-aa-trigger-for-drought-model-report"
+    ],
+    "expected_keywords": [
+      "limits",
+      "model report",
+      "semantic cues"
+    ],
+    "case_tags": [
+      "document_overview",
+      "document_discovery",
+      "document_facets",
+      "confidence_aware",
+      "trust_policy",
+      "model_report_family"
+    ],
+    "notes": "This should surface the trust-policy framing for a model-report classification instead of just restating purpose."
   }
 ]

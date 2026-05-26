@@ -8,7 +8,7 @@ Internal development iterations in this file use `v1.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v0.6.4`
+Current implementation level: `v0.7.0`
 Current public version: `0.1.0-beta`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
@@ -34,21 +34,23 @@ Repo-local regression shards currently passing:
 - `table_layout_robustness_core`
 - `form_layout_robustness_core`
 - `semantic_document_understanding_core`
+- `confidence_aware_document_core`
+- `trust_policy_document_core`
 - `evidence_anchor_core`
 - `document_family_core`
 - `document_facets_core`
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v0.6.4`:
+Broad benchmark note after `v0.7.0`:
 
 - the targeted maintainer shard set is green again
 - the new document-level simplification shard is green
 - current broad benchmark scope:
-  - `Cases`: `70`
+  - `Cases`: `77`
   - `Indexed sample documents`: `25`
-- latest full rerun on the current `v0.6.4` semantic baseline:
-  - `precision@5`: `0.5552`
+- latest full rerun on the current `v0.7.0` semantic baseline:
+  - `precision@5`: `0.6031`
   - `recall@5`: `1.0`
   - `MRR`: `1.0`
   - `avg_keyword_coverage`: `1.0`
@@ -66,6 +68,8 @@ Broad benchmark note after `v0.6.4`:
 - the new maintenance direction is preserving document-root section context and shrinking the structured-form / document-level branching surface rather than adding heavier retrieval machinery.
 - the new robustness direction is exposing simple structure/layout confidence signals and testing single-document behavior on a more diverse sanity slice before considering a heavier learned retrieval layer.
 - the new semantics direction is improving document type, purpose, and audience understanding on unfamiliar PDFs before considering a learned reranker.
+- the new UX direction is exposing semantic confidence and confidence-aware classification answers instead of only returning a bare heuristic label.
+- the new maintainer direction is using the repo-local `pdf/` corpus as a local-only unknown-document sanity source instead of relying only on the curated benchmark.
 
 ## Delivered Architecture
 
@@ -240,6 +244,21 @@ Representative validation that has already been completed:
 - Split document-level answers into clearer type, purpose, audience, and overview render paths while keeping the default public JSON compact.
 - Added `semantic_document_understanding_core` so source-specific type/purpose/audience questions are tracked in the maintainer regression gate.
 - Extended the local `layout-sanity-check` path to return overview, type, purpose, and audience answers on unfamiliar PDFs without embedding private files into the benchmark.
+
+### v0.6.5-v0.6.8
+
+- Added semantic confidence signals and compact rationale/warning fields so unfamiliar document classification has a more explicit trust contract.
+- Added confidence-aware document answers for source-specific classification questions instead of forcing everything through type/purpose/audience phrasing.
+- Added `confidence_aware_document_core` to the maintainer regression gate and revalidated the full benchmark on the new semantic baseline.
+- Extended `layout-sanity-check` to return confidence answers and semantic-confidence metadata for unfamiliar PDFs.
+
+### v0.6.9-v0.7.0
+
+- Added explicit document-classification rationale and classification-limits answers on top of the existing semantic confidence layer.
+- Added `trust_policy_document_core` so the maintainer regression gate checks not only confidence answers, but also why a classification is being made and what its current limits are.
+- Added a local-only `corpus-sanity-check` maintainer path that samples the repo-local `pdf/` corpus through `lcwa_gov_pdf_metadata.csv`.
+- Hardened the corpus loader against non-UTF-8 metadata and filtered out obviously broken `pages=0` artifacts before sampling.
+- Added a fallback chunk emission path for very short documents so short form-like PDFs do not fail with `No chunks provided for indexing.`
 
 ### v0.1.1-v0.1.2
 
