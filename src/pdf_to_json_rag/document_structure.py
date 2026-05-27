@@ -111,6 +111,31 @@ def _section_kind(
     return "report_section"
 
 
+def _section_role(
+    *,
+    section_kind: str | None,
+    blocks: list["ExtractedBlock"],
+    content_hints: list[str],
+) -> str:
+    block_roles = {block.block_role for block in blocks if block.block_role}
+    hint_set = set(content_hints)
+    if section_kind in {"table_section"} or "table_like" in block_roles:
+        return "table"
+    if section_kind in {"questionnaire_section", "checklist_section"} or {
+        "form_field",
+        "checklist_item",
+        "key_value",
+    } & block_roles:
+        return "form"
+    if "list_item" in block_roles or section_kind in {"procedural_section"}:
+        return "list"
+    if section_kind in {"appendix"}:
+        return "appendix"
+    if "heading_supported" in hint_set and len(blocks) <= 2:
+        return "heading_group"
+    return "prose"
+
+
 def _section_summary_and_terms(
     blocks: list["ExtractedBlock"],
     title: str,
@@ -190,6 +215,7 @@ def _layout_confidence(
     block_count = len(blocks)
     bbox_ratio = sum(1 for block in blocks if block.bbox is not None) / block_count
     heading_like_blocks = sum(1 for block in blocks if _looks_like_structural_heading(_normalize(block.text), toc_entries))
+    role_supported_blocks = sum(1 for block in blocks if block.block_role != "paragraph")
     question_or_table_blocks = sum(
         1
         for block in blocks
@@ -201,6 +227,7 @@ def _layout_confidence(
     confidence += 0.15 if heading_like_blocks >= 2 else 0.05 if heading_like_blocks >= 1 else 0.0
     confidence += 0.1 if len(sections) >= 2 else 0.0
     confidence += 0.05 if question_or_table_blocks >= max(2, block_count // 8) else 0.0
+    confidence += 0.05 if role_supported_blocks >= max(2, block_count // 6) else 0.0
     if block_count >= 20 and len(sections) <= 1:
         confidence -= 0.15
     if bbox_ratio < 0.3:
@@ -243,7 +270,7 @@ def build_document_structure_analysis(
         block_text = _normalize(block.text)
         if not block_text:
             continue
-        if not _looks_like_structural_heading(block_text, toc_entries):
+        if block.block_role != "heading" and not _looks_like_structural_heading(block_text, toc_entries):
             continue
         if index == current_start and block_text == _normalize(current_title):
             continue
@@ -261,6 +288,11 @@ def build_document_structure_analysis(
         summary, coverage_terms, content_hints, section_kind = _section_summary_and_terms(
             section_blocks,
             section_title,
+        )
+        section_role = _section_role(
+            section_kind=section_kind,
+            blocks=section_blocks,
+            content_hints=content_hints,
         )
         parent_section_id: str | None = None
         section_path: list[str] = [section_title]
@@ -290,6 +322,7 @@ def build_document_structure_analysis(
                 parent_section_id=parent_section_id,
                 section_path=section_path,
                 section_kind=section_kind,
+                section_role=section_role,
                 page_start=section_blocks[0].page_num + 1,
                 page_end=section_blocks[-1].page_num + 1,
                 reading_order_start=section_blocks[0].reading_order_index,
@@ -297,6 +330,8 @@ def build_document_structure_analysis(
                 summary=summary,
                 coverage_terms=coverage_terms,
                 content_hints=content_hints,
+                source_block_ids=[block.block_id for block in section_blocks],
+                source_block_roles=sorted({block.block_role for block in section_blocks if block.block_role}),
                 structure_confidence=confidence,
             )
         )

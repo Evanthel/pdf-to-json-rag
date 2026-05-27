@@ -117,6 +117,13 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "ocha_incident_document_purpose",
         "model_report_niger_document_type",
     ],
+    "retrieval_contract_core": [
+        "symptoms",
+        "lbdl_document_overview",
+        "model_report_niger_justification",
+        "source_listing_nonmedical_learning_and_incident_response",
+        "compare_vitamin_c_vs_echinacea_prevention",
+    ],
     "query_planning_core": [
         "lbdl_document_overview",
         "lbdl_document_type",
@@ -252,6 +259,13 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "opioid_manager_appendix_a_optimized",
         "opioid_manager_appendix_c_follow_up_timing",
         "lbdl_document_overview",
+    ],
+    "processing_layer_core": [
+        "health_questionnaire_table1_sensitivity",
+        "pre_injection_checklist_live_vaccine",
+        "ajmedp_immersion_neck_limit",
+        "lbdl_document_overview",
+        "model_report_niger_document_type",
     ],
 }
 SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {

@@ -18,8 +18,11 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from pdf_to_json_rag import cli as cli_module
 from pdf_to_json_rag.chunking import chunk_document
+from pdf_to_json_rag.content_metadata import classify_block_metadata
 from pdf_to_json_rag.document_facets import derive_document_facets
 from pdf_to_json_rag.extraction import ExtractedBlock
+from pdf_to_json_rag.query_planning import plan_query
+from pdf_to_json_rag.retrieval import build_retrieval_contract
 from pdf_to_json_rag.schemas import DocumentRecord
 
 
@@ -150,6 +153,9 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIsNotNone(inspect_payload["result"]["layout_confidence"])
         self.assertIsNotNone(inspect_payload["result"]["semantic_confidence"])
         self.assertTrue(inspect_payload["result"]["semantic_confidence_label"])
+        self.assertIn("block_role_counts", inspect_payload["result"]["extraction_summary"])
+        self.assertIn("text_source_counts", inspect_payload["result"]["extraction_summary"])
+        self.assertIn("section_role", inspect_payload["result"]["sections"][0])
         smoke = self._run(
             "smoke-check",
             "--pdf",
@@ -191,6 +197,14 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(
             answer_payload["result"]["answer_trace"]["document_selection"]["strategy"],
             "single_doc_overview",
+        )
+        self.assertEqual(
+            answer_payload["result"]["answer_trace"]["retrieval_contract"]["retrieval_path"],
+            "document_understanding",
+        )
+        self.assertEqual(
+            answer_payload["result"]["answer_trace"]["retrieval_contract"]["doc_scope"],
+            "all_docs",
         )
         self.assertIn(
             "shortlist_breakdown",
@@ -266,6 +280,26 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(rationale_payload["result"]["query_intent"], "document_classification_rationale")
         self.assertEqual(limits_payload["result"]["query_intent"], "document_classification_limits")
 
+    def test_retrieval_contract_splits_single_doc_document_understanding_and_cross_document(self) -> None:
+        evidence_contract = build_retrieval_contract(
+            "What are common cold symptoms?",
+            plan=plan_query("What are common cold symptoms?"),
+        )
+        overview_contract = build_retrieval_contract(
+            "What does this file cover?",
+            plan=plan_query("What does this file cover?"),
+        )
+        listing_contract = build_retrieval_contract(
+            "Which sources discuss prevention or procedural guidance?",
+            plan=plan_query("Which sources discuss prevention or procedural guidance?"),
+        )
+
+        self.assertEqual(evidence_contract.retrieval_path, "single_document_qa")
+        self.assertEqual(overview_contract.retrieval_path, "document_understanding")
+        self.assertEqual(listing_contract.retrieval_path, "cross_document_discovery")
+        self.assertEqual(listing_contract.doc_scope, "candidate_docs")
+        self.assertEqual(listing_contract.diversify_per_doc_limit, 1)
+
     def test_error_json_for_missing_index(self) -> None:
         self._run("init", "--json")
         process = self._run(
@@ -305,6 +339,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
         )
         blocks = [
             ExtractedBlock(
+                block_id="demo-inline-block-001",
                 page_num=0,
                 text="Background This guide explains field safety procedures.",
                 bbox=None,
@@ -312,6 +347,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
                 block_kind="text",
             ),
             ExtractedBlock(
+                block_id="demo-inline-block-002",
                 page_num=0,
                 text="CHECKLIST Confirm PPE and radio contact before deployment.",
                 bbox=None,
@@ -340,6 +376,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
         )
         blocks = [
             ExtractedBlock(
+                block_id="demo-form-block-001",
                 page_num=0,
                 text=(
                     "Appendix A – Checklist pre-opioid checklist fields: has non-pharmacological therapy been optimized; "
@@ -356,6 +393,52 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertGreaterEqual(len(chunks), 3)
         self.assertTrue(all(chunk.chunk_type in {"table", "checklist"} for chunk in chunks))
         self.assertTrue(any("informed consent obtained" in chunk.text for chunk in chunks))
+
+    def test_block_metadata_distinguishes_form_field_and_heading(self) -> None:
+        form_field = classify_block_metadata("Date of Birth: 12/12/1980")
+        heading = classify_block_metadata("UNITED STATES COURT OF APPEALS")
+        self.assertEqual(form_field["block_role"], "form_field")
+        self.assertIn("form_field", form_field["block_labels"])
+        self.assertEqual(heading["block_role"], "heading")
+        self.assertIn("heading", heading["block_labels"])
+
+    def test_chunk_records_keep_block_provenance_and_section_role(self) -> None:
+        document = DocumentRecord(
+            doc_id="demo-provenance",
+            source_pdf="demo-provenance.pdf",
+            page_count=1,
+            title="Registration Packet",
+            detected_language="en",
+            structure_confidence=0.76,
+            layout_confidence=0.74,
+        )
+        blocks = [
+            ExtractedBlock(
+                block_id="demo-provenance-block-001",
+                page_num=0,
+                text="VOTER REGISTRATION TRANSFER FORM",
+                bbox=None,
+                reading_order_index=0,
+                block_kind="heading",
+                block_role="heading",
+            ),
+            ExtractedBlock(
+                block_id="demo-provenance-block-002",
+                page_num=0,
+                text="Date of Birth: 01/01/1990",
+                bbox=None,
+                reading_order_index=1,
+                block_kind="text",
+                block_role="form_field",
+            ),
+        ]
+        chunks = chunk_document(document, blocks, target_chars=200, min_chunk_chars=20)
+        self.assertEqual(len(chunks), 1)
+        chunk = chunks[0]
+        self.assertEqual(chunk.section_role, "form")
+        self.assertIn("demo-provenance-block-002", chunk.source_block_ids)
+        self.assertIn("form_field", chunk.source_block_roles)
+        self.assertEqual(chunk.text_source, "native")
 
     def test_financial_form_semantics_are_not_generic(self) -> None:
         facets = derive_document_facets(
@@ -376,6 +459,43 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(facets["audience"], "applicants")
         self.assertGreaterEqual(facets["semantic_confidence"], 0.75)
         self.assertEqual(facets["semantic_confidence_label"], "high")
+
+    def test_registration_form_semantics_are_not_generic(self) -> None:
+        facets = derive_document_facets(
+            source_pdf="Voter-Registration-Transfer-Form.pdf",
+            title="Voter Registration Transfer Form",
+            toc=[],
+            summary_cues=["Voter Registration", "Transfer Form", "Change of Address"],
+            leading_block_lines=[
+                "VOTER REGISTRATION TRANSFER FORM",
+                "Use this form to update your voter registration address.",
+            ],
+            metadata_values=[],
+            page_count=1,
+        )
+        self.assertEqual(facets["document_type"], "registration_form")
+        self.assertEqual(facets["document_purpose"], "registration_update")
+        self.assertEqual(facets["audience"], "filers")
+        self.assertGreaterEqual(facets["semantic_confidence"], 0.75)
+
+    def test_court_opinion_semantics_are_not_generic(self) -> None:
+        facets = derive_document_facets(
+            source_pdf="07-7236.pdf",
+            title="United States Court of Appeals for the Federal Circuit",
+            toc=[],
+            summary_cues=["Court of Appeals", "Claimant-Appellant", "Opinion and Order"],
+            leading_block_lines=[
+                "United States Court of Appeals for the Federal Circuit",
+                "FORTUNATA CAPELLAN, Claimant-Appellant,",
+                "Opinion and Order",
+            ],
+            metadata_values=[],
+            page_count=20,
+        )
+        self.assertEqual(facets["document_type"], "court_opinion")
+        self.assertEqual(facets["document_purpose"], "legal_record")
+        self.assertEqual(facets["audience"], "legal_professionals")
+        self.assertGreaterEqual(facets["semantic_confidence"], 0.75)
 
     def test_layout_sanity_check_json_for_multiple_pdfs(self) -> None:
         second_pdf = self.workspace / "financial-form.pdf"
@@ -507,7 +627,12 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIn("classification_status_counts", result["summary"])
         self.assertIn("trust_policy_counts", result["summary"])
         self.assertIn("bucket_counts", result["summary"])
+        self.assertIn("semantic_pass_rate", result["summary"])
+        self.assertIn("specific_document_rate", result["summary"])
+        self.assertIn("specific_purpose_rate", result["summary"])
         self.assertGreaterEqual(result["summary"]["bucket_counts"].get("form_like", 0), 1)
+        self.assertGreater(result["summary"]["specific_document_rate"], 0.0)
+        self.assertGreater(result["summary"]["specific_purpose_rate"], 0.0)
         self.assertTrue(all(item["overview_answer"] for item in result["results"]))
         self.assertTrue(all(item["confidence_answer"] for item in result["results"]))
 

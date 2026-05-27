@@ -6,6 +6,46 @@ import re
 
 
 DOCUMENT_TYPE_HINTS = {
+    "registration_form": (
+        "voter registration",
+        "registration transfer form",
+        "transfer form",
+        "registration application",
+        "change of address",
+    ),
+    "court_opinion": (
+        "court of appeals",
+        "claimant-appellant",
+        "appellant",
+        "appellee",
+        "opinion",
+        "order",
+        "petitioner",
+        "respondent",
+        "federal circuit",
+    ),
+    "government_bulletin": (
+        "congressman",
+        "senator",
+        "online office",
+        "newsletter",
+        "public notice",
+        "office of",
+    ),
+    "inspection_report": (
+        "inspection report",
+        "inspection",
+        "animal welfare",
+        "inspection date",
+        "facility inspection",
+    ),
+    "agency_report": (
+        "department of",
+        "agency report",
+        "annual report",
+        "office report",
+        "bureau",
+    ),
     "financial_statement": (
         "financial statement",
         "net worth",
@@ -39,6 +79,45 @@ DOCUMENT_TYPE_HINTS = {
 }
 
 DOCUMENT_PURPOSE_HINTS = {
+    "registration_update": (
+        "voter registration",
+        "registration transfer",
+        "change of address",
+        "registration application",
+    ),
+    "legal_record": (
+        "court of appeals",
+        "claimant-appellant",
+        "appellant",
+        "appellee",
+        "petitioner",
+        "respondent",
+        "opinion",
+        "order",
+    ),
+    "public_notice": (
+        "newsletter",
+        "public notice",
+        "office of",
+        "congressman",
+        "senator",
+        "announcement",
+    ),
+    "institutional_reporting": (
+        "inspection report",
+        "annual report",
+        "agency report",
+        "department of",
+        "bureau",
+        "animal welfare",
+    ),
+    "administrative_submission": (
+        "application",
+        "registration",
+        "submission",
+        "filed",
+        "signed",
+    ),
     "financial_disclosure": (
         "financial statement",
         "net worth",
@@ -73,15 +152,32 @@ DOCUMENT_PURPOSE_HINTS = {
 
 AUDIENCE_HINTS = {
     "applicants": ("applicant", "service user", "client", "borrower"),
+    "filers": ("registrant", "voter", "applicant", "petitioner", "claimant"),
     "case_workers": ("local authority", "assessor", "representative", "financial affairs"),
     "learners": ("learning", "student", "chapter", "exercise"),
     "practitioners": ("guidance", "operational", "practice", "workflow"),
     "clinicians": ("patient", "therapy", "clinical", "opioid", "treatment"),
     "humanitarian_responders": ("humanitarian", "donors", "cyber threats", "incident", "model report"),
     "analysts": ("analysis", "forecast", "trigger", "model"),
+    "public_readers": ("public notice", "newsletter", "constituent", "resident", "office of"),
+    "legal_professionals": ("court of appeals", "appellant", "appellee", "petitioner", "respondent"),
+    "officials": ("department of", "agency", "bureau", "inspection"),
 }
 
 EVIDENCE_STYLE_HINTS = {
+    "legal_record": (
+        "court of appeals",
+        "appellant",
+        "appellee",
+        "opinion",
+        "order",
+    ),
+    "government_notice": (
+        "newsletter",
+        "public notice",
+        "announcement",
+        "office of",
+    ),
     "administrative_form": (
         "personal details",
         "date of birth",
@@ -105,6 +201,19 @@ EVIDENCE_STYLE_HINTS = {
 }
 
 STRUCTURE_STYLE_HINTS = {
+    "legal_opinion": (
+        "court of appeals",
+        "appellant",
+        "appellee",
+        "opinion",
+        "order",
+    ),
+    "government_notice": (
+        "newsletter",
+        "public notice",
+        "office of",
+        "announcement",
+    ),
     "financial_grid": ("financial statement", "net worth", "total assets", "total liabilities"),
     "administrative_form": (
         "personal details",
@@ -174,6 +283,16 @@ def derive_document_facets(
         document_type = "financial_statement"
     elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["assessment_form"]):
         document_type = "assessment_form"
+    elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["registration_form"]):
+        document_type = "registration_form"
+    elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["court_opinion"]):
+        document_type = "court_opinion"
+    elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["government_bulletin"]):
+        document_type = "government_bulletin"
+    elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["inspection_report"]):
+        document_type = "inspection_report"
+    elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["agency_report"]):
+        document_type = "agency_report"
     elif (
         document_type in {None, "document", "report"}
         and _contains_any(signal_text, DOCUMENT_TYPE_HINTS["administrative_form"])
@@ -192,10 +311,23 @@ def derive_document_facets(
         document_purpose = "financial_disclosure"
     elif document_type == "assessment_form":
         document_purpose = "financial_assessment"
+    elif document_type == "registration_form":
+        document_purpose = "registration_update"
+    elif document_type == "court_opinion":
+        document_purpose = "legal_record"
+    elif document_type == "government_bulletin" and document_purpose in {None, "reference_lookup"}:
+        document_purpose = "public_notice"
+    elif document_type in {"inspection_report", "agency_report"} and document_purpose in {None, "reference_lookup"}:
+        document_purpose = "institutional_reporting"
     elif document_type == "administrative_form" and document_purpose in {None, "reference_lookup"}:
         document_purpose = "administrative_intake"
     if document_purpose is None:
         fallback_purpose = {
+            "registration_form": "registration_update",
+            "court_opinion": "legal_record",
+            "government_bulletin": "public_notice",
+            "inspection_report": "institutional_reporting",
+            "agency_report": "institutional_reporting",
             "book": "teaching_reference",
             "guidance_note": "procedural_guidance",
             "questionnaire": "structured_data_capture",
@@ -215,8 +347,21 @@ def derive_document_facets(
         audience = "applicants"
     elif document_type == "assessment_form":
         audience = "case_workers" if "local authority" in signal_text else "applicants"
+    elif document_type == "registration_form" and audience in {None, "general_professional"}:
+        audience = "filers"
+    elif document_type == "court_opinion" and audience in {None, "general_professional"}:
+        audience = "legal_professionals"
+    elif document_type == "government_bulletin" and audience in {None, "general_professional"}:
+        audience = "public_readers"
+    elif document_type in {"inspection_report", "agency_report"} and audience in {None, "general_professional"}:
+        audience = "officials"
     if audience is None:
         fallback_audience = {
+            "registration_form": "filers",
+            "court_opinion": "legal_professionals",
+            "government_bulletin": "public_readers",
+            "inspection_report": "officials",
+            "agency_report": "officials",
             "book": "learners",
             "guidance_note": "practitioners",
             "questionnaire": "practitioners",
@@ -232,10 +377,19 @@ def derive_document_facets(
         audience = fallback_audience.get(document_type, "general_professional")
 
     evidence_style = _best_facet_match(signal_text, EVIDENCE_STYLE_HINTS)
-    if document_type in {"financial_statement", "assessment_form", "administrative_form"}:
+    if document_type in {"financial_statement", "assessment_form", "administrative_form", "registration_form"}:
         evidence_style = "financial_form" if document_type == "financial_statement" else "administrative_form"
+    elif document_type == "court_opinion":
+        evidence_style = "legal_record"
+    elif document_type in {"government_bulletin", "inspection_report", "agency_report"}:
+        evidence_style = "government_notice"
     if evidence_style is None:
         fallback_evidence_style = {
+            "registration_form": "administrative_form",
+            "court_opinion": "legal_record",
+            "government_bulletin": "government_notice",
+            "inspection_report": "government_notice",
+            "agency_report": "government_notice",
             "book": "educational_exposition",
             "guidance_note": "procedural_guidance",
             "questionnaire": "structured_form",
@@ -253,10 +407,19 @@ def derive_document_facets(
     structure_style = _best_facet_match(signal_text, STRUCTURE_STYLE_HINTS)
     if document_type == "financial_statement":
         structure_style = "financial_grid"
-    elif document_type in {"assessment_form", "administrative_form"} and structure_style in {None, "report_sections"}:
+    elif document_type in {"assessment_form", "administrative_form", "registration_form"} and structure_style in {None, "report_sections"}:
         structure_style = "administrative_form"
+    elif document_type == "court_opinion" and structure_style in {None, "report_sections"}:
+        structure_style = "legal_opinion"
+    elif document_type in {"government_bulletin", "inspection_report", "agency_report"} and structure_style in {None, "report_sections"}:
+        structure_style = "government_notice"
     if structure_style is None:
         fallback_structure_style = {
+            "registration_form": "administrative_form",
+            "court_opinion": "legal_opinion",
+            "government_bulletin": "government_notice",
+            "inspection_report": "government_notice",
+            "agency_report": "government_notice",
             "book": "chapter_book",
             "guidance_note": "report_sections",
             "questionnaire": "questionnaire_grid",
@@ -316,6 +479,10 @@ def derive_document_facets(
         semantic_warnings.append("generic_document_purpose")
     if audience == "general_professional":
         semantic_warnings.append("generic_audience")
+    if document_type in {"court_opinion", "registration_form", "government_bulletin", "inspection_report", "agency_report"}:
+        semantic_warnings = [warning for warning in semantic_warnings if warning != "generic_document_type"]
+    if document_purpose in {"legal_record", "registration_update", "public_notice", "institutional_reporting", "administrative_submission"}:
+        semantic_warnings = [warning for warning in semantic_warnings if warning != "generic_document_purpose"]
     if type_matches == 0 and purpose_matches == 0:
         semantic_warnings.append("limited_explicit_semantic_cues")
     if not summary_cues and not toc:

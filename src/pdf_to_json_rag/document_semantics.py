@@ -72,6 +72,19 @@ QUERY_FAMILY_HINTS = {
         "assessment form",
         "administrative form",
         "service user",
+        "voter registration",
+        "registration form",
+    ),
+    "government_public_record": (
+        "court of appeals",
+        "appellant",
+        "appellee",
+        "public notice",
+        "congressman",
+        "newsletter",
+        "inspection",
+        "agency report",
+        "department of",
     ),
     "structured_form": ("questionnaire", "checklist", "appendix", "form", "grid"),
     "technical_manual": ("manual", "technical", "field manual"),
@@ -88,6 +101,11 @@ QUERY_FAMILY_HINTS = {
 }
 
 QUERY_PURPOSE_HINTS = {
+    "registration_update": ("voter registration", "registration transfer", "change of address"),
+    "legal_record": ("court of appeals", "appellant", "appellee", "opinion", "order"),
+    "public_notice": ("public notice", "newsletter", "congressman", "announcement"),
+    "institutional_reporting": ("inspection", "annual report", "agency report", "department of"),
+    "administrative_submission": ("application", "submission", "registration"),
     "financial_disclosure": ("financial statement", "net worth", "assets", "liabilities"),
     "financial_assessment": ("financial assessment", "care charge", "local authority"),
     "administrative_intake": ("personal details", "representative details", "date of birth"),

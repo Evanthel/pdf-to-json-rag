@@ -22,7 +22,7 @@ from .intent_config import (
     resolve_preferred_source_doc_id,
 )
 from .query_planning import plan_query
-from .retrieval import retrieve_top_k_with_neighbors
+from .retrieval import build_retrieval_contract, retrieval_contract_payload, retrieve_top_k_with_neighbors
 from .schemas import ChunkRecord, DocumentRecord
 
 
@@ -1891,7 +1891,7 @@ def _document_overview_fragments(doc_id: str, top_k_hits: list[ChunkRecord], chu
     topics = list(semantics.coverage_terms) or _document_summary_cues(doc_id, top_k_hits, chunk_root)
 
     if semantics.document_type:
-        fragments.append(f"it is a {semantics.document_type.replace('_', ' ')}")
+        fragments.append(f"it is {_indefinite_phrase(semantics.document_type)}")
     if semantics.document_family:
         fragments.append(f"it belongs to the {semantics.document_family.replace('_', ' ')} family")
     if semantics.document_purpose:
@@ -2061,31 +2061,39 @@ def _semantic_phrase(value: str | None, fallback: str = "document") -> str:
     return value.replace("_", " ")
 
 
+def _indefinite_phrase(value: str | None, fallback: str = "document") -> str:
+    phrase = _semantic_phrase(value, fallback).strip()
+    if not phrase:
+        return fallback
+    article = "an" if phrase[:1].lower() in {"a", "e", "i", "o", "u"} else "a"
+    return f"{article} {phrase}"
+
+
 def _confidence_aware_language(assessment: dict[str, object]) -> dict[str, str]:
     label = assessment.get("classification_confidence_label")
     if label == "high":
         return {
-            "type_verb": "is a",
+            "type_verb": "is",
             "purpose_verb": "is",
             "audience_verb": "is intended for",
-            "overview_type_verb": "is a",
+            "overview_type_verb": "is",
             "overview_purpose_verb": "its main purpose is",
             "overview_audience_verb": "it is aimed at",
         }
     if label == "moderate":
         return {
-            "type_verb": "appears to be a",
+            "type_verb": "appears to be",
             "purpose_verb": "appears to be",
             "audience_verb": "appears intended for",
-            "overview_type_verb": "appears to be a",
+            "overview_type_verb": "appears to be",
             "overview_purpose_verb": "its likely purpose is",
             "overview_audience_verb": "it likely targets",
         }
     return {
-        "type_verb": "is likely a",
+        "type_verb": "is likely",
         "purpose_verb": "is provisionally",
         "audience_verb": "is provisionally intended for",
-        "overview_type_verb": "is likely a",
+        "overview_type_verb": "is likely",
         "overview_purpose_verb": "its apparent purpose is",
         "overview_audience_verb": "it may be aimed at",
     }
@@ -2105,7 +2113,7 @@ def _render_document_overview(
     language = _confidence_aware_language(assessment)
 
     type_label = semantics.document_type.replace("_", " ") if semantics.document_type else "document"
-    fragments.append(f"{label} {language['overview_type_verb']} {type_label}")
+    fragments.append(f"{label} {language['overview_type_verb']} {_indefinite_phrase(semantics.document_type)}")
     cues.append(type_label)
 
     if semantics.document_purpose:
@@ -2155,7 +2163,7 @@ def _render_document_type(
     assessment = _classification_assessment(doc_id, top_k_hits, chunk_root)
     language = _confidence_aware_language(assessment)
     type_label = _semantic_phrase(semantics.document_type)
-    answer = f"{label} {language['type_verb']} {type_label}."
+    answer = f"{label} {language['type_verb']} {_indefinite_phrase(semantics.document_type)}."
     if semantics.document_purpose:
         answer += f" Its main purpose is {_semantic_phrase(semantics.document_purpose)}."
     contract = build_answer_contract(
@@ -2180,7 +2188,7 @@ def _render_document_purpose(
     confidence_label = assessment["classification_confidence_label"]
     purpose_verb = "is" if confidence_label == "high" else "appears to be" if confidence_label == "moderate" else "is provisionally"
     answer = f"The main purpose of {label} {purpose_verb} {purpose}."
-    answer += f" It is structured as a {type_label}."
+    answer += f" It is structured as {_indefinite_phrase(semantics.document_type)}."
     if semantics.audience and semantics.audience != "general_professional":
         answer += f" It is aimed at {_semantic_phrase(semantics.audience)}."
     contract = build_answer_contract(
@@ -2231,17 +2239,17 @@ def _render_document_confidence(
     if status == "well_supported":
         answer = (
             f"The current classification of {label} is well-supported. "
-            f"It is being treated as a {type_label} with {confidence_label} confidence, and its main purpose is {purpose}."
+            f"It is being treated as {_indefinite_phrase(semantics.document_type)} with {confidence_label} confidence, and its main purpose is {purpose}."
         )
     elif status == "provisional":
         answer = (
             f"The current classification of {label} is provisional. "
-            f"It is being treated as a {type_label} with {confidence_label} confidence, and its main purpose appears to be {purpose}."
+            f"It is being treated as {_indefinite_phrase(semantics.document_type)} with {confidence_label} confidence, and its main purpose appears to be {purpose}."
         )
     else:
         answer = (
             f"The current classification of {label} is uncertain. "
-            f"It is tentatively being treated as a {type_label} with {confidence_label} confidence, and this should be treated as a heuristic guess."
+            f"It is tentatively being treated as {_indefinite_phrase(semantics.document_type)} with {confidence_label} confidence, and this should be treated as a heuristic guess."
         )
     if rationale:
         answer += " Supporting cues include " + ", ".join(rationale[:2]) + "."
@@ -2273,7 +2281,7 @@ def _render_document_classification_rationale(
     else:
         cue_text = "recovered title, section structure, and document metadata"
     answer = (
-        f"{label} is currently classified as a {type_label} because the strongest supporting cues point in that direction. "
+        f"{label} is currently classified as {_indefinite_phrase(semantics.document_type)} because the strongest supporting cues point in that direction. "
         f"Its main purpose is being interpreted as {purpose}. "
         f"The main supporting cues are {cue_text}."
     )
@@ -2299,7 +2307,7 @@ def _render_document_classification_limits(
     warnings = [item.replace("_", " ") for item in assessment.get("semantic_warnings", [])]
     answer = (
         f"The current classification of {label} still has limits. "
-        f"It is being treated as a {type_label} with {assessment['classification_confidence_label']} confidence, "
+        f"It is being treated as {_indefinite_phrase(semantics.document_type)} with {assessment['classification_confidence_label']} confidence, "
         f"and that judgment still depends on recovered structure, layout, and semantic cues."
     )
     if warnings:
@@ -2363,7 +2371,7 @@ def _document_support_trace_item(
     if semantics.document_type:
         support_fragments.append(f"document type: {semantics.document_type.replace('_', ' ')}")
         support_fragments.append(
-            f"{_document_label(doc_id, chunk_root)} is a {semantics.document_type.replace('_', ' ')}."
+            f"{_document_label(doc_id, chunk_root)} is {_indefinite_phrase(semantics.document_type)}."
         )
     if semantics.document_purpose:
         support_fragments.append(f"purpose: {semantics.document_purpose.replace('_', ' ')}")
@@ -2759,6 +2767,7 @@ def _base_answer_trace(
     answer_contract: dict[str, object] | None = None,
     support_trace: list[dict[str, object]] | None = None,
     document_selection: dict[str, object] | None = None,
+    retrieval_contract: dict[str, object] | None = None,
 ) -> dict[str, object]:
     plan = plan_query(query)
     return {
@@ -2776,6 +2785,7 @@ def _base_answer_trace(
         "matched_pattern": matched_pattern,
         "matched_cues": matched_cues or [],
         "answer_contract": answer_contract or {},
+        "retrieval_contract": retrieval_contract or {},
         "document_selection": document_selection or {},
         "support_trace": support_trace or [],
         "evidence_chunk_ids": [item.chunk_id for item in evidence],
@@ -3283,6 +3293,7 @@ def _finalize_answer_result(
     query_intent: str,
     evidence: list[EvidenceSentence],
     document_selection: DocumentSelection,
+    retrieval_contract: dict[str, object],
     mode_answer: str | None,
     mode_trace: dict[str, object] | None,
 ) -> tuple[str, dict[str, object]]:
@@ -3292,6 +3303,7 @@ def _finalize_answer_result(
             query=query,
             query_intent=query_intent,
             evidence=evidence,
+            retrieval_contract=retrieval_contract,
             document_selection=_document_selection_payload(document_selection),
         )
         return answer, answer_trace
@@ -3308,6 +3320,7 @@ def _finalize_answer_result(
         matched_cues=trace_source.get("matched_cues") if trace_source else None,
         answer_contract=trace_source.get("answer_contract") if trace_source else None,
         support_trace=trace_source.get("support_trace") if trace_source else None,
+        retrieval_contract=retrieval_contract,
         document_selection=_document_selection_payload(document_selection),
     )
     return answer, answer_trace
@@ -3711,6 +3724,7 @@ def answer_from_chunks(query: str, chunks: list[ChunkRecord]) -> GroundedAnswer:
         max_sentences=_answer_sentence_budget(query),
     )
     plan = plan_query(query)
+    retrieval_contract = retrieval_contract_payload(build_retrieval_contract(query, plan=plan))
     document_selection = _build_document_selection(
         plan=plan,
         query=query,
@@ -3732,6 +3746,7 @@ def answer_from_chunks(query: str, chunks: list[ChunkRecord]) -> GroundedAnswer:
         query_intent=query_intent,
         evidence=evidence,
         document_selection=document_selection,
+        retrieval_contract=retrieval_contract,
         mode_answer=mode_answer,
         mode_trace=mode_trace,
     )
@@ -3755,6 +3770,7 @@ def answer_query_with_retrieval(
 ) -> GroundedAnswer:
     """Retrieve, expand, and assemble a grounded answer from local artifacts."""
     plan = plan_query(query)
+    retrieval_contract = build_retrieval_contract(query, plan=plan, k=k)
     query_terms = _query_terms(query)
     query_intent = _detect_query_intent(query, query_terms)
     top_k_hits, expanded_hits = retrieve_top_k_with_neighbors(
@@ -3763,6 +3779,7 @@ def answer_query_with_retrieval(
         chunk_root=chunk_root,
         k=k,
         use_lightweight_rerank=use_lightweight_rerank,
+        retrieval_contract=retrieval_contract,
     )
     document_selection = _build_document_selection(
         plan=plan,
@@ -3799,6 +3816,7 @@ def answer_query_with_retrieval(
         query_intent=query_intent,
         evidence=evidence,
         document_selection=document_selection,
+        retrieval_contract=retrieval_contract_payload(retrieval_contract),
         mode_answer=mode_answer,
         mode_trace=mode_trace,
     )

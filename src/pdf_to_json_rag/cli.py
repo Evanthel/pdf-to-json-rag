@@ -8,10 +8,12 @@ from importlib import resources as importlib_resources
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from urllib.parse import unquote, urlparse
 
 import fitz
 
@@ -299,6 +301,8 @@ def _section_payload(section) -> dict[str, object]:
         "section_id": section.section_id,
         "title": section.title,
         "level": section.level,
+        "section_kind": section.section_kind,
+        "section_role": getattr(section, "section_role", None),
         "page_start": section.page_start,
         "page_end": section.page_end,
         "reading_order_start": section.reading_order_start,
@@ -306,6 +310,8 @@ def _section_payload(section) -> dict[str, object]:
         "summary": section.summary,
         "coverage_terms": list(section.coverage_terms),
         "content_hints": list(section.content_hints),
+        "source_block_count": len(getattr(section, "source_block_ids", []) or []),
+        "source_block_roles": list(getattr(section, "source_block_roles", []) or []),
         "structure_confidence": section.structure_confidence,
     }
 
@@ -351,6 +357,7 @@ def _compact_answer_trace(answer_trace: dict[str, object]) -> dict[str, object]:
         "answer_mode": answer_trace.get("answer_mode"),
         "query_intent": answer_trace.get("query_intent"),
         "candidate_doc_ids": answer_trace.get("candidate_doc_ids", []),
+        "retrieval_contract": answer_trace.get("retrieval_contract", {}),
         "document_selection": answer_trace.get("document_selection", {}),
         "template_id": answer_trace.get("template_id"),
         "matched_pattern": answer_trace.get("matched_pattern"),
@@ -498,6 +505,17 @@ def _pdf_corpus_bucket(url_text: str, *, pages: int, creator_tool: str, producer
     if pages >= 20:
         return "long_doc"
     return "medium_doc"
+
+
+def _corpus_alias_name(entry: LocalPdfCorpusEntry) -> str:
+    source = entry.original or entry.urlkey or entry.digest
+    parsed = urlparse(source if "://" in source else f"https://{source}")
+    candidate = Path(unquote(parsed.path)).name or Path(unquote(source)).name
+    candidate_stem = Path(candidate).stem or entry.digest
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "-", candidate_stem).strip("-._")
+    if not sanitized:
+        sanitized = entry.digest.lower()
+    return f"{sanitized}.pdf"
 
 
 def _load_local_pdf_corpus(corpus_dir: Path | None = None) -> list[LocalPdfCorpusEntry]:
@@ -678,7 +696,12 @@ def _run_public_surface_release_smoke() -> dict[str, object]:
         }
 
 
-def _run_layout_sanity_check(pdf_paths: list[Path], k: int = 5) -> dict[str, object]:
+def _run_layout_sanity_check(
+    pdf_paths: list[Path],
+    k: int = 5,
+    *,
+    display_pdf_paths: dict[str, str] | None = None,
+) -> dict[str, object]:
     results: list[dict[str, object]] = []
 
     for pdf_path in pdf_paths:
@@ -699,7 +722,7 @@ def _run_layout_sanity_check(pdf_paths: list[Path], k: int = 5) -> dict[str, obj
             smoke_payload = json.loads(smoke_process.stdout) if smoke_process.stdout.strip() else {}
 
             result: dict[str, object] = {
-                "pdf": str(pdf_path),
+                "pdf": (display_pdf_paths or {}).get(str(pdf_path), str(pdf_path)),
                 "workspace": str(workspace),
                 "data_dir": str(data_dir),
                 "smoke_returncode": smoke_process.returncode,
@@ -798,6 +821,16 @@ def _run_layout_sanity_check(pdf_paths: list[Path], k: int = 5) -> dict[str, obj
                     "semantic_confidence_label": semantic_confidence_label,
                     "classification_status": confidence_support_item.get("classification_status"),
                     "trust_policy": confidence_support_item.get("trust_policy"),
+                    "semantic_specificity": (
+                        _is_specific_document_type(
+                            inspect_result.get("document_type")
+                            or smoke_result.get("document", {}).get("document_type")
+                        )
+                        or _is_specific_document_purpose(
+                            inspect_result.get("document_purpose")
+                            or smoke_result.get("document", {}).get("document_purpose")
+                        )
+                    ),
                     "semantic_rationale": inspect_result.get("semantic_rationale", []),
                     "semantic_warnings": inspect_result.get("semantic_warnings", []),
                     "section_count": inspect_result.get("section_count"),
@@ -814,6 +847,8 @@ def _run_layout_sanity_check(pdf_paths: list[Path], k: int = 5) -> dict[str, obj
                     "all_pass": all(item["passed"] for item in checks),
                 }
             )
+            result["trust_limited"] = _is_trust_limited(result)
+            result["semantic_pass"] = _semantic_pass(result)
             results.append(result)
 
     return {
@@ -832,10 +867,53 @@ def _count_values(values: list[str]) -> dict[str, int]:
     return dict(sorted(counts.items(), key=lambda item: (-item[1], item[0])))
 
 
+def _is_specific_document_type(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and value != "document"
+
+
+def _is_specific_document_purpose(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and value != "reference_lookup"
+
+
+def _is_trust_limited(item: dict[str, object]) -> bool:
+    return (
+        str(item.get("classification_status", "")) == "uncertain"
+        or str(item.get("trust_policy", "")) == "heuristic_semantic_guess"
+        or str(item.get("semantic_confidence_label", "")) == "low"
+    )
+
+
+def _semantic_pass(item: dict[str, object]) -> bool:
+    if not bool(item.get("all_pass")):
+        return False
+    has_specific_signal = _is_specific_document_type(item.get("document_type")) or _is_specific_document_purpose(
+        item.get("document_purpose")
+    )
+    semantic_confidence = item.get("semantic_confidence")
+    semantic_confidence_value = float(semantic_confidence) if semantic_confidence is not None else 0.0
+    return (
+        has_specific_signal
+        and semantic_confidence_value >= 0.56
+        and str(item.get("classification_status", "")) != "uncertain"
+    )
+
+
 def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None, k: int = 5) -> dict[str, object]:
     corpus_entries = _load_local_pdf_corpus(corpus_dir)
     sampled_entries = _sample_local_pdf_corpus(corpus_entries, sample_size)
-    layout_payload = _run_layout_sanity_check([entry.pdf_path for entry in sampled_entries], k=k)
+    with tempfile.TemporaryDirectory() as alias_dir_name:
+        alias_dir = Path(alias_dir_name)
+        alias_paths: list[Path] = []
+        display_paths: dict[str, str] = {}
+        for entry in sampled_entries:
+            alias_path = alias_dir / _corpus_alias_name(entry)
+            if alias_path.exists():
+                alias_path = alias_dir / f"{alias_path.stem}-{entry.digest.lower()[:8]}{alias_path.suffix}"
+            shutil.copyfile(entry.pdf_path, alias_path)
+            alias_paths.append(alias_path)
+            display_paths[str(alias_path)] = str(entry.pdf_path)
+
+        layout_payload = _run_layout_sanity_check(alias_paths, k=k, display_pdf_paths=display_paths)
     by_pdf = {str(item["pdf"]): item for item in layout_payload["results"]}
 
     sampled_results: list[dict[str, object]] = []
@@ -858,6 +936,11 @@ def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None
     structure_values = [float(item["structure_confidence"]) for item in sampled_results if item.get("structure_confidence") is not None]
     layout_values = [float(item["layout_confidence"]) for item in sampled_results if item.get("layout_confidence") is not None]
     semantic_values = [float(item["semantic_confidence"]) for item in sampled_results if item.get("semantic_confidence") is not None]
+    low_confidence_count = sum(1 for item in sampled_results if item.get("semantic_confidence_label") == "low")
+    trust_limited_count = sum(1 for item in sampled_results if bool(item.get("trust_limited")))
+    semantic_pass_count = sum(1 for item in sampled_results if bool(item.get("semantic_pass")))
+    specific_document_count = sum(1 for item in sampled_results if _is_specific_document_type(item.get("document_type")))
+    specific_purpose_count = sum(1 for item in sampled_results if _is_specific_document_purpose(item.get("document_purpose")))
     generic_warning_count = sum(
         1
         for item in sampled_results
@@ -867,9 +950,17 @@ def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None
         )
     )
     summary = {
+        "technical_pass_rate": round(
+            sum(1 for item in sampled_results if bool(item.get("all_pass"))) / len(sampled_results), 3
+        ) if sampled_results else None,
+        "semantic_pass_rate": round(semantic_pass_count / len(sampled_results), 3) if sampled_results else None,
         "avg_structure_confidence": round(sum(structure_values) / len(structure_values), 3) if structure_values else None,
         "avg_layout_confidence": round(sum(layout_values) / len(layout_values), 3) if layout_values else None,
         "avg_semantic_confidence": round(sum(semantic_values) / len(semantic_values), 3) if semantic_values else None,
+        "specific_document_rate": round(specific_document_count / len(sampled_results), 3) if sampled_results else None,
+        "specific_purpose_rate": round(specific_purpose_count / len(sampled_results), 3) if sampled_results else None,
+        "low_confidence_rate": round(low_confidence_count / len(sampled_results), 3) if sampled_results else None,
+        "trust_limited_rate": round(trust_limited_count / len(sampled_results), 3) if sampled_results else None,
         "bucket_counts": _count_values([str(item.get("bucket", "")) for item in sampled_results]),
         "document_type_counts": _count_values([str(item.get("document_type", "")) for item in sampled_results]),
         "document_purpose_counts": _count_values([str(item.get("document_purpose", "")) for item in sampled_results]),
@@ -886,6 +977,8 @@ def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None
         "sample_size": len(sampled_entries),
         "results": sampled_results,
         "summary": summary,
+        "technical_all_pass": bool(layout_payload["all_pass"]),
+        "semantic_all_pass": bool(sampled_results) and semantic_pass_count == len(sampled_results),
         "all_pass": bool(layout_payload["all_pass"]),
     }
 
@@ -1118,11 +1211,13 @@ RELEASE_CHECK_SHARDS = [
     "structure_chunking_core",
     "section_reconstruction_core",
     "document_selection_core",
+    "retrieval_contract_core",
     "semantic_document_understanding_core",
     "confidence_aware_document_core",
     "trust_policy_document_core",
     "document_maintenance_core",
     "structured_form_maintenance_core",
+    "processing_layer_core",
     "layout_robustness_core",
     "single_doc_random_pdf_core",
     "table_layout_robustness_core",
@@ -1779,6 +1874,10 @@ def main() -> None:
                         f"  trust: status={item.get('classification_status')} | "
                         f"policy={item.get('trust_policy')}"
                     )
+                print(
+                    f"  semantic: specificity={item.get('semantic_specificity')} | "
+                    f"semantic_pass={item.get('semantic_pass')} | trust_limited={item.get('trust_limited')}"
+                )
                 if item.get("audience_answer"):
                     print(f"  audience: {item.get('audience_answer')}")
                 if item.get("confidence_answer"):
@@ -1797,6 +1896,11 @@ def main() -> None:
                 _emit_json("corpus-sanity-check", payload, output_path=output_path)
                 return
             print(f"Corpus sanity check: {_human_status(payload['all_pass'])}")
+            print(
+                "Corpus semantic gate: "
+                f"technical={_human_status(payload.get('technical_all_pass'))} | "
+                f"semantic={_human_status(payload.get('semantic_all_pass'))}"
+            )
             print(f"Corpus PDFs available: {payload['corpus_pdf_count']}")
             print(f"Sampled PDFs: {payload['sample_size']}")
             summary = payload["summary"]
@@ -1805,6 +1909,14 @@ def main() -> None:
                 f"structure={summary.get('avg_structure_confidence')} | "
                 f"layout={summary.get('avg_layout_confidence')} | "
                 f"semantic={summary.get('avg_semantic_confidence')}"
+            )
+            print(
+                "Semantic rates: "
+                f"pass={summary.get('semantic_pass_rate')} | "
+                f"specific_type={summary.get('specific_document_rate')} | "
+                f"specific_purpose={summary.get('specific_purpose_rate')} | "
+                f"low_confidence={summary.get('low_confidence_rate')} | "
+                f"trust_limited={summary.get('trust_limited_rate')}"
             )
             print(f"Classification status counts: {summary.get('classification_status_counts')}")
             print(f"Trust policy counts: {summary.get('trust_policy_counts')}")
@@ -2099,6 +2211,7 @@ def main() -> None:
                 "semantic_confidence_label": getattr(document_record, "semantic_confidence_label", None),
                 "semantic_rationale": list(getattr(document_record, "semantic_rationale", []) or []),
                 "semantic_warnings": list(getattr(document_record, "semantic_warnings", []) or []),
+                "extraction_summary": dict(getattr(document_record, "extraction_summary", {}) or {}),
                 "section_count": len(section_payloads),
                 "sections": section_payloads,
             }

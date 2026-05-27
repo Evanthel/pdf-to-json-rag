@@ -7,6 +7,18 @@ from pydantic import BaseModel, Field, ConfigDict
 
 ChunkType = Literal["text", "table", "checklist", "figure", "header", "footer", "unknown"]
 ExtractionMethod = Literal["native", "ocr", "mixed"]
+BlockRole = Literal[
+    "heading",
+    "paragraph",
+    "table_like",
+    "key_value",
+    "list_item",
+    "checklist_item",
+    "form_field",
+    "footer_header_noise",
+    "unknown",
+]
+TextSource = Literal["native", "ocr", "merged"]
 
 
 class DocumentSectionRecord(BaseModel):
@@ -18,6 +30,7 @@ class DocumentSectionRecord(BaseModel):
     parent_section_id: str | None = None
     section_path: list[str] = Field(default_factory=list)
     section_kind: str | None = None
+    section_role: str | None = None
     page_start: int
     page_end: int
     reading_order_start: int
@@ -25,6 +38,8 @@ class DocumentSectionRecord(BaseModel):
     summary: str | None = None
     coverage_terms: list[str] = Field(default_factory=list)
     content_hints: list[str] = Field(default_factory=list)
+    source_block_ids: list[str] = Field(default_factory=list)
+    source_block_roles: list[str] = Field(default_factory=list)
     structure_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
@@ -44,6 +59,7 @@ class ChunkRecord(BaseModel):
     section_parent_id: str | None = None
     section_path: list[str] = Field(default_factory=list)
     section_kind: str | None = None
+    section_role: str | None = None
     section_summary: str | None = None
     section_coverage_terms: list[str] = Field(default_factory=list)
     section_content_hints: list[str] = Field(default_factory=list)
@@ -55,12 +71,16 @@ class ChunkRecord(BaseModel):
     following_chunk_id: str | None = None
     language: str | None = None
     extraction_method: ExtractionMethod = "native"
+    text_source: TextSource = "native"
     ocr_used: bool = False
     subtopic_cues: list[str] = Field(default_factory=list)
     semantic_terms: list[str] = Field(default_factory=list)
     content_hints: list[str] = Field(default_factory=list)
     structural_flags: list[str] = Field(default_factory=list)
+    source_block_ids: list[str] = Field(default_factory=list)
     source_block_kinds: list[str] = Field(default_factory=list)
+    source_block_roles: list[str] = Field(default_factory=list)
+    block_role_profile: list[str] = Field(default_factory=list)
     noise_labels: list[str] = Field(default_factory=list)
     quality_score: float = Field(default=1.0, ge=0.0, le=1.0)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -94,6 +114,6 @@ class DocumentRecord(BaseModel):
     semantic_warnings: list[str] = Field(default_factory=list)
     facet_terms: list[str] = Field(default_factory=list)
     detected_language: str | None = None
-    extraction_summary: dict[str, str | int | bool | None] = Field(default_factory=dict)
+    extraction_summary: dict[str, object] = Field(default_factory=dict)
     sections: list[DocumentSectionRecord] = Field(default_factory=list)
     chunks: list[ChunkRecord] = Field(default_factory=list)

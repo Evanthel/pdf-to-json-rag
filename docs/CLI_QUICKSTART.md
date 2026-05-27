@@ -57,11 +57,13 @@ If you want the richer structure/debug payload, add `--verbose` to `plan-query`,
 
 The default answer trace now includes a compact `document_selection` block for document-level modes so you can see which documents were considered, ranked, and finally selected without needing the full verbose payload.
 
-With `--verbose`, the same document-level commands also expose richer structure fields such as section paths, section kinds, and shortlist breakdowns.
+The same compact trace now also includes `retrieval_contract`, which shows whether the query ran through `single_document_qa`, `document_understanding`, or `cross_document_discovery`.
+
+With `--verbose`, the same document-level commands also expose richer structure fields such as section paths, section kinds, section roles, source-block traces, and shortlist breakdowns.
 
 Structured-form and checklist-style answers also use the same compact default output; use `--verbose` when you want the richer support/debug fields from the current structure-aware baseline.
 
-`inspect-document` and verbose answer traces now also expose simple `structure_confidence` / `layout_confidence` fields so you can see when the pipeline is less certain about an unfamiliar PDF layout.
+`inspect-document` and verbose answer traces now also expose `structure_confidence` / `layout_confidence`, extraction-time block/source summaries, and per-section source-block traces so you can see when the pipeline is less certain about an unfamiliar PDF layout.
 
 The current baseline also handles table-like and form-heavy PDFs more conservatively than earlier versions, but unfamiliar layouts are still heuristic-first rather than fully layout-aware.
 
@@ -97,7 +99,7 @@ If you are working from the source checkout and want a broader local-only sanity
 pdf-to-json-rag corpus-sanity-check --sample-size 12 --json
 ```
 
-That command now returns compact overview, type, purpose, audience, and confidence answers for each PDF so you can see whether an unfamiliar document is only processable or also semantically understood.
+That command now returns compact overview, type, purpose, audience, confidence, rationale, and limits answers for each PDF, plus corpus-level semantic rates so you can see whether unfamiliar documents are only processable or also semantically understood.
 
 If you changed code under `src/` and have not reinstalled the package yet, run maintainer checks from the source checkout like this:
 

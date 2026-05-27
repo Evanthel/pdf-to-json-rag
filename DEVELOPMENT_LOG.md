@@ -8,18 +8,18 @@ Internal development iterations in this file use `v1.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v0.7.0`
+Current implementation level: `v0.9.0`
 Current public version: `0.1.0-beta`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
 
-Public release-path validation passing:
+Latest public release-path validation before the current unreleased checkpoint:
 
 - `python -m unittest tests.test_cli_public_surface`
 - `package-check`
 - `release-check` for the packaged/public surface
 
-Repo-local regression shards currently passing:
+Repo-local regression shards currently passing in saved runs or current milestone reruns:
 
 - `query_planning_core`
 - `answer_modes_core`
@@ -36,20 +36,22 @@ Repo-local regression shards currently passing:
 - `semantic_document_understanding_core`
 - `confidence_aware_document_core`
 - `trust_policy_document_core`
+- `processing_layer_core`
+- `retrieval_contract_core`
 - `evidence_anchor_core`
 - `document_family_core`
 - `document_facets_core`
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v0.7.0`:
+Broad benchmark note after `v0.9.0`:
 
 - the targeted maintainer shard set is green again
 - the new document-level simplification shard is green
 - current broad benchmark scope:
   - `Cases`: `77`
   - `Indexed sample documents`: `25`
-- latest full rerun on the current `v0.7.0` semantic baseline:
+- latest full rerun on the current `v0.9.0` retrieval-contract baseline:
   - `precision@5`: `0.6031`
   - `recall@5`: `1.0`
   - `MRR`: `1.0`
@@ -70,6 +72,10 @@ Broad benchmark note after `v0.7.0`:
 - the new semantics direction is improving document type, purpose, and audience understanding on unfamiliar PDFs before considering a learned reranker.
 - the new UX direction is exposing semantic confidence and confidence-aware classification answers instead of only returning a bare heuristic label.
 - the new maintainer direction is using the repo-local `pdf/` corpus as a local-only unknown-document sanity source instead of relying only on the curated benchmark.
+- the new semantics direction is lowering the share of repo-local unknown PDFs that fall back to `document/reference_lookup`.
+- the new local-corpus direction is distinguishing technical success from semantic success with explicit corpus-level pass metrics.
+- the current processing direction is moving more structure recovery into extraction-time block typing, text provenance, and section-role traces before touching retrieval.
+- the current retrieval direction is separating single-document QA, document-understanding, and cross-document discovery before considering a heavier learned reranker.
 
 ## Delivered Architecture
 
@@ -77,9 +83,12 @@ Broad benchmark note after `v0.7.0`:
 
 - Native extraction with `PyMuPDF`
 - OCR fallback with `pytesseract`
+- Extraction-time block roles, text provenance, and text-quality signals
+- Native/OCR page fusion instead of one global fallback decision
 - Document-level JSON artifacts in `data/documents/`
 - Chunk-level JSON artifacts in `data/chunks/`
 - Reading-order normalization, section heuristics, noise filtering, OCR provenance
+- Section roles and source-block traces carried into chunking and inspection
 - Extraction-time metadata including:
   - `summary_cues`
   - `discovery_terms`
@@ -259,6 +268,46 @@ Representative validation that has already been completed:
 - Added a local-only `corpus-sanity-check` maintainer path that samples the repo-local `pdf/` corpus through `lcwa_gov_pdf_metadata.csv`.
 - Hardened the corpus loader against non-UTF-8 metadata and filtered out obviously broken `pages=0` artifacts before sampling.
 - Added a fallback chunk emission path for very short documents so short form-like PDFs do not fail with `No chunks provided for indexing.`
+
+### v0.7.1-v0.7.4
+
+- Improved unknown-document typing and purpose inference on the repo-local `pdf/` corpus for:
+  - registration forms
+  - court opinions
+  - government bulletins
+  - inspection-style records
+- Reduced the share of sampled local-corpus PDFs that collapse to `document/reference_lookup` by using stronger content cues and better purpose fallbacks.
+- Added corpus-level semantic pass metrics so `corpus-sanity-check` now reports:
+  - `technical_all_pass`
+  - `semantic_all_pass`
+  - specific-type / specific-purpose rates
+  - low-confidence and trust-limited rates
+- Kept the public heuristic-first baseline stable while making unknown-document semantics more useful on the local corpus.
+
+### v0.8.0
+
+- Added an extraction-time block model with roles such as `heading`, `table_like`, `key_value`, `checklist_item`, and `form_field`.
+- Added per-block `text_source` and `text_quality_score` metadata plus native/OCR page fusion so source choice is less brittle.
+- Reworked saved document and chunk artifacts to carry:
+  - `section_role`
+  - `source_block_ids`
+  - `source_block_roles`
+  - `block_role_profile`
+- Extended `inspect-document` so the processing layer is inspectable through:
+  - `extraction_summary.block_role_counts`
+  - `extraction_summary.text_source_counts`
+  - per-section role/source-block traces
+- Added `processing_layer_core` so block typing, section-role recovery, and chunk provenance are covered by the maintainer regression gate.
+
+### v0.9.0
+
+- Split retrieval into explicit contracts for:
+  - `single_document_qa`
+  - `document_understanding`
+  - `cross_document_discovery`
+- Aligned retrieval filtering, candidate backfill, diversification, and neighbor expansion to those contracts instead of one shared fallback path.
+- Exposed a compact `retrieval_contract` block in answer traces so the current retrieval path is inspectable in CLI JSON output.
+- Added `retrieval_contract_core` to the maintainer regression gate so answer-path separation is tested directly instead of only through the broad benchmark.
 
 ### v0.1.1-v0.1.2
 

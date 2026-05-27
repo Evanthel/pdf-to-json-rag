@@ -41,14 +41,19 @@ SUMMARY_CUE_STOP_PREFIXES = (
 
 @dataclass
 class ExtractedBlock:
+    block_id: str
     page_num: int
     text: str
     bbox: list[float] | None
     reading_order_index: int
     extraction_method: str = "native"
+    text_source: str = "native"
     block_kind: str = "text"
+    block_role: str = "paragraph"
     line_count: int = 1
     token_count: int = 0
+    text_quality_score: float = 1.0
+    block_labels: list[str] = field(default_factory=list)
     structural_flags: list[str] = field(default_factory=list)
 
 
@@ -218,24 +223,105 @@ def _derive_discovery_terms(
 
 def _build_extracted_block(
     *,
+    block_id: str,
     page_num: int,
     text: str,
     bbox: list[float] | None,
     reading_order_index: int,
     extraction_method: str,
+    text_source: str | None = None,
 ) -> ExtractedBlock:
     metadata = classify_block_metadata(text)
     return ExtractedBlock(
+        block_id=block_id,
         page_num=page_num,
         text=text,
         bbox=bbox,
         reading_order_index=reading_order_index,
         extraction_method=extraction_method,
+        text_source=text_source or ("ocr" if extraction_method == "ocr" else "native"),
         block_kind=str(metadata["block_kind"]),
+        block_role=str(metadata["block_role"]),
         line_count=int(metadata["line_count"]),
         token_count=int(metadata["token_count"]),
+        text_quality_score=float(metadata["text_quality_score"]),
+        block_labels=list(metadata["block_labels"]),
         structural_flags=list(metadata["structural_flags"]),
     )
+
+
+def _clone_extracted_block(
+    source_block: ExtractedBlock,
+    *,
+    reading_order_index: int,
+    extraction_method: str | None = None,
+    text_source: str | None = None,
+) -> ExtractedBlock:
+    return ExtractedBlock(
+        block_id=source_block.block_id,
+        page_num=source_block.page_num,
+        text=source_block.text,
+        bbox=source_block.bbox,
+        reading_order_index=reading_order_index,
+        extraction_method=extraction_method or source_block.extraction_method,
+        text_source=text_source or source_block.text_source,
+        block_kind=source_block.block_kind,
+        block_role=source_block.block_role,
+        line_count=source_block.line_count,
+        token_count=source_block.token_count,
+        text_quality_score=source_block.text_quality_score,
+        block_labels=list(source_block.block_labels),
+        structural_flags=list(source_block.structural_flags),
+    )
+
+
+def _page_text_score(blocks: list[ExtractedBlock]) -> float:
+    if not blocks:
+        return 0.0
+    text_chars = sum(len(block.text.strip()) for block in blocks)
+    avg_quality = sum(block.text_quality_score for block in blocks) / len(blocks)
+    structural_bonus = sum(
+        1
+        for block in blocks
+        if block.block_role in {"heading", "table_like", "form_field", "key_value", "checklist_item"}
+    )
+    return (text_chars * 0.01) + (avg_quality * 10.0) + min(structural_bonus, 4) * 0.9
+
+
+def _fuse_page_blocks(
+    native_blocks: list[ExtractedBlock],
+    ocr_blocks: list[ExtractedBlock],
+) -> tuple[list[ExtractedBlock], bool]:
+    if not ocr_blocks:
+        return native_blocks, False
+    if not native_blocks:
+        return ocr_blocks, True
+
+    native_score = _page_text_score(native_blocks)
+    ocr_score = _page_text_score(ocr_blocks)
+    native_structural = [
+        block
+        for block in native_blocks
+        if block.block_role in {"heading", "table_like", "form_field", "key_value"}
+    ]
+    native_long_paragraphs = [block for block in native_blocks if block.token_count >= 18]
+    ocr_long_paragraphs = [block for block in ocr_blocks if block.token_count >= 18]
+
+    if native_structural and ocr_long_paragraphs and not native_long_paragraphs:
+        fused_blocks: list[ExtractedBlock] = []
+        seen_texts: set[str] = set()
+        for block in [*native_structural, *ocr_long_paragraphs]:
+            normalized = re.sub(r"\s+", " ", block.text).strip().lower()
+            if not normalized or normalized in seen_texts:
+                continue
+            seen_texts.add(normalized)
+            fused_blocks.append(block)
+        if fused_blocks:
+            return sorted(fused_blocks, key=lambda block: (block.page_num, block.reading_order_index)), True
+
+    if ocr_score > native_score + 2.5:
+        return ocr_blocks, True
+    return native_blocks, False
 
 
 def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
@@ -296,6 +382,7 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
                 page_text_parts.append(clean_text)
                 candidate_blocks.append(
                     _build_extracted_block(
+                        block_id=f"{doc_id}-p{page_num + 1:03d}-native-{len(candidate_blocks) + 1:03d}",
                         page_num=page_num,
                         text=clean_text,
                         bbox=_normalize_bbox(
@@ -318,18 +405,16 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
             if needs_ocr:
                 ocr_blocks = extract_page_with_ocr(pdf_path=pdf_path, page_num=page_num)
                 if ocr_blocks:
-                    final_page_blocks = ocr_blocks
-                    page_text = "\n\n".join(block.text for block in ocr_blocks)
-                    ocr_used = True
+                    final_page_blocks, ocr_used = _fuse_page_blocks(candidate_blocks, ocr_blocks)
+                    page_text = "\n\n".join(block.text for block in final_page_blocks)
 
             for final_block in final_page_blocks:
                 blocks.append(
-                    _build_extracted_block(
-                        page_num=final_block.page_num,
-                        text=final_block.text,
-                        bbox=final_block.bbox,
+                    _clone_extracted_block(
+                        final_block,
                         reading_order_index=reading_order_index,
-                        extraction_method=final_block.extraction_method,
+                        extraction_method="mixed" if ocr_used and final_block.extraction_method == "native" else final_block.extraction_method,
+                        text_source="merged" if ocr_used and final_block.extraction_method == "native" else final_block.text_source,
                     )
                 )
                 reading_order_index += 1
@@ -386,6 +471,15 @@ def build_document_record_from_native_extraction(
         summary_cues=summary_cues,
         blocks=extraction.blocks,
     )
+    metadata_values: list[str] = []
+    for key, value in extraction.metadata.items():
+        if not isinstance(value, str):
+            continue
+        clean_value = value.strip()
+        if not clean_value:
+            continue
+        metadata_values.append(clean_value)
+        metadata_values.append(f"{key}: {clean_value}")
     semantics = interpret_document_semantics(
         source_pdf=extraction.source_pdf,
         title=extraction.title or extraction.doc_id,
@@ -393,9 +487,14 @@ def build_document_record_from_native_extraction(
         summary_cues=summary_cues,
         discovery_terms=discovery_terms,
         leading_block_lines=[block.text.splitlines()[0].strip() for block in extraction.blocks[:30]],
-        metadata_values=[value for value in extraction.metadata.values() if isinstance(value, str)],
+        metadata_values=metadata_values,
         page_count=extraction.page_count,
     )
+    block_role_counts: dict[str, int] = {}
+    text_source_counts: dict[str, int] = {}
+    for block in extraction.blocks:
+        block_role_counts[block.block_role] = block_role_counts.get(block.block_role, 0) + 1
+        text_source_counts[block.text_source] = text_source_counts.get(block.text_source, 0) + 1
     return DocumentRecord(
         doc_id=extraction.doc_id,
         source_pdf=extraction.source_pdf,
@@ -425,6 +524,8 @@ def build_document_record_from_native_extraction(
             "pages_requiring_ocr": pages_requiring_ocr,
             "pages_processed_with_ocr": pages_processed_with_ocr,
             "ocr_used": pages_processed_with_ocr > 0,
+            "block_role_counts": block_role_counts,
+            "text_source_counts": text_source_counts,
         },
         sections=sections,
     )
@@ -452,14 +553,19 @@ def native_extraction_to_dict(extraction: NativePdfExtraction) -> dict:
         ],
         "blocks": [
             {
+                "block_id": block.block_id,
                 "page_num": block.page_num,
                 "text": block.text,
                 "bbox": block.bbox,
                 "reading_order_index": block.reading_order_index,
                 "extraction_method": block.extraction_method,
+                "text_source": block.text_source,
                 "block_kind": block.block_kind,
+                "block_role": block.block_role,
                 "line_count": block.line_count,
                 "token_count": block.token_count,
+                "text_quality_score": block.text_quality_score,
+                "block_labels": block.block_labels,
                 "structural_flags": block.structural_flags,
             }
             for block in extraction.blocks
@@ -777,6 +883,7 @@ def _build_ocr_blocks_from_image(image: Image.Image, page_num: int) -> list[Extr
 
         blocks.append(
             _build_extracted_block(
+                block_id=f"ocr-page-{page_num + 1:03d}-{len(blocks) + 1:03d}",
                 page_num=page_num,
                 text=block_text,
                 bbox=_normalize_pixel_bbox(
@@ -789,6 +896,7 @@ def _build_ocr_blocks_from_image(image: Image.Image, page_num: int) -> list[Extr
                 ),
                 reading_order_index=0,
                 extraction_method="ocr",
+                text_source="ocr",
             )
         )
 
@@ -833,6 +941,7 @@ def extract_page_with_ocr(pdf_path: Path, page_num: int) -> list[ExtractedBlock]
             image_width, image_height = image.size
             return [
                 _build_extracted_block(
+                    block_id=f"ocr-page-{page_num + 1:03d}-fallback-001",
                     page_num=page_num,
                     text=ocr_text,
                     bbox=_normalize_bbox(
@@ -845,5 +954,6 @@ def extract_page_with_ocr(pdf_path: Path, page_num: int) -> list[ExtractedBlock]
                     ),
                     reading_order_index=0,
                     extraction_method="ocr",
+                    text_source="ocr",
                 )
             ]

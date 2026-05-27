@@ -674,7 +674,7 @@ def _inline_section_state(
     document_title: str | None,
     inherited_kind: str | None,
     inherited_hints: list[str] | None,
-) -> tuple[list[str], str | None, str | None, list[str], list[str], float]:
+) -> tuple[list[str], str | None, str | None, str | None, list[str], list[str], float]:
     seed_text = _clean_text(segment_text) or section_title
     coverage_terms, content_hints, _ = derive_chunk_semantics(
         text=seed_text,
@@ -706,6 +706,16 @@ def _inline_section_state(
         section_kind = "procedural_section"
     else:
         section_kind = inherited_kind or "report_section"
+    if section_kind in {"table_section"}:
+        section_role = "table"
+    elif section_kind in {"questionnaire_section", "checklist_section"}:
+        section_role = "form"
+    elif section_kind in {"procedural_section"}:
+        section_role = "list"
+    elif section_kind in {"appendix"}:
+        section_role = "appendix"
+    else:
+        section_role = "prose"
     summary: str | None = None
     if seed_text and _normalize_for_match(seed_text) != _normalize_for_match(section_title):
         summary_parts = [part.strip() for part in SENTENCE_SPLIT_RE.split(seed_text) if part.strip()]
@@ -729,6 +739,7 @@ def _inline_section_state(
             document_title=document_title,
         ),
         section_kind,
+        section_role,
         summary,
         coverage_terms[:8],
         merged_hints,
@@ -921,14 +932,19 @@ def _rebuild_block(
 ) -> ExtractedBlock:
     metadata = classify_block_metadata(text)
     return ExtractedBlock(
+        block_id=source_block.block_id,
         page_num=source_block.page_num,
         text=text,
         bbox=bbox if bbox is not None else source_block.bbox,
         reading_order_index=source_block.reading_order_index,
         extraction_method=source_block.extraction_method,
+        text_source=source_block.text_source,
         block_kind=str(metadata["block_kind"]),
+        block_role=str(metadata["block_role"]),
         line_count=int(metadata["line_count"]),
         token_count=int(metadata["token_count"]),
+        text_quality_score=float(metadata["text_quality_score"]),
+        block_labels=list(metadata["block_labels"]),
         structural_flags=list(metadata["structural_flags"]),
     )
 
@@ -954,6 +970,7 @@ def _make_chunk_record(
     section_parent_id: str | None,
     section_path: list[str] | None,
     section_kind: str | None,
+    section_role: str | None,
     section_summary: str | None,
     section_coverage_terms: list[str] | None,
     section_content_hints: list[str] | None,
@@ -968,6 +985,7 @@ def _make_chunk_record(
         text=text,
         section_title=resolved_section_title,
         source_block_kinds=[block.block_kind for block in blocks],
+        source_block_roles=[block.block_role for block in blocks],
         source_structural_flags=[
             flag for block in blocks for flag in block.structural_flags
         ],
@@ -987,12 +1005,22 @@ def _make_chunk_record(
         extraction_method=extraction_method,
     )
     block_kinds = sorted({block.block_kind for block in blocks if block.block_kind})
+    block_roles = sorted({block.block_role for block in blocks if block.block_role})
+    resolved_section_role = section_role
+    if resolved_section_role in {None, "prose"}:
+        if "table_like" in block_roles:
+            resolved_section_role = "table"
+        elif {"form_field", "key_value", "checklist_item"} & set(block_roles):
+            resolved_section_role = "form"
+        elif "list_item" in block_roles:
+            resolved_section_role = "list"
     if "table_like" in block_kinds or "table_like" in content_hints:
         chunk_type = "table"
     elif (
         section_kind == "checklist_section"
         or "checklist_like" in content_hints
         or "questionnaire_like" in content_hints
+        or {"checklist_item", "form_field"} & set(block_roles)
     ):
         chunk_type = "checklist"
     elif block_kinds == ["heading"]:
@@ -1019,6 +1047,7 @@ def _make_chunk_record(
         section_parent_id=section_parent_id,
         section_path=list(section_path or ([resolved_section_title] if resolved_section_title else [])),
         section_kind=section_kind,
+        section_role=resolved_section_role,
         section_summary=section_summary,
         section_coverage_terms=list(section_coverage_terms or []),
         section_content_hints=list(section_content_hints or []),
@@ -1028,12 +1057,16 @@ def _make_chunk_record(
         reading_order_index=blocks[0].reading_order_index,
         language=document.detected_language,
         extraction_method=extraction_method,
+        text_source="merged" if extraction_method == "mixed" else ("ocr" if ocr_used else "native"),
         ocr_used=ocr_used,
         subtopic_cues=subtopic_cues,
         semantic_terms=semantic_terms,
         content_hints=content_hints,
         structural_flags=structural_flags,
+        source_block_ids=[block.block_id for block in blocks],
         source_block_kinds=block_kinds,
+        source_block_roles=block_roles,
+        block_role_profile=block_roles,
         noise_labels=noise_labels,
         quality_score=quality_score,
         confidence=None,
@@ -1080,6 +1113,7 @@ def chunk_document(
     current_section_parent_id: str | None = None
     current_section_path: list[str] = [document.title] if document.title else []
     current_section_kind: str | None = None
+    current_section_role: str | None = None
     current_section_summary: str | None = None
     current_section_coverage_terms: list[str] = []
     current_section_content_hints: list[str] = []
@@ -1104,6 +1138,7 @@ def chunk_document(
                 section_parent_id=current_section_parent_id,
                 section_path=current_section_path,
                 section_kind=current_section_kind,
+                section_role=current_section_role,
                 section_summary=current_section_summary,
                 section_coverage_terms=current_section_coverage_terms,
                 section_content_hints=current_section_content_hints,
@@ -1126,6 +1161,7 @@ def chunk_document(
             current_section_parent_id = section.parent_section_id
             current_section_path = list(section.section_path)
             current_section_kind = section.section_kind
+            current_section_role = section.section_role
             current_section_summary = section.summary
             current_section_coverage_terms = list(section.coverage_terms)
             current_section_content_hints = list(section.content_hints)
@@ -1166,6 +1202,7 @@ def chunk_document(
                     (
                         current_section_path,
                         current_section_kind,
+                        current_section_role,
                         current_section_summary,
                         current_section_coverage_terms,
                         current_section_content_hints,
@@ -1219,6 +1256,7 @@ def chunk_document(
                     (
                         current_section_path,
                         current_section_kind,
+                        current_section_role,
                         current_section_summary,
                         current_section_coverage_terms,
                         current_section_content_hints,
@@ -1241,6 +1279,7 @@ def chunk_document(
                     (
                         current_section_path,
                         current_section_kind,
+                        current_section_role,
                         current_section_summary,
                         current_section_coverage_terms,
                         current_section_content_hints,
@@ -1359,12 +1398,13 @@ def chunk_document(
                     section_id=current_section_id,
                     section_title=current_section_title,
                     section_level=current_section_level,
-                    section_parent_id=current_section_parent_id,
-                    section_path=current_section_path,
-                    section_kind=current_section_kind,
-                    section_summary=current_section_summary,
-                    section_coverage_terms=current_section_coverage_terms,
-                    section_content_hints=current_section_content_hints,
+                section_parent_id=current_section_parent_id,
+                section_path=current_section_path,
+                section_kind=current_section_kind,
+                section_role=current_section_role,
+                section_summary=current_section_summary,
+                section_coverage_terms=current_section_coverage_terms,
+                section_content_hints=current_section_content_hints,
                     section_structure_confidence=current_section_structure_confidence,
                 )
             )
@@ -1382,14 +1422,22 @@ def load_blocks_from_native_json(native_path: Path) -> list[ExtractedBlock]:
     data = json.loads(native_path.read_text(encoding="utf-8"))
     return [
         ExtractedBlock(
+            block_id=block.get(
+                "block_id",
+                f"loaded-p{int(block['page_num']) + 1:03d}-{int(block['reading_order_index']) + 1:04d}",
+            ),
             page_num=block["page_num"],
             text=block["text"],
             bbox=block.get("bbox"),
             reading_order_index=block["reading_order_index"],
             extraction_method=block.get("extraction_method", "native"),
+            text_source=block.get("text_source", "native"),
             block_kind=block.get("block_kind", "text"),
+            block_role=block.get("block_role", "paragraph"),
             line_count=int(block.get("line_count", 1)),
             token_count=int(block.get("token_count", 0)),
+            text_quality_score=float(block.get("text_quality_score", 1.0)),
+            block_labels=list(block.get("block_labels", [])),
             structural_flags=list(block.get("structural_flags", [])),
         )
         for block in data.get("blocks", [])

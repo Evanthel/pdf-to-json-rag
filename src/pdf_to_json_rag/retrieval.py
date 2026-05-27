@@ -220,6 +220,21 @@ class RetrievalScoreBreakdown:
         )
 
 
+@dataclass(frozen=True)
+class RetrievalContract:
+    retrieval_path: str
+    query_class: str
+    query_intent: str
+    answer_mode: str
+    doc_scope: str
+    candidate_pool_k: int
+    neighbor_depth: int
+    candidate_doc_ids: tuple[str, ...] = ()
+    preferred_doc_id: str | None = None
+    diversify_per_doc_limit: int | None = None
+    rationale: tuple[str, ...] = ()
+
+
 def _query_terms(query: str) -> set[str]:
     return set(re.findall(r"[a-zA-Z]{2,}", query.lower()))
 
@@ -589,6 +604,82 @@ def _candidate_pool_size(query: str, k: int) -> int:
         return max(k * multiplier, minimum)
     multiplier, minimum = INTENT_CANDIDATE_K.get(intent, INTENT_CANDIDATE_K["generic"])
     return max(k * multiplier, minimum)
+
+
+def build_retrieval_contract(
+    query: str,
+    *,
+    plan=None,
+    k: int = 5,
+) -> RetrievalContract:
+    if plan is None:
+        plan = plan_query(query)
+    intent = plan.query_intent if plan.query_class != "evidence_lookup" else _detect_query_intent(query)
+    structured_profile = get_structured_intent_profile(intent)
+    neighbor_depth = structured_profile.neighbor_depth if structured_profile else INTENT_NEIGHBOR_DEPTH.get(intent, 1)
+    candidate_pool_k = _candidate_pool_size(query, k)
+
+    if plan.answer_mode in {"source_listing", "cross_document_compare"}:
+        retrieval_path = "cross_document_discovery"
+        doc_scope = "candidate_docs"
+        diversify_per_doc_limit = 1 if plan.answer_mode == "source_listing" else 2
+        rationale = (
+            "multi-document answer mode",
+            "retrieve diverse support across candidate documents",
+        )
+    elif plan.answer_mode in {"document_overview", "document_routing", "source_justification"}:
+        retrieval_path = "document_understanding"
+        doc_scope = "candidate_docs" if plan.candidate_doc_ids else ("preferred_doc" if plan.preferred_doc_id else "all_docs")
+        diversify_per_doc_limit = 1 if plan.answer_mode in {"document_routing", "source_justification"} else None
+        rationale = (
+            "document-level answer mode",
+            "retrieve support for document selection and summarization",
+        )
+    else:
+        retrieval_path = "single_document_qa"
+        doc_scope = "preferred_doc" if plan.preferred_doc_id else ("candidate_docs" if plan.candidate_doc_ids else "all_docs")
+        diversify_per_doc_limit = None
+        rationale = (
+            "grounded evidence mode",
+            "retrieve chunk-level support for direct question answering",
+        )
+
+    if retrieval_path == "document_understanding" and plan.answer_mode == "document_overview" and not plan.candidate_doc_ids:
+        rationale += ("allow broad retrieval before answer-time document selection",)
+    if doc_scope == "preferred_doc" and plan.preferred_doc_id:
+        rationale += ("source anchor present",)
+    elif doc_scope == "candidate_docs" and plan.candidate_doc_ids:
+        rationale += ("candidate document shortlist present",)
+
+    return RetrievalContract(
+        retrieval_path=retrieval_path,
+        query_class=plan.query_class,
+        query_intent=intent,
+        answer_mode=plan.answer_mode,
+        doc_scope=doc_scope,
+        candidate_pool_k=candidate_pool_k,
+        neighbor_depth=neighbor_depth,
+        candidate_doc_ids=tuple(plan.candidate_doc_ids),
+        preferred_doc_id=plan.preferred_doc_id,
+        diversify_per_doc_limit=diversify_per_doc_limit,
+        rationale=rationale,
+    )
+
+
+def retrieval_contract_payload(contract: RetrievalContract) -> dict[str, object]:
+    return {
+        "retrieval_path": contract.retrieval_path,
+        "query_class": contract.query_class,
+        "query_intent": contract.query_intent,
+        "answer_mode": contract.answer_mode,
+        "doc_scope": contract.doc_scope,
+        "candidate_pool_k": contract.candidate_pool_k,
+        "neighbor_depth": contract.neighbor_depth,
+        "candidate_doc_ids": list(contract.candidate_doc_ids),
+        "preferred_doc_id": contract.preferred_doc_id,
+        "diversify_per_doc_limit": contract.diversify_per_doc_limit,
+        "rationale": list(contract.rationale),
+    }
 
 
 def _is_cross_document_intent(intent: str) -> bool:
@@ -1632,6 +1723,7 @@ def retrieve_top_k(
     index_dir: Path,
     k: int = 5,
     use_lightweight_rerank: bool = True,
+    retrieval_contract: RetrievalContract | None = None,
 ) -> list[ChunkRecord]:
     """Retrieve the most relevant chunks for a query."""
     index_dir = index_dir.expanduser().resolve()
@@ -1639,10 +1731,11 @@ def retrieve_top_k(
     collection_name = manifest.get("collection_name", DEFAULT_COLLECTION_NAME)
     plan = plan_query(query)
     intent = plan.query_intent if plan.query_class != "evidence_lookup" else _detect_query_intent(query)
+    contract = retrieval_contract or build_retrieval_contract(query, plan=plan, k=k)
 
     embed_texts, _ = load_embedder_from_manifest(manifest)
     query_embedding = embed_texts([_augment_query(query)])[0]
-    candidate_k = _candidate_pool_size(query, k)
+    candidate_k = contract.candidate_pool_k
 
     client = chromadb.PersistentClient(path=str(index_dir))
     collection = client.get_collection(name=collection_name)
@@ -1751,7 +1844,7 @@ def retrieve_top_k(
         chunk.quality_score = min(chunk.quality_score, score)
         hydrated_hits.append(chunk)
     filtered_hits = [chunk for chunk in hydrated_hits if not _should_exclude_chunk(chunk)]
-    candidate_doc_ids = list(plan.candidate_doc_ids)
+    candidate_doc_ids = list(contract.candidate_doc_ids)
 
     def backfill_candidate_docs(doc_ids: list[str], existing_hits: list[ChunkRecord]) -> list[ChunkRecord]:
         present_doc_ids = {chunk.doc_id for chunk in existing_hits}
@@ -1778,18 +1871,14 @@ def retrieve_top_k(
             deduped_hits.setdefault(chunk.chunk_id, chunk)
         return list(deduped_hits.values())
 
-    if intent in {"document_routing", "source_justification", "source_listing", "cross_document_compare"} and not candidate_doc_ids:
+    if contract.retrieval_path == "cross_document_discovery" and not candidate_doc_ids:
         return []
-    if candidate_doc_ids:
+    if contract.doc_scope == "candidate_docs" and candidate_doc_ids:
         allowed_doc_ids = set(candidate_doc_ids)
         filtered_hits = [chunk for chunk in filtered_hits if chunk.doc_id in allowed_doc_ids]
         filtered_hits = backfill_candidate_docs(candidate_doc_ids, filtered_hits)
-    preferred_doc_id = (
-        None
-        if _is_cross_document_intent(intent)
-        else (plan.preferred_doc_id if plan.query_class != "evidence_lookup" else _preferred_source_doc_id(query))
-    )
-    if preferred_doc_id:
+    preferred_doc_id = None if contract.retrieval_path == "cross_document_discovery" else contract.preferred_doc_id
+    if contract.doc_scope == "preferred_doc" and preferred_doc_id:
         preferred_hits = [chunk for chunk in filtered_hits if chunk.doc_id == preferred_doc_id]
         if not preferred_hits:
             preferred_hits = [
@@ -1800,12 +1889,8 @@ def retrieve_top_k(
         if preferred_hits:
             filtered_hits = preferred_hits
     reranked_hits = _lightweight_rerank_hits(filtered_hits, query) if use_lightweight_rerank else _rerank_hits(filtered_hits, query)
-    if intent == "source_listing":
-        return _diversify_hits_by_doc(reranked_hits, k=k, per_doc_limit=1)[:k]
-    if intent == "cross_document_compare":
-        return _diversify_hits_by_doc(reranked_hits, k=k, per_doc_limit=2)[:k]
-    if intent in {"document_routing", "source_justification"}:
-        return _diversify_hits_by_doc(reranked_hits, k=k, per_doc_limit=1)[:k]
+    if contract.diversify_per_doc_limit is not None:
+        return _diversify_hits_by_doc(reranked_hits, k=k, per_doc_limit=contract.diversify_per_doc_limit)[:k]
     return reranked_hits[:k]
 
 
@@ -1910,11 +1995,14 @@ def expand_with_neighbors(
     hits: list[ChunkRecord],
     all_chunks: dict[str, ChunkRecord],
     query: str,
+    neighbor_depth: int | None = None,
 ) -> list[ChunkRecord]:
     """Expand retrieval results with preceding and following chunks."""
     intent = _detect_query_intent(query)
     structured_profile = get_structured_intent_profile(intent)
-    depth = structured_profile.neighbor_depth if structured_profile else INTENT_NEIGHBOR_DEPTH.get(intent, 1)
+    depth = neighbor_depth if neighbor_depth is not None else (
+        structured_profile.neighbor_depth if structured_profile else INTENT_NEIGHBOR_DEPTH.get(intent, 1)
+    )
     expanded: dict[str, ChunkRecord] = {}
 
     def maybe_add_neighbor(
@@ -1949,14 +2037,17 @@ def retrieve_top_k_with_neighbors(
     chunk_root: Path,
     k: int = 5,
     use_lightweight_rerank: bool = True,
+    retrieval_contract: RetrievalContract | None = None,
 ) -> tuple[list[ChunkRecord], list[ChunkRecord]]:
     """Retrieve top-k chunks and expand them with adjacent neighbors."""
     plan = plan_query(query)
+    contract = retrieval_contract or build_retrieval_contract(query, plan=plan, k=k)
     hits = retrieve_top_k(
         query=query,
         index_dir=index_dir,
         k=k,
         use_lightweight_rerank=use_lightweight_rerank,
+        retrieval_contract=contract,
     )
     doc_ids = {chunk.doc_id for chunk in hits}
     intent = plan.query_intent if plan.query_class != "evidence_lookup" else _detect_query_intent(query)
@@ -1965,11 +2056,18 @@ def retrieve_top_k_with_neighbors(
     matched_doc_ids = list(plan.matched_doc_ids) if intent == "cross_document_compare" else []
     if structured_profile and structured_profile.source_doc_id:
         doc_ids.add(structured_profile.source_doc_id)
+    if contract.preferred_doc_id:
+        doc_ids.add(contract.preferred_doc_id)
     if preferred_doc_id:
         doc_ids.add(preferred_doc_id)
-    doc_ids.update(plan.candidate_doc_ids)
+    doc_ids.update(contract.candidate_doc_ids)
     doc_ids.update(matched_doc_ids)
     all_chunks = load_chunk_lookup(chunk_root=chunk_root, doc_ids=doc_ids)
     hits = _intent_anchor_recovery_hits(query=query, hits=hits, all_chunks=all_chunks, k=k)
-    expanded = expand_with_neighbors(hits=hits, all_chunks=all_chunks, query=query)
+    expanded = expand_with_neighbors(
+        hits=hits,
+        all_chunks=all_chunks,
+        query=query,
+        neighbor_depth=contract.neighbor_depth,
+    )
     return hits, expanded

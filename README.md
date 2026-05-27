@@ -23,12 +23,16 @@ Current public version: `0.1.0-beta`
 
 Internal development iterations in this repo use `v1.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
 
-Current internal milestone: `v0.7.0`
+Current internal milestone: `v0.9.0`
 
 The current baseline includes:
 
+- extraction-time block roles with per-block text provenance and quality signals
+- native/OCR page fusion that can merge or switch sources per page instead of one global fallback
 - extraction-time sections with `section_path` and `section_kind`
+- section roles and source-block traces carried from extraction into inspection and chunking
 - structure-aware chunking and chunk metadata
+- chunk-level block provenance, block-role profiles, and text-source metadata
 - feature-based query planning and explicit `document_selection` traces
 - shared document-level mode renderers and shared answer finalization helpers
 - preserved document-root section context for inline and synthetic section splits
@@ -43,14 +47,18 @@ The current baseline includes:
 - semantic confidence signals and confidence-aware document classification answers
 - explicit classification-rationale and classification-limits answers for trust-aware document semantics
 - a local corpus sampler over repo-local `pdf/` artifacts and metadata for unknown-document sanity checks
+- stronger unknown-document typing for registration forms, court opinions, government bulletins, and inspection-style records
+- corpus-level semantic pass metrics so unfamiliar PDFs are tracked as semantically understood vs only technically processable
+- a dedicated `processing_layer_core` maintainer gate for block typing, section roles, and chunk provenance
+- an explicit `retrieval_contract` split for single-document QA, document understanding, and cross-document discovery
 - compact default JSON output with richer debug state behind `--verbose`
 - deterministic local embeddings by default, with optional `sentence-transformers`
 
 Validation state:
 
-- public install/release path: green
-- maintainer release gates: green
-- full 77-case benchmark: green
+- public CLI tests rerun in the current milestone: green
+- retrieval-contract maintainer shard rerun in the current milestone: green
+- latest saved full 77-case benchmark: green
   - `precision@5 = 0.6031`
   - `recall@5 = 1.0`
   - `MRR = 1.0`
@@ -63,7 +71,10 @@ Validation state:
 
 Current engineering direction:
 
-- keep improving document-processing robustness and unknown-document semantics on unfamiliar PDFs
+- keep strengthening the processing layer before considering heavier retrieval changes
+- keep retrieval behavior aligned to explicit answer-path contracts instead of one shared fallback path
+- keep improving unknown-document semantics on unfamiliar PDFs without hiding uncertainty
+- keep using the repo-local `pdf/` corpus as a local-only semantic stress test, not just a layout stress test
 - keep learned reranking deferred until the heuristic baseline stops being sufficient
 
 ## Capabilities
@@ -117,7 +128,7 @@ pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What do
 
 Use a fresh `PDF_TO_JSON_RAG_DATA_DIR` for quickstart and release-check runs so old local artifacts do not make `doctor` or `release-check` look greener than the current session really is.
 
-The current baseline is still heuristic-first. It now behaves more sanely on unfamiliar financial/admin forms and can separate type, purpose, audience, and overview answers, but unfamiliar layouts can still degrade section recovery and answer confidence.
+The current baseline is still heuristic-first. It now behaves more sanely on unfamiliar financial/admin forms, carries richer extraction-time block structure into chunking and inspection, and can separate type, purpose, audience, and overview answers, but unfamiliar layouts can still degrade section recovery and answer confidence.
 
 Optional stronger local embeddings:
 
@@ -144,13 +155,19 @@ Local sanity check for unfamiliar PDFs:
 pdf-to-json-rag layout-sanity-check --pdfs /path/a.pdf,/path/b.pdf --json
 ```
 
-That local sanity path now returns compact overview, type, purpose, audience, and confidence answers so you can see whether an unfamiliar PDF is only processable or also semantically understood.
+That local sanity path now returns compact overview, type, purpose, audience, confidence, rationale, and limits answers so you can see whether an unfamiliar PDF is only processable or also semantically understood.
 
 Local corpus sanity check over the repo-local `pdf/` directory:
 
 ```bash
 pdf-to-json-rag corpus-sanity-check --sample-size 12 --json
 ```
+
+That local-only corpus path now reports both `technical_all_pass` and `semantic_all_pass`, plus rates for specific document typing, specific purpose inference, low-confidence classifications, and trust-limited results.
+
+When you want to inspect the new processing layer on one extracted document, `inspect-document --json` now includes `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, and per-section `section_role` / `source_block_roles`.
+
+Document-level answer traces now also include a compact `retrieval_contract` block so you can see whether the current query ran through `single_document_qa`, `document_understanding`, or `cross_document_discovery`.
 
 When you are validating new local code in a source checkout before reinstalling the package, prefer:
 
@@ -195,7 +212,10 @@ The saved evaluation report includes:
 - slice reporting for document discovery, structure-heavy inputs, and source-anchored cases
 - compact maintainer shards for planning, structure, selection, anchors, semantics, confidence-aware document understanding, and relationship reasoning
 - a trust-policy shard for classification rationale and classification limits answers
+- a processing-layer shard for block typing, section-role recovery, and chunk provenance
+- a retrieval-contract shard that keeps single-doc, doc-understanding, and cross-doc paths separated in regression coverage
 - extra sanity shards for layout, single-document, table-like, and form-heavy behavior, plus a sampled faithfulness audit
+- a local corpus sanity pass that distinguishes technical success from semantic success on repo-local unknown PDFs
 
 Current gate status:
 
@@ -203,6 +223,7 @@ Current gate status:
 - the maintainer shard set used by `release-check` is green
 - `release-check` distinguishes public checks, maintainer checks, and benchmark-only regressions
 - the current focus is preserving the structure-aware, heuristic-first baseline and broadening unknown-document semantics rather than adding a learned reranker
+- the current focus is moving more unfamiliar PDFs out of `document/reference_lookup` while keeping confidence signalling honest
 
 ## Limitations
 

@@ -52,12 +52,16 @@ The first working version stayed local-first and deliberately narrow:
 ## 5. Current Baseline
 
 Current public version: `0.1.0-beta`
-Current internal implementation level: `v0.7.0`
+Current internal implementation level: `v0.9.0`
 
 What the repo now has:
 
+- extraction-time block roles with per-block text provenance and quality signals
+- native/OCR page fusion instead of one global OCR fallback decision
 - extraction-time sections with `section_path` and `section_kind`
+- section roles and source-block traces carried into chunking and inspection
 - structure-aware chunking and chunk metadata
+- chunk-level block provenance, block-role profiles, and text-source metadata
 - feature-based query planning
 - explicit `document_selection` traces
 - distinct document-level type / purpose / audience / overview answers
@@ -67,11 +71,15 @@ What the repo now has:
 - public install/release checks through `doctor`, `smoke-check`, `package-check`, and `release-check`
 - local semantic sanity checks for unfamiliar PDFs through `layout-sanity-check`
 - a local corpus sampler over repo-local `pdf/` artifacts through `corpus-sanity-check`
+- stronger unknown-document typing for registration forms, court opinions, government bulletins, and inspection-style records
+- corpus-level semantic pass metrics that separate technical success from semantic understanding
+- a dedicated `processing_layer_core` shard for block typing, section-role recovery, and chunk provenance
+- an explicit retrieval contract for `single_document_qa`, `document_understanding`, and `cross_document_discovery`
 
 Current validation snapshot:
 
-- public release gates: green
-- maintainer regression gates: green
+- public CLI tests rerun in the current milestone: green
+- retrieval-contract maintainer shard rerun in the current milestone: green
 - full 77-case benchmark: green
   - `precision@5 = 0.6031`
   - `recall@5 = 1.0`
@@ -126,13 +134,26 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
   - added classification-rationale and classification-limits answers to the document-level trust layer
   - added `trust_policy_document_core` to the maintainer regression gate
   - added a local-only `corpus-sanity-check` path that samples repo-local `pdf/` artifacts through `lcwa_gov_pdf_metadata.csv`
+- `v0.7.1-v0.7.4`
+  - improved unknown-document typing on the repo-local corpus for registration forms, court opinions, government bulletins, and inspection-style records
+  - reduced fallback to `document/reference_lookup` on unfamiliar local-corpus PDFs
+  - added corpus-level semantic pass metrics and explicit technical-vs-semantic corpus gate reporting
+- `v0.8.0`
+  - added an extraction-time block model with roles, text provenance, and text-quality signals
+  - added native/OCR page fusion so source choice is more local and less brittle
+  - rewrote section and chunk metadata to carry section roles, source-block ids, source-block roles, and block-role profiles
+  - added `processing_layer_core` to keep block typing, section-role recovery, and chunk provenance in the maintainer regression gate
+- `v0.9.0`
+  - split retrieval into explicit contracts for single-document QA, document understanding, and cross-document discovery
+  - exposed compact `retrieval_contract` traces in answer payloads
+  - added `retrieval_contract_core` to keep those answer-path separations covered in the maintainer regression gate
 
 ### 6.2. Next Steps
 
-1. Keep improving unknown-document semantic understanding and trust signalling before considering heavier retrieval changes.
-2. Use the local `pdf/` corpus more systematically to find failure slices beyond the curated benchmark.
+1. Keep strengthening the new processing layer where retrieval still depends on brittle structure recovery.
+2. Keep refining retrieval contracts and answer-path separation before considering heavier reranking.
 3. Keep evaluation focused on architecture gates and unknown-document sanity checks rather than benchmark growth for its own sake.
-4. Revisit a learned reranker only if the current heuristic baseline stops passing release gates and unknown-document sanity gates.
+4. Revisit a learned reranker only if the stronger processing and retrieval-contract baselines stop being sufficient downstream.
 
 ## 7. Explicitly Deferred
 
