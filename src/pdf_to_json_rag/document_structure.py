@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import re
 from typing import TYPE_CHECKING
 
-from .content_metadata import derive_chunk_semantics
+from .content_metadata import derive_chunk_semantics, infer_layout_signals
 from .schemas import DocumentSectionRecord
 
 if TYPE_CHECKING:
@@ -184,6 +184,8 @@ def _section_confidence(
     coverage_terms: list[str],
     content_hints: list[str],
     section_path: list[str],
+    layout_signals: list[str],
+    text_source_profile: list[str],
     toc_entries: set[str],
 ) -> float:
     confidence = 0.4
@@ -201,6 +203,10 @@ def _section_confidence(
         confidence += 0.05
     if {"questionnaire_like", "checklist_like", "table_like"} & set(content_hints):
         confidence += 0.05
+    if layout_signals:
+        confidence += 0.05
+    if "merged" in text_source_profile:
+        confidence += 0.03
     return _clamp_confidence(confidence)
 
 
@@ -289,6 +295,13 @@ def build_document_structure_analysis(
             section_blocks,
             section_title,
         )
+        layout_signals = infer_layout_signals(
+            block_roles=[block.block_role for block in section_blocks],
+            structural_flags=[flag for block in section_blocks for flag in block.structural_flags],
+            bboxes=[block.bbox for block in section_blocks],
+            page_span=(section_blocks[-1].page_num - section_blocks[0].page_num + 1) if section_blocks else None,
+        )
+        text_source_profile = sorted({block.text_source for block in section_blocks if block.text_source})
         section_role = _section_role(
             section_kind=section_kind,
             blocks=section_blocks,
@@ -312,6 +325,8 @@ def build_document_structure_analysis(
             coverage_terms=coverage_terms,
             content_hints=content_hints,
             section_path=section_path,
+            layout_signals=layout_signals,
+            text_source_profile=text_source_profile,
             toc_entries=toc_entries,
         )
         sections.append(
@@ -330,6 +345,9 @@ def build_document_structure_analysis(
                 summary=summary,
                 coverage_terms=coverage_terms,
                 content_hints=content_hints,
+                block_count=len(section_blocks),
+                text_source_profile=text_source_profile,
+                layout_signals=layout_signals,
                 source_block_ids=[block.block_id for block in section_blocks],
                 source_block_roles=sorted({block.block_role for block in section_blocks if block.block_role}),
                 structure_confidence=confidence,

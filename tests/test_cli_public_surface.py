@@ -18,8 +18,14 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from pdf_to_json_rag import cli as cli_module
 from pdf_to_json_rag.chunking import chunk_document
-from pdf_to_json_rag.content_metadata import classify_block_metadata
+from pdf_to_json_rag.content_metadata import classify_block_metadata, infer_layout_signals
 from pdf_to_json_rag.document_facets import derive_document_facets
+from pdf_to_json_rag.evaluation import (
+    _answer_faithfulness_layer_record,
+    _evaluate_layer_stability,
+    _processing_layer_record,
+    _retrieval_layer_record,
+)
 from pdf_to_json_rag.extraction import ExtractedBlock
 from pdf_to_json_rag.query_planning import plan_query
 from pdf_to_json_rag.retrieval import build_retrieval_contract
@@ -155,7 +161,10 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertTrue(inspect_payload["result"]["semantic_confidence_label"])
         self.assertIn("block_role_counts", inspect_payload["result"]["extraction_summary"])
         self.assertIn("text_source_counts", inspect_payload["result"]["extraction_summary"])
+        self.assertIn("layout_signal_counts", inspect_payload["result"]["extraction_summary"])
         self.assertIn("section_role", inspect_payload["result"]["sections"][0])
+        self.assertIn("layout_signals", inspect_payload["result"]["sections"][0])
+        self.assertIn("text_source_profile", inspect_payload["result"]["sections"][0])
         smoke = self._run(
             "smoke-check",
             "--pdf",
@@ -199,6 +208,14 @@ class CliPublicSurfaceTests(unittest.TestCase):
             "single_doc_overview",
         )
         self.assertEqual(
+            answer_payload["result"]["answer_trace"]["document_synthesis"]["support_scope"],
+            "selected_docs",
+        )
+        self.assertEqual(
+            answer_payload["result"]["answer_trace"]["document_synthesis"]["selected_chunk_count"],
+            len(answer_payload["result"]["expanded_hits"]),
+        )
+        self.assertEqual(
             answer_payload["result"]["answer_trace"]["retrieval_contract"]["retrieval_path"],
             "document_understanding",
         )
@@ -223,6 +240,8 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertTrue(answer_payload["result"]["top_k_hits"][0]["section_path"])
         self.assertIsNotNone(answer_payload["result"]["top_k_hits"][0]["structure_confidence"])
         self.assertIsNotNone(answer_payload["result"]["top_k_hits"][0]["layout_confidence"])
+        self.assertTrue(answer_payload["result"]["top_k_hits"][0]["chunk_strategy"])
+        self.assertIn("layout_signals", answer_payload["result"]["top_k_hits"][0])
 
     def test_plan_query_distinguishes_type_purpose_audience_confidence_rationale_and_limits(self) -> None:
         type_payload = json.loads(
@@ -299,6 +318,64 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(listing_contract.retrieval_path, "cross_document_discovery")
         self.assertEqual(listing_contract.doc_scope, "candidate_docs")
         self.assertEqual(listing_contract.diversify_per_doc_limit, 1)
+
+    def test_evaluation_layers_distinguish_processing_retrieval_and_faithfulness(self) -> None:
+        processing = _processing_layer_record(
+            [
+                {
+                    "section_role": "form",
+                    "section_kind": "checklist_section",
+                    "section_path": ["Demo", "Checklist"],
+                    "chunk_strategy": "form_rows",
+                    "text_quality_score": 0.9,
+                    "source_block_roles": ["form_field"],
+                    "source_block_kinds": ["text"],
+                }
+            ]
+        )
+        retrieval = _retrieval_layer_record(
+            {
+                "case_type": "grounded",
+                "evaluation_level": "document",
+                "precision_at_k": 1.0,
+                "recall_at_k": 1.0,
+                "reciprocal_rank": 1.0,
+            },
+            {"abstained": False},
+        )
+        answer_faithfulness = _answer_faithfulness_layer_record(
+            {
+                "case_type": "grounded",
+                "answer": {
+                    "keyword_coverage": 1.0,
+                    "abstained": False,
+                },
+            },
+            {"supported_sentence_ratio": 1.0},
+        )
+        self.assertTrue(processing["pass"])
+        self.assertTrue(retrieval["pass"])
+        self.assertTrue(answer_faithfulness["pass"])
+
+    def test_layer_stability_passes_for_green_layer_summary(self) -> None:
+        stability = _evaluate_layer_stability(
+            {
+                "processing": {
+                    "avg_metadata_completeness": 0.8,
+                    "avg_strategy_signal_rate": 1.0,
+                },
+                "retrieval": {
+                    "avg_recall_at_k": 1.0,
+                    "mrr": 1.0,
+                },
+                "answer_faithfulness": {
+                    "avg_supported_sentence_ratio": 1.0,
+                    "avg_keyword_coverage": 1.0,
+                },
+            }
+        )
+        self.assertTrue(stability["all_pass"])
+        self.assertEqual(stability["failed_layers"], [])
 
     def test_error_json_for_missing_index(self) -> None:
         self._run("init", "--json")
@@ -402,6 +479,22 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(heading["block_role"], "heading")
         self.assertIn("heading", heading["block_labels"])
 
+    def test_infer_layout_signals_detects_multi_column_and_form_density(self) -> None:
+        signals = infer_layout_signals(
+            block_roles=["form_field", "form_field", "paragraph", "paragraph"],
+            structural_flags=["structured_signal", "multi_line"],
+            bboxes=[
+                [0.05, 0.1, 0.35, 0.2],
+                [0.62, 0.1, 0.9, 0.2],
+                [0.06, 0.25, 0.34, 0.4],
+                [0.64, 0.25, 0.92, 0.4],
+            ],
+            page_span=2,
+        )
+        self.assertIn("form_dense", signals)
+        self.assertIn("multi_column_like", signals)
+        self.assertIn("multi_page_span", signals)
+
     def test_chunk_records_keep_block_provenance_and_section_role(self) -> None:
         document = DocumentRecord(
             doc_id="demo-provenance",
@@ -436,8 +529,10 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(len(chunks), 1)
         chunk = chunks[0]
         self.assertEqual(chunk.section_role, "form")
+        self.assertEqual(chunk.chunk_strategy, "form_rows")
         self.assertIn("demo-provenance-block-002", chunk.source_block_ids)
         self.assertIn("form_field", chunk.source_block_roles)
+        self.assertIn("form_dense", chunk.layout_signals)
         self.assertEqual(chunk.text_source, "native")
 
     def test_financial_form_semantics_are_not_generic(self) -> None:
@@ -630,6 +725,13 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIn("semantic_pass_rate", result["summary"])
         self.assertIn("specific_document_rate", result["summary"])
         self.assertIn("specific_purpose_rate", result["summary"])
+        self.assertIn("layer_summary", result)
+        self.assertIn("layer_stability", result)
+        self.assertIn("architecture_gates", result)
+        self.assertIn("processing", result["layer_summary"])
+        self.assertIn("semantics", result["layer_summary"])
+        self.assertIn("trust", result["layer_summary"])
+        self.assertIn("semantic_gate_pass", result["architecture_gates"])
         self.assertGreaterEqual(result["summary"]["bucket_counts"].get("form_like", 0), 1)
         self.assertGreater(result["summary"]["specific_document_rate"], 0.0)
         self.assertGreater(result["summary"]["specific_purpose_rate"], 0.0)

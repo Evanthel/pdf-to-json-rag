@@ -23,16 +23,17 @@ Current public version: `0.1.0-beta`
 
 Internal development iterations in this repo use `v1.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
 
-Current internal milestone: `v0.9.0`
+Current internal milestone: `v1.4.0`
 
 The current baseline includes:
 
 - extraction-time block roles with per-block text provenance and quality signals
 - native/OCR page fusion that can merge or switch sources per page instead of one global fallback
+- extraction-time layout signals and per-page processing summaries
 - extraction-time sections with `section_path` and `section_kind`
-- section roles and source-block traces carried from extraction into inspection and chunking
+- section roles, layout signals, text-source profiles, and source-block traces carried from extraction into inspection and chunking
 - structure-aware chunking and chunk metadata
-- chunk-level block provenance, block-role profiles, and text-source metadata
+- chunk-level block provenance, block-role profiles, layout signals, and explicit chunk strategies
 - feature-based query planning and explicit `document_selection` traces
 - shared document-level mode renderers and shared answer finalization helpers
 - preserved document-root section context for inline and synthetic section splits
@@ -50,14 +51,24 @@ The current baseline includes:
 - stronger unknown-document typing for registration forms, court opinions, government bulletins, and inspection-style records
 - corpus-level semantic pass metrics so unfamiliar PDFs are tracked as semantically understood vs only technically processable
 - a dedicated `processing_layer_core` maintainer gate for block typing, section roles, and chunk provenance
+- a dedicated `processing_strategy_core` maintainer gate for strategy-aware chunking on structure-heavy inputs
 - an explicit `retrieval_contract` split for single-document QA, document understanding, and cross-document discovery
+- a shared `document_synthesis` handoff so document selection, support scope, and answer chunks stay aligned
+- a layer-aware evaluation report that separates processing, retrieval, and answer-faithfulness signals
+- layer-stability and architecture-gate summaries on top of the layer-aware evaluation report
+- corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
 - compact default JSON output with richer debug state behind `--verbose`
 - deterministic local embeddings by default, with optional `sentence-transformers`
 
 Validation state:
 
 - public CLI tests rerun in the current milestone: green
+- processing-layer maintainer shards rerun in the current milestone: green
 - retrieval-contract maintainer shard rerun in the current milestone: green
+- retrieval-synthesis maintainer shard rerun in the current milestone: green
+- evaluation-layer public/unit validation rerun in the current milestone: green
+- layer-gate validation rerun in the current milestone: green
+- corpus-gate validation rerun in the current milestone: green
 - latest saved full 77-case benchmark: green
   - `precision@5 = 0.6031`
   - `recall@5 = 1.0`
@@ -71,7 +82,7 @@ Validation state:
 
 Current engineering direction:
 
-- keep strengthening the processing layer before considering heavier retrieval changes
+- keep strengthening the processing layer as the primary baseline for downstream retrieval behavior
 - keep retrieval behavior aligned to explicit answer-path contracts instead of one shared fallback path
 - keep improving unknown-document semantics on unfamiliar PDFs without hiding uncertainty
 - keep using the repo-local `pdf/` corpus as a local-only semantic stress test, not just a layout stress test
@@ -163,11 +174,11 @@ Local corpus sanity check over the repo-local `pdf/` directory:
 pdf-to-json-rag corpus-sanity-check --sample-size 12 --json
 ```
 
-That local-only corpus path now reports both `technical_all_pass` and `semantic_all_pass`, plus rates for specific document typing, specific purpose inference, low-confidence classifications, and trust-limited results.
+That local-only corpus path now reports both `technical_all_pass` and `semantic_all_pass`, plus rates for specific document typing, specific purpose inference, low-confidence classifications, trust-limited results, and a compact corpus architecture gate over `processing`, `semantics`, and `trust`.
 
-When you want to inspect the new processing layer on one extracted document, `inspect-document --json` now includes `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, and per-section `section_role` / `source_block_roles`.
+When you want to inspect the new processing layer on one extracted document, `inspect-document --json` now includes `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, `extraction_summary.layout_signal_counts`, and per-section `section_role` / `source_block_roles`.
 
-Document-level answer traces now also include a compact `retrieval_contract` block so you can see whether the current query ran through `single_document_qa`, `document_understanding`, or `cross_document_discovery`.
+Document-level answer traces now also include compact `retrieval_contract` and `document_synthesis` blocks so you can see both the retrieval path and how the answer path narrowed support to selected documents and chunks.
 
 When you are validating new local code in a source checkout before reinstalling the package, prefer:
 
@@ -211,9 +222,11 @@ The saved evaluation report includes:
 - per-case retrieval, answer-trace, and evidence snapshots
 - slice reporting for document discovery, structure-heavy inputs, and source-anchored cases
 - compact maintainer shards for planning, structure, selection, anchors, semantics, confidence-aware document understanding, and relationship reasoning
+- a layer-aware summary for `processing`, `retrieval`, and `answer_faithfulness`
 - a trust-policy shard for classification rationale and classification limits answers
-- a processing-layer shard for block typing, section-role recovery, and chunk provenance
+- processing-layer shards for block typing, section-role recovery, chunk provenance, and strategy-aware chunking
 - a retrieval-contract shard that keeps single-doc, doc-understanding, and cross-doc paths separated in regression coverage
+- a retrieval-synthesis shard that keeps document selection, support scope, and answer-chunk handoff aligned
 - extra sanity shards for layout, single-document, table-like, and form-heavy behavior, plus a sampled faithfulness audit
 - a local corpus sanity pass that distinguishes technical success from semantic success on repo-local unknown PDFs
 

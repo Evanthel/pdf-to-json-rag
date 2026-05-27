@@ -4,7 +4,7 @@ import json
 import re
 from pathlib import Path
 
-from .content_metadata import classify_block_metadata, derive_chunk_semantics
+from .content_metadata import classify_block_metadata, derive_chunk_semantics, infer_layout_signals
 from .extraction import ExtractedBlock
 from .quality import TOC_LEADER_RE, PAGE_NUMBER_ONLY_RE, classify_chunk_quality
 from .schemas import ChunkRecord, DocumentRecord, DocumentSectionRecord
@@ -771,6 +771,28 @@ def _chunk_layout_confidence(blocks: list[ExtractedBlock]) -> float:
     return round(min(confidence, 0.85), 3)
 
 
+def _chunk_strategy_for_context(
+    *,
+    section_kind: str | None,
+    section_role: str | None,
+    block_kinds: list[str],
+    block_roles: list[str],
+    content_hints: list[str],
+) -> str:
+    hint_set = set(content_hints)
+    role_set = set(block_roles)
+    kind_set = set(block_kinds)
+    if section_role == "table" or "table_like" in kind_set or "table_like" in role_set or "table_like" in hint_set:
+        return "table_rows"
+    if section_role == "form" or {"form_field", "key_value", "checklist_item"} & role_set:
+        return "form_rows"
+    if section_role == "list" or "list_item" in role_set or "procedural_like" in hint_set:
+        return "list_items"
+    if section_role == "appendix" or section_kind == "appendix":
+        return "appendix_structured"
+    return "prose_recursive"
+
+
 def _apply_health_check_form_assist(
     ordered_blocks: list[ExtractedBlock],
 ) -> list[ExtractedBlock]:
@@ -1006,6 +1028,12 @@ def _make_chunk_record(
     )
     block_kinds = sorted({block.block_kind for block in blocks if block.block_kind})
     block_roles = sorted({block.block_role for block in blocks if block.block_role})
+    layout_signals = infer_layout_signals(
+        block_roles=[block.block_role for block in blocks],
+        structural_flags=[flag for block in blocks for flag in block.structural_flags],
+        bboxes=[block.bbox for block in blocks],
+        page_span=(blocks[-1].page_num - blocks[0].page_num + 1) if blocks else None,
+    )
     resolved_section_role = section_role
     if resolved_section_role in {None, "prose"}:
         if "table_like" in block_roles:
@@ -1027,12 +1055,23 @@ def _make_chunk_record(
         chunk_type = "header"
     else:
         chunk_type = "text"
+    chunk_strategy = _chunk_strategy_for_context(
+        section_kind=section_kind,
+        section_role=resolved_section_role,
+        block_kinds=block_kinds,
+        block_roles=block_roles,
+        content_hints=content_hints,
+    )
     chunk_structure_confidence = section_structure_confidence
     if chunk_structure_confidence is None:
         chunk_structure_confidence = document.structure_confidence
     elif document.structure_confidence is not None:
         chunk_structure_confidence = round((chunk_structure_confidence * 0.7) + (document.structure_confidence * 0.3), 3)
     chunk_layout_confidence = document.layout_confidence if document.layout_confidence is not None else _chunk_layout_confidence(blocks)
+    text_quality_score = round(
+        sum(block.text_quality_score for block in blocks) / max(len(blocks), 1),
+        3,
+    ) if blocks else None
     return ChunkRecord(
         doc_id=document.doc_id,
         chunk_id=f"{document.doc_id}-chunk-{chunk_number:04d}",
@@ -1054,6 +1093,7 @@ def _make_chunk_record(
         structure_confidence=chunk_structure_confidence,
         layout_confidence=chunk_layout_confidence,
         chunk_type=chunk_type,
+        chunk_strategy=chunk_strategy,
         reading_order_index=blocks[0].reading_order_index,
         language=document.detected_language,
         extraction_method=extraction_method,
@@ -1063,10 +1103,12 @@ def _make_chunk_record(
         semantic_terms=semantic_terms,
         content_hints=content_hints,
         structural_flags=structural_flags,
+        layout_signals=layout_signals,
         source_block_ids=[block.block_id for block in blocks],
         source_block_kinds=block_kinds,
         source_block_roles=block_roles,
         block_role_profile=block_roles,
+        text_quality_score=text_quality_score,
         noise_labels=noise_labels,
         quality_score=quality_score,
         confidence=None,
@@ -1118,6 +1160,7 @@ def chunk_document(
     current_section_coverage_terms: list[str] = []
     current_section_content_hints: list[str] = []
     current_section_structure_confidence: float | None = document.structure_confidence
+    current_chunk_strategy = "prose_recursive"
     in_key_points_summary = False
     last_buffer_page_num: int | None = None
     buffer_treatment_subtopic: str | None = None
@@ -1166,6 +1209,13 @@ def chunk_document(
             current_section_coverage_terms = list(section.coverage_terms)
             current_section_content_hints = list(section.content_hints)
             current_section_structure_confidence = section.structure_confidence
+            current_chunk_strategy = _chunk_strategy_for_context(
+                section_kind=current_section_kind,
+                section_role=current_section_role,
+                block_kinds=[],
+                block_roles=[],
+                content_hints=current_section_content_hints,
+            )
             in_key_points_summary = False
 
         raw_block_text = _clean_text(block.text)
@@ -1203,10 +1253,10 @@ def chunk_document(
                         current_section_path,
                         current_section_kind,
                         current_section_role,
-                        current_section_summary,
-                        current_section_coverage_terms,
-                        current_section_content_hints,
-                        current_section_structure_confidence,
+                    current_section_summary,
+                    current_section_coverage_terms,
+                    current_section_content_hints,
+                    current_section_structure_confidence,
                     ) = _inline_section_state(
                         section_title=inline_heading,
                         segment_text=scoped_segment,
@@ -1220,6 +1270,13 @@ def chunk_document(
                     current_section_level = None
                     current_section_parent_id = None
                     in_key_points_summary = False
+                    current_chunk_strategy = _chunk_strategy_for_context(
+                        section_kind=current_section_kind,
+                        section_role=current_section_role,
+                        block_kinds=[],
+                        block_roles=[],
+                        content_hints=current_section_content_hints,
+                    )
 
                 segment = scoped_segment
                 if not segment:
@@ -1273,6 +1330,13 @@ def chunk_document(
                     current_section_title = inline_section_title
                     current_section_level = None
                     current_section_parent_id = None
+                    current_chunk_strategy = _chunk_strategy_for_context(
+                        section_kind=current_section_kind,
+                        section_role=current_section_role,
+                        block_kinds=[],
+                        block_roles=[],
+                        content_hints=current_section_content_hints,
+                    )
 
                 if block.block_kind == "heading" or _is_probable_header(segment, toc_entries):
                     flush_buffer()
@@ -1299,6 +1363,13 @@ def chunk_document(
                     )
                     current_section_parent_id = None
                     in_key_points_summary = False
+                    current_chunk_strategy = _chunk_strategy_for_context(
+                        section_kind=current_section_kind,
+                        section_role=current_section_role,
+                        block_kinds=[],
+                        block_roles=[],
+                        content_hints=current_section_content_hints,
+                    )
                     continue
 
                 if block.block_kind == "table_like" and buffer and buffer_chars >= min_chunk_chars:
@@ -1312,14 +1383,14 @@ def chunk_document(
                     flush_buffer()
                 if (
                     buffer
-                    and current_section_kind in {"checklist_section", "questionnaire_section"}
+                    and current_chunk_strategy in {"form_rows", "list_items"}
                     and re.match(r"^(?:[-•]|\d+[\).]?)\s+", segment.lstrip())
                     and buffer_chars >= max(140, min_chunk_chars // 2)
                 ):
                     flush_buffer()
                 if (
                     buffer
-                    and "questionnaire_like" in current_section_content_hints
+                    and current_chunk_strategy == "form_rows"
                     and re.match(r"^\d+[\).]?\s+", segment.lstrip())
                     and buffer_chars >= min_chunk_chars
                 ):
@@ -1327,7 +1398,7 @@ def chunk_document(
                 if (
                     buffer
                     and (
-                        current_section_kind in {"table_section", "appendix"}
+                        current_chunk_strategy in {"table_rows", "appendix_structured"}
                         or block.block_kind == "table_like"
                     )
                     and _looks_like_structured_row(segment)

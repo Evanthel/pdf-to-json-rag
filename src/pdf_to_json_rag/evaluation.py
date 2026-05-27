@@ -124,6 +124,13 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "source_listing_nonmedical_learning_and_incident_response",
         "compare_vitamin_c_vs_echinacea_prevention",
     ],
+    "retrieval_synthesis_core": [
+        "lbdl_document_overview",
+        "lbdl_document_routing_backpropagation",
+        "source_listing_humanitarian_model_reports",
+        "model_report_niger_justification",
+        "compare_niger_chad_model_reports",
+    ],
     "query_planning_core": [
         "lbdl_document_overview",
         "lbdl_document_type",
@@ -267,6 +274,13 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "lbdl_document_overview",
         "model_report_niger_document_type",
     ],
+    "processing_strategy_core": [
+        "health_questionnaire_table1_sensitivity",
+        "pre_injection_checklist_live_vaccine",
+        "source_listing_nonmedical_learning_and_incident_response",
+        "lbdl_document_overview",
+        "model_report_niger_document_type",
+    ],
 }
 SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
     "checklist_fields": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
@@ -286,6 +300,20 @@ SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
     "inventory_coverage": {"mrr": 1.0, "avg_keyword_coverage": 0.95, "negative_success_rate": 1.0},
     "relationship_reasoning": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
     "model_report_family": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
+}
+LAYER_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
+    "processing": {
+        "avg_metadata_completeness": 0.7,
+        "avg_strategy_signal_rate": 0.75,
+    },
+    "retrieval": {
+        "avg_recall_at_k": 1.0,
+        "mrr": 1.0,
+    },
+    "answer_faithfulness": {
+        "avg_supported_sentence_ratio": 1.0,
+        "avg_keyword_coverage": 0.95,
+    },
 }
 DEFAULT_EVAL_CASES = [
     {
@@ -877,9 +905,16 @@ def _chunk_snapshot(chunk: ChunkRecord) -> dict[str, Any]:
         "section_title": chunk.section_title,
         "section_path": chunk.section_path,
         "section_kind": chunk.section_kind,
+        "section_role": chunk.section_role,
         "chunk_type": chunk.chunk_type,
+        "chunk_strategy": chunk.chunk_strategy,
         "section_content_hints": chunk.section_content_hints,
+        "layout_signals": chunk.layout_signals,
         "extraction_method": chunk.extraction_method,
+        "text_source": chunk.text_source,
+        "text_quality_score": chunk.text_quality_score,
+        "source_block_roles": chunk.source_block_roles,
+        "source_block_kinds": chunk.source_block_kinds,
         "quality_score": chunk.quality_score,
         "noise_labels": chunk.noise_labels,
         "preview": _preview_text(chunk.text),
@@ -1035,6 +1070,196 @@ def _faithfulness_audit_record(debug_case: dict[str, Any]) -> dict[str, Any]:
         "unsupported_sentences": unsupported,
         "evidence_preview": support_fragments[:6],
     }
+
+
+def _chunk_like_has(chunk: Any, key: str) -> bool:
+    if isinstance(chunk, dict):
+        value = chunk.get(key)
+    else:
+        value = getattr(chunk, key, None)
+    if isinstance(value, list):
+        return bool(value)
+    return value is not None and value != ""
+
+
+def _processing_layer_record(chunks: list[Any]) -> dict[str, Any]:
+    if not chunks:
+        return {
+            "pass": False,
+            "chunk_count": 0,
+            "metadata_completeness": 0.0,
+            "structure_signal_rate": 0.0,
+            "strategy_signal_rate": 0.0,
+            "quality_signal_rate": 0.0,
+        }
+
+    structure_hits = 0
+    strategy_hits = 0
+    quality_hits = 0
+    source_hits = 0
+    for chunk in chunks:
+        if (
+            _chunk_like_has(chunk, "section_role")
+            or _chunk_like_has(chunk, "section_kind")
+            or _chunk_like_has(chunk, "section_path")
+            or _chunk_like_has(chunk, "section_content_hints")
+            or _chunk_like_has(chunk, "layout_signals")
+        ):
+            structure_hits += 1
+        if _chunk_like_has(chunk, "chunk_strategy") or _chunk_like_has(chunk, "chunk_type"):
+            strategy_hits += 1
+        if _chunk_like_has(chunk, "text_quality_score") or _chunk_like_has(chunk, "quality_score"):
+            quality_hits += 1
+        if (
+            _chunk_like_has(chunk, "source_block_roles")
+            or _chunk_like_has(chunk, "source_block_kinds")
+            or _chunk_like_has(chunk, "extraction_method")
+            or _chunk_like_has(chunk, "text_source")
+        ):
+            source_hits += 1
+
+    chunk_count = len(chunks)
+    metadata_completeness = (
+        structure_hits + strategy_hits + quality_hits + source_hits
+    ) / float(chunk_count * 4)
+    structure_signal_rate = structure_hits / float(chunk_count)
+    strategy_signal_rate = strategy_hits / float(chunk_count)
+    quality_signal_rate = quality_hits / float(chunk_count)
+    return {
+        "pass": (
+            metadata_completeness >= 0.75
+            and structure_signal_rate >= 0.75
+            and strategy_signal_rate >= 0.75
+        ),
+        "chunk_count": chunk_count,
+        "metadata_completeness": metadata_completeness,
+        "structure_signal_rate": structure_signal_rate,
+        "strategy_signal_rate": strategy_signal_rate,
+        "quality_signal_rate": quality_signal_rate,
+    }
+
+
+def _retrieval_layer_record(retrieval_result: dict[str, Any], answer_result: dict[str, Any]) -> dict[str, Any]:
+    case_type = retrieval_result.get("case_type", "grounded")
+    if case_type == "negative":
+        return {
+            "pass": bool(answer_result.get("negative_success")),
+            "evaluation_level": retrieval_result.get("evaluation_level", "chunk"),
+            "precision_at_k": None,
+            "recall_at_k": None,
+            "reciprocal_rank": None,
+        }
+    recall = float(retrieval_result.get("recall_at_k") or 0.0)
+    rr = float(retrieval_result.get("reciprocal_rank") or 0.0)
+    return {
+        "pass": recall >= 1.0 and rr >= 1.0,
+        "evaluation_level": retrieval_result.get("evaluation_level", "chunk"),
+        "precision_at_k": float(retrieval_result.get("precision_at_k") or 0.0),
+        "recall_at_k": recall,
+        "reciprocal_rank": rr,
+    }
+
+
+def _answer_faithfulness_layer_record(
+    debug_case: dict[str, Any],
+    faithfulness_record: dict[str, Any] | None,
+) -> dict[str, Any]:
+    case_type = debug_case.get("case_type", "grounded")
+    answer = debug_case["answer"]
+    if case_type == "negative":
+        return {
+            "pass": bool(answer.get("negative_success")),
+            "supported_sentence_ratio": None,
+            "keyword_coverage": None,
+            "abstained": bool(answer.get("abstained")),
+        }
+    supported_sentence_ratio = (
+        float(faithfulness_record.get("supported_sentence_ratio"))
+        if faithfulness_record is not None
+        else 0.0
+    )
+    keyword_coverage = float(answer.get("keyword_coverage") or 0.0)
+    abstained = bool(answer.get("abstained"))
+    return {
+        "pass": (not abstained) and keyword_coverage >= 1.0 and supported_sentence_ratio >= 1.0,
+        "supported_sentence_ratio": supported_sentence_ratio,
+        "keyword_coverage": keyword_coverage,
+        "abstained": abstained,
+    }
+
+
+def _layer_summary(debug_cases: list[dict[str, Any]]) -> dict[str, Any]:
+    summaries: dict[str, Any] = {}
+    for layer_name in ("processing", "retrieval", "answer_faithfulness"):
+        layer_records = [item["layers"][layer_name] for item in debug_cases if layer_name in item.get("layers", {})]
+        pass_case_ids = [
+            item["case_id"]
+            for item in debug_cases
+            if item.get("layers", {}).get(layer_name, {}).get("pass")
+        ]
+        failing_case_ids = [
+            item["case_id"]
+            for item in debug_cases
+            if not item.get("layers", {}).get(layer_name, {}).get("pass")
+        ]
+        summary: dict[str, Any] = {
+            "case_count": len(layer_records),
+            "pass_count": len(pass_case_ids),
+            "pass_rate": (len(pass_case_ids) / len(layer_records)) if layer_records else 0.0,
+            "failing_case_count": len(failing_case_ids),
+            "failing_case_ids": failing_case_ids,
+        }
+        if layer_name == "processing":
+            summary.update(
+                {
+                    "avg_metadata_completeness": _average(
+                        [float(item.get("metadata_completeness", 0.0)) for item in layer_records]
+                    ),
+                    "avg_structure_signal_rate": _average(
+                        [float(item.get("structure_signal_rate", 0.0)) for item in layer_records]
+                    ),
+                    "avg_strategy_signal_rate": _average(
+                        [float(item.get("strategy_signal_rate", 0.0)) for item in layer_records]
+                    ),
+                }
+            )
+        elif layer_name == "retrieval":
+            grounded_records = [
+                item for item, debug_case in zip(layer_records, debug_cases)
+                if debug_case.get("case_type") != "negative"
+            ]
+            summary.update(
+                {
+                    "avg_recall_at_k": _average(
+                        [float(item.get("recall_at_k", 0.0) or 0.0) for item in grounded_records]
+                    ),
+                    "mrr": _average(
+                        [float(item.get("reciprocal_rank", 0.0) or 0.0) for item in grounded_records]
+                    ),
+                }
+            )
+        else:
+            grounded_records = [
+                item for item, debug_case in zip(layer_records, debug_cases)
+                if debug_case.get("case_type") != "negative"
+            ]
+            summary.update(
+                {
+                    "avg_supported_sentence_ratio": _average(
+                        [float(item.get("supported_sentence_ratio", 0.0) or 0.0) for item in grounded_records]
+                    ),
+                    "avg_keyword_coverage": _average(
+                        [float(item.get("keyword_coverage", 0.0) or 0.0) for item in grounded_records]
+                    ),
+                }
+            )
+        summaries[layer_name] = summary
+    summaries["all_pass"] = all(
+        summary.get("failing_case_count", 0) == 0
+        for name, summary in summaries.items()
+        if name != "all_pass"
+    )
+    return summaries
 
 
 def _run_faithfulness_audit(debug_cases: list[dict[str, Any]], audit_case_ids: list[str]) -> dict[str, Any]:
@@ -1235,6 +1460,86 @@ def _evaluate_slice_stability(
     }
 
 
+def _evaluate_layer_stability(layer_summary: dict[str, Any]) -> dict[str, Any]:
+    checks: dict[str, Any] = {}
+    failed_layers: list[str] = []
+
+    for layer_name, thresholds in LAYER_STABILITY_THRESHOLDS.items():
+        summary = layer_summary.get(layer_name)
+        if summary is None:
+            checks[layer_name] = {
+                "present": False,
+                "pass": False,
+                "reason": "layer missing from current evaluation report",
+                "thresholds": thresholds,
+            }
+            failed_layers.append(layer_name)
+            continue
+
+        failed_metrics: dict[str, dict[str, float]] = {}
+        for metric_name, min_value in thresholds.items():
+            actual_value = float(summary.get(metric_name, 0.0) or 0.0)
+            if actual_value < min_value:
+                failed_metrics[metric_name] = {
+                    "actual": actual_value,
+                    "required_min": min_value,
+                }
+
+        passed = not failed_metrics
+        checks[layer_name] = {
+            "present": True,
+            "pass": passed,
+            "thresholds": thresholds,
+            "failed_metrics": failed_metrics,
+        }
+        if not passed:
+            failed_layers.append(layer_name)
+
+    return {
+        "all_pass": not failed_layers,
+        "failed_layers": failed_layers,
+        "checks": checks,
+    }
+
+
+def _architecture_gates(
+    *,
+    summary: dict[str, Any],
+    layer_stability: dict[str, Any],
+    slice_stability: dict[str, Any],
+    faithfulness_audit: dict[str, Any],
+    is_default_eval_suite: bool,
+) -> dict[str, Any]:
+    faithfulness_pass = not bool(faithfulness_audit.get("recommend_llm_judge"))
+    warning_free = int(summary.get("warning_case_count", 0)) == 0
+    layer_pass = bool(layer_stability.get("all_pass"))
+    slice_pass = bool(slice_stability.get("all_pass")) if is_default_eval_suite else None
+
+    reasons: list[str] = []
+    if not warning_free:
+        reasons.append("benchmark warnings present")
+    if not layer_pass:
+        reasons.append("layer stability thresholds not met")
+    if is_default_eval_suite and not bool(slice_stability.get("all_pass")):
+        reasons.append("slice stability thresholds not met")
+    if not faithfulness_pass:
+        reasons.append("faithfulness audit recommends deeper review")
+
+    all_pass = warning_free and layer_pass and faithfulness_pass
+    if is_default_eval_suite:
+        all_pass = all_pass and bool(slice_stability.get("all_pass"))
+
+    return {
+        "all_pass": all_pass,
+        "warning_free": warning_free,
+        "layer_stability_pass": layer_pass,
+        "slice_stability_pass": slice_pass,
+        "faithfulness_pass": faithfulness_pass,
+        "is_default_eval_suite": is_default_eval_suite,
+        "reasons": reasons,
+    }
+
+
 def _deferred_feature_decisions(
     summary: dict[str, Any],
     slices: dict[str, Any],
@@ -1291,10 +1596,12 @@ def run_mvp_evaluation(
     """Run the small local MVP evaluation workflow and save a report."""
     eval_dir = eval_dir.expanduser().resolve()
     eval_dir.mkdir(parents=True, exist_ok=True)
+    default_eval_path = ensure_default_eval_cases(eval_dir)
     if eval_path is None:
-        eval_path = ensure_default_eval_cases(eval_dir)
+        eval_path = default_eval_path
     else:
         eval_path = eval_path.expanduser().resolve()
+    is_default_eval_suite = eval_path == default_eval_path
 
     cases = load_eval_cases(eval_path)
     audit_path = ensure_default_faithfulness_audit(eval_dir)
@@ -1405,8 +1712,36 @@ def run_mvp_evaluation(
     slices = {label: _slice_summary(label, debug_cases) for label in all_slice_labels}
     slice_stability = _evaluate_slice_stability(slices)
     faithfulness_audit = _run_faithfulness_audit(debug_cases, audit_case_ids)
+    full_faithfulness = {
+        item["case_id"]: _faithfulness_audit_record(item)
+        for item in debug_cases
+        if item.get("case_type") != "negative"
+    }
+    for debug_case in debug_cases:
+        case_id = debug_case["case_id"]
+        processing_chunks = debug_case["retrieval"]["top_k_snapshots"] + debug_case["retrieval"]["expanded_snapshots"]
+        debug_case["layers"] = {
+            "processing": _processing_layer_record(processing_chunks),
+            "retrieval": _retrieval_layer_record(
+                next(item for item in retrieval_results if item["case_id"] == case_id),
+                next(item for item in answer_results if item["case_id"] == case_id),
+            ),
+            "answer_faithfulness": _answer_faithfulness_layer_record(
+                debug_case,
+                full_faithfulness.get(case_id),
+            ),
+        }
+    layer_summary = _layer_summary(debug_cases)
+    layer_stability = _evaluate_layer_stability(layer_summary)
     summary = _summarize_retrieval_results(retrieval_results, answer_results)
     baseline_summary = _summarize_retrieval_results(baseline_retrieval_results, answer_results)
+    architecture_gates = _architecture_gates(
+        summary=summary,
+        layer_stability=layer_stability,
+        slice_stability=slice_stability,
+        faithfulness_audit=faithfulness_audit,
+        is_default_eval_suite=is_default_eval_suite,
+    )
     deferred_feature_decisions = _deferred_feature_decisions(
         summary=summary,
         slices=slices,
@@ -1421,8 +1756,11 @@ def run_mvp_evaluation(
         "faithfulness_audit_file": str(audit_path),
         "case_count": len(cases),
         "summary": summary,
+        "layer_summary": layer_summary,
+        "layer_stability": layer_stability,
         "slices": slices,
         "slice_stability": slice_stability,
+        "architecture_gates": architecture_gates,
         "retrieval_strategy_comparison": {
             "baseline_chunking_only": {
                 "avg_precision_at_k": baseline_summary["avg_precision_at_k"],

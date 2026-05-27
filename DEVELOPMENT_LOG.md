@@ -8,7 +8,7 @@ Internal development iterations in this file use `v1.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v0.9.0`
+Current implementation level: `v1.4.0`
 Current public version: `0.1.0-beta`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
@@ -37,21 +37,23 @@ Repo-local regression shards currently passing in saved runs or current mileston
 - `confidence_aware_document_core`
 - `trust_policy_document_core`
 - `processing_layer_core`
+- `processing_strategy_core`
 - `retrieval_contract_core`
+- `retrieval_synthesis_core`
 - `evidence_anchor_core`
 - `document_family_core`
 - `document_facets_core`
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v0.9.0`:
+Broad benchmark note after `v1.4.0`:
 
 - the targeted maintainer shard set is green again
 - the new document-level simplification shard is green
 - current broad benchmark scope:
   - `Cases`: `77`
   - `Indexed sample documents`: `25`
-- latest full rerun on the current `v0.9.0` retrieval-contract baseline:
+- latest saved full rerun before the current `v1.1.0` retrieval/synthesis checkpoint:
   - `precision@5`: `0.6031`
   - `recall@5`: `1.0`
   - `MRR`: `1.0`
@@ -75,7 +77,12 @@ Broad benchmark note after `v0.9.0`:
 - the new semantics direction is lowering the share of repo-local unknown PDFs that fall back to `document/reference_lookup`.
 - the new local-corpus direction is distinguishing technical success from semantic success with explicit corpus-level pass metrics.
 - the current processing direction is moving more structure recovery into extraction-time block typing, text provenance, and section-role traces before touching retrieval.
+- the current processing direction also includes layout-signal-aware sections and strategy-aware chunking, so structure is less dependent on answer-time rescue heuristics.
 - the current retrieval direction is separating single-document QA, document-understanding, and cross-document discovery before considering a heavier learned reranker.
+- the current synthesis direction is keeping document selection, support scope, and answer chunks on one shared handoff instead of re-deriving them inside each document-level renderer.
+- the current evaluation direction is separating processing, retrieval, and answer-faithfulness signals instead of treating the benchmark as one flat pass/fail surface.
+- the current gating direction is turning those layer summaries into explicit architecture gates instead of leaving them as report-only diagnostics.
+- the current corpus direction is turning repo-local unknown-document sampling into a real `processing / semantics / trust` gate instead of a descriptive sanity report.
 
 ## Delivered Architecture
 
@@ -84,11 +91,12 @@ Broad benchmark note after `v0.9.0`:
 - Native extraction with `PyMuPDF`
 - OCR fallback with `pytesseract`
 - Extraction-time block roles, text provenance, and text-quality signals
+- Extraction-time layout signals and per-page processing summaries
 - Native/OCR page fusion instead of one global fallback decision
 - Document-level JSON artifacts in `data/documents/`
 - Chunk-level JSON artifacts in `data/chunks/`
 - Reading-order normalization, section heuristics, noise filtering, OCR provenance
-- Section roles and source-block traces carried into chunking and inspection
+- Section roles, text-source profiles, layout signals, and source-block traces carried into chunking and inspection
 - Extraction-time metadata including:
   - `summary_cues`
   - `discovery_terms`
@@ -308,6 +316,44 @@ Representative validation that has already been completed:
 - Aligned retrieval filtering, candidate backfill, diversification, and neighbor expansion to those contracts instead of one shared fallback path.
 - Exposed a compact `retrieval_contract` block in answer traces so the current retrieval path is inspectable in CLI JSON output.
 - Added `retrieval_contract_core` to the maintainer regression gate so answer-path separation is tested directly instead of only through the broad benchmark.
+
+### v1.0.0
+
+- Added extraction-time layout signals and per-page processing summaries so the document layer has a clearer view of form-like, table-like, list-dense, and multi-column-like pages.
+- Enriched sections with:
+  - `block_count`
+  - `text_source_profile`
+  - `layout_signals`
+- Upgraded chunks to carry:
+  - explicit `chunk_strategy`
+  - `layout_signals`
+  - averaged `text_quality_score`
+- Made strategy-aware chunking part of the processing baseline instead of a loose collection of structure-heavy flush heuristics.
+- Added `processing_strategy_core` to the maintainer regression gate so structure-aware chunk strategies are covered directly.
+
+### v1.1.0
+
+- Added a shared `document_synthesis` handoff so retrieval and document-level answering agree on selected docs, support scope, and answer chunks.
+- Simplified overview, routing, listing, justification, and compare renderers to consume one synthesis context instead of rebuilding support scope per mode.
+- Added `retrieval_synthesis_core` to the maintainer regression gate so the retrieval-to-answer handoff is covered directly.
+
+### v1.2.0
+
+- Split the saved evaluation report into explicit `processing`, `retrieval`, and `answer_faithfulness` layers.
+- Added per-case layer status records so failures can be attributed to the right stage instead of only surfacing as broad benchmark warnings.
+- Exposed the same layer summary through `evaluate-mvp --json` and the CLI text output.
+
+### v1.3.0
+
+- Added `layer_stability` thresholds for the `processing`, `retrieval`, and `answer_faithfulness` layers.
+- Added `architecture_gates` so full-suite and partial-suite evaluations can return an explicit gate decision instead of only a descriptive report.
+- Exposed those gates through `evaluate-mvp --json` and the CLI text output.
+
+### v1.4.0
+
+- Added corpus-layer summaries for `processing`, `semantics`, and `trust` inside `corpus-sanity-check`.
+- Added a corpus architecture gate so repo-local unknown-document sampling returns an explicit decision instead of only rates and counts.
+- Surfaced that local corpus gate inside `release-check` as a local-only advisory signal.
 
 ### v0.1.1-v0.1.2
 

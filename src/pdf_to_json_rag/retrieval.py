@@ -1754,7 +1754,9 @@ def retrieve_top_k(
             semantic_terms = _metadata_list(metadata, "semantic_terms")
             content_hints = _metadata_list(metadata, "content_hints")
             structural_flags = _metadata_list(metadata, "structural_flags")
+            layout_signals = _metadata_list(metadata, "layout_signals")
             source_block_kinds = _metadata_list(metadata, "source_block_kinds")
+            source_block_roles = _metadata_list(metadata, "source_block_roles")
             section_coverage_terms = _metadata_list(metadata, "section_coverage_terms")
             section_content_hints = _metadata_list(metadata, "section_content_hints")
             section_path = _metadata_list(metadata, "section_path")
@@ -1794,6 +1796,7 @@ def retrieve_top_k(
                     section_parent_id=metadata.get("section_parent_id"),
                     section_path=section_path,
                     section_kind=metadata.get("section_kind"),
+                    section_role=metadata.get("section_role"),
                     section_summary=metadata.get("section_summary"),
                     section_coverage_terms=section_coverage_terms,
                     section_content_hints=section_content_hints,
@@ -1808,18 +1811,28 @@ def retrieve_top_k(
                         else None
                     ),
                     chunk_type=metadata.get("chunk_type", "text"),
+                    chunk_strategy=metadata.get("chunk_strategy", "prose_recursive"),
                     reading_order_index=int(metadata["reading_order_index"]),
                     preceding_chunk_id=metadata.get("preceding_chunk_id"),
                     following_chunk_id=metadata.get("following_chunk_id"),
                     language=metadata.get("language"),
                     extraction_method=metadata.get("extraction_method", "native"),
+                    text_source=metadata.get("text_source", "native"),
                     ocr_used=bool(metadata.get("ocr_used", False)),
                     subtopic_cues=subtopic_cues,
                     semantic_terms=semantic_terms,
                     content_hints=content_hints,
                     structural_flags=structural_flags,
+                    layout_signals=layout_signals,
                     source_block_kinds=source_block_kinds,
+                    source_block_roles=source_block_roles,
+                    block_role_profile=source_block_roles,
                     noise_labels=noise_labels,
+                    text_quality_score=(
+                        float(metadata["text_quality_score"])
+                        if metadata.get("text_quality_score") is not None
+                        else None
+                    ),
                     quality_score=float(metadata.get("quality_score", 1.0)),
                     confidence=(max(0.0, 1.0 - float(distance)) if distance is not None else None),
                 )

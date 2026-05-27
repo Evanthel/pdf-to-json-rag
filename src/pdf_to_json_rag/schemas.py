@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, ConfigDict
 
 ChunkType = Literal["text", "table", "checklist", "figure", "header", "footer", "unknown"]
 ExtractionMethod = Literal["native", "ocr", "mixed"]
+ChunkStrategy = Literal["prose_recursive", "table_rows", "form_rows", "list_items", "appendix_structured"]
 BlockRole = Literal[
     "heading",
     "paragraph",
@@ -38,6 +39,9 @@ class DocumentSectionRecord(BaseModel):
     summary: str | None = None
     coverage_terms: list[str] = Field(default_factory=list)
     content_hints: list[str] = Field(default_factory=list)
+    block_count: int = 0
+    text_source_profile: list[str] = Field(default_factory=list)
+    layout_signals: list[str] = Field(default_factory=list)
     source_block_ids: list[str] = Field(default_factory=list)
     source_block_roles: list[str] = Field(default_factory=list)
     structure_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -66,6 +70,7 @@ class ChunkRecord(BaseModel):
     structure_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     layout_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     chunk_type: ChunkType = "text"
+    chunk_strategy: ChunkStrategy = "prose_recursive"
     reading_order_index: int
     preceding_chunk_id: str | None = None
     following_chunk_id: str | None = None
@@ -77,10 +82,12 @@ class ChunkRecord(BaseModel):
     semantic_terms: list[str] = Field(default_factory=list)
     content_hints: list[str] = Field(default_factory=list)
     structural_flags: list[str] = Field(default_factory=list)
+    layout_signals: list[str] = Field(default_factory=list)
     source_block_ids: list[str] = Field(default_factory=list)
     source_block_kinds: list[str] = Field(default_factory=list)
     source_block_roles: list[str] = Field(default_factory=list)
     block_role_profile: list[str] = Field(default_factory=list)
+    text_quality_score: float | None = Field(default=None, ge=0.0, le=1.0)
     noise_labels: list[str] = Field(default_factory=list)
     quality_score: float = Field(default=1.0, ge=0.0, le=1.0)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)

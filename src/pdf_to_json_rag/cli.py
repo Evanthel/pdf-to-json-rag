@@ -244,12 +244,16 @@ def _chunk_payload(chunk) -> dict[str, object]:
         "section_title": chunk.section_title,
         "section_path": list(chunk.section_path),
         "section_kind": chunk.section_kind,
+        "section_role": getattr(chunk, "section_role", None),
         "section_summary": chunk.section_summary,
         "section_coverage_terms": list(chunk.section_coverage_terms),
         "section_content_hints": list(chunk.section_content_hints),
         "structure_confidence": chunk.structure_confidence,
         "layout_confidence": chunk.layout_confidence,
         "chunk_type": chunk.chunk_type,
+        "chunk_strategy": getattr(chunk, "chunk_strategy", None),
+        "layout_signals": list(getattr(chunk, "layout_signals", []) or []),
+        "text_quality_score": getattr(chunk, "text_quality_score", None),
         "preceding_chunk_id": chunk.preceding_chunk_id,
         "following_chunk_id": chunk.following_chunk_id,
         "extraction_method": chunk.extraction_method,
@@ -310,6 +314,9 @@ def _section_payload(section) -> dict[str, object]:
         "summary": section.summary,
         "coverage_terms": list(section.coverage_terms),
         "content_hints": list(section.content_hints),
+        "block_count": getattr(section, "block_count", 0),
+        "text_source_profile": list(getattr(section, "text_source_profile", []) or []),
+        "layout_signals": list(getattr(section, "layout_signals", []) or []),
         "source_block_count": len(getattr(section, "source_block_ids", []) or []),
         "source_block_roles": list(getattr(section, "source_block_roles", []) or []),
         "structure_confidence": section.structure_confidence,
@@ -359,6 +366,7 @@ def _compact_answer_trace(answer_trace: dict[str, object]) -> dict[str, object]:
         "candidate_doc_ids": answer_trace.get("candidate_doc_ids", []),
         "retrieval_contract": answer_trace.get("retrieval_contract", {}),
         "document_selection": answer_trace.get("document_selection", {}),
+        "document_synthesis": answer_trace.get("document_synthesis", {}),
         "template_id": answer_trace.get("template_id"),
         "matched_pattern": answer_trace.get("matched_pattern"),
         "matched_cues": answer_trace.get("matched_cues", []),
@@ -969,6 +977,96 @@ def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None
         "semantic_confidence_label_counts": _count_values([str(item.get("semantic_confidence_label", "")) for item in sampled_results]),
         "generic_warning_count": generic_warning_count,
     }
+
+    processing_failed = [
+        str(item.get("pdf"))
+        for item in sampled_results
+        if not bool(item.get("all_pass"))
+    ]
+    semantic_failed = [
+        str(item.get("pdf"))
+        for item in sampled_results
+        if not bool(item.get("semantic_pass"))
+    ]
+    trust_failed = [
+        str(item.get("pdf"))
+        for item in sampled_results
+        if bool(item.get("trust_limited"))
+    ]
+    layer_summary = {
+        "processing": {
+            "sample_count": len(sampled_results),
+            "pass_rate": summary["technical_pass_rate"],
+            "avg_structure_confidence": summary["avg_structure_confidence"],
+            "avg_layout_confidence": summary["avg_layout_confidence"],
+            "failing_pdf_count": len(processing_failed),
+            "failing_pdfs": processing_failed,
+        },
+        "semantics": {
+            "sample_count": len(sampled_results),
+            "pass_rate": summary["semantic_pass_rate"],
+            "specific_document_rate": summary["specific_document_rate"],
+            "specific_purpose_rate": summary["specific_purpose_rate"],
+            "failing_pdf_count": len(semantic_failed),
+            "failing_pdfs": semantic_failed,
+        },
+        "trust": {
+            "sample_count": len(sampled_results),
+            "low_confidence_rate": summary["low_confidence_rate"],
+            "trust_limited_rate": summary["trust_limited_rate"],
+            "generic_warning_count": summary["generic_warning_count"],
+            "failing_pdf_count": len(trust_failed),
+            "failing_pdfs": trust_failed,
+        },
+    }
+
+    layer_stability_checks: dict[str, object] = {}
+    failed_layers: list[str] = []
+    for layer_name, thresholds in CORPUS_LAYER_THRESHOLDS.items():
+        current = layer_summary[layer_name]
+        failed_metrics: dict[str, dict[str, float]] = {}
+        if layer_name == "trust":
+            for metric_name, max_value in thresholds.items():
+                actual_key = metric_name.replace("max_", "")
+                actual_value = float(current.get(actual_key, 0.0) or 0.0)
+                if actual_value > max_value:
+                    failed_metrics[actual_key] = {
+                        "actual": actual_value,
+                        "required_max": max_value,
+                    }
+        else:
+            for metric_name, min_value in thresholds.items():
+                actual_value = float(current.get(metric_name, 0.0) or 0.0)
+                if actual_value < min_value:
+                    failed_metrics[metric_name] = {
+                        "actual": actual_value,
+                        "required_min": min_value,
+                    }
+        passed = not failed_metrics
+        layer_stability_checks[layer_name] = {
+            "pass": passed,
+            "thresholds": thresholds,
+            "failed_metrics": failed_metrics,
+        }
+        if not passed:
+            failed_layers.append(layer_name)
+    layer_stability = {
+        "all_pass": not failed_layers,
+        "failed_layers": failed_layers,
+        "checks": layer_stability_checks,
+    }
+
+    corpus_architecture_gates = {
+        "all_pass": bool(layer_stability["all_pass"]) and bool(layout_payload["all_pass"]),
+        "technical_gate_pass": bool(layout_payload["all_pass"]),
+        "layer_stability_pass": bool(layer_stability["all_pass"]),
+        "semantic_gate_pass": bool(sampled_results) and semantic_pass_count == len(sampled_results),
+        "reasons": [
+            *([] if layout_payload["all_pass"] else ["technical corpus smoke failures present"]),
+            *([] if layer_stability["all_pass"] else ["corpus layer thresholds not met"]),
+            *([] if sampled_results and semantic_pass_count == len(sampled_results) else ["not every sampled PDF reached semantic pass"]),
+        ],
+    }
     corpus_paths = _local_pdf_corpus_paths(corpus_dir)
     return {
         "corpus_dir": str(corpus_paths[0]) if corpus_paths else (str(corpus_dir) if corpus_dir else None),
@@ -977,6 +1075,9 @@ def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None
         "sample_size": len(sampled_entries),
         "results": sampled_results,
         "summary": summary,
+        "layer_summary": layer_summary,
+        "layer_stability": layer_stability,
+        "architecture_gates": corpus_architecture_gates,
         "technical_all_pass": bool(layout_payload["all_pass"]),
         "semantic_all_pass": bool(sampled_results) and semantic_pass_count == len(sampled_results),
         "all_pass": bool(layout_payload["all_pass"]),
@@ -1212,12 +1313,14 @@ RELEASE_CHECK_SHARDS = [
     "section_reconstruction_core",
     "document_selection_core",
     "retrieval_contract_core",
+    "retrieval_synthesis_core",
     "semantic_document_understanding_core",
     "confidence_aware_document_core",
     "trust_policy_document_core",
     "document_maintenance_core",
     "structured_form_maintenance_core",
     "processing_layer_core",
+    "processing_strategy_core",
     "layout_robustness_core",
     "single_doc_random_pdf_core",
     "table_layout_robustness_core",
@@ -1227,6 +1330,22 @@ RELEASE_CHECK_SHARDS = [
     "inventory_coverage_core",
     "relationship_core",
 ]
+CORPUS_LAYER_THRESHOLDS: dict[str, dict[str, float]] = {
+    "processing": {
+        "technical_pass_rate": 1.0,
+        "avg_structure_confidence": 0.55,
+        "avg_layout_confidence": 0.55,
+    },
+    "semantics": {
+        "semantic_pass_rate": 0.66,
+        "specific_document_rate": 0.66,
+        "specific_purpose_rate": 0.66,
+    },
+    "trust": {
+        "max_low_confidence_rate": 0.34,
+        "max_trust_limited_rate": 0.34,
+    },
+}
 
 
 def _run_release_check(k: int) -> dict[str, object]:
@@ -1244,6 +1363,13 @@ def _run_release_check(k: int) -> dict[str, object]:
         root_manifest_path.exists()
         and benchmark_eval_path.exists()
         and len(inventory) >= 5
+    )
+    local_corpus_paths = _local_pdf_corpus_paths(None)
+    local_corpus_available = bool(local_corpus_paths)
+    local_corpus_sanity = (
+        _run_corpus_sanity_check(sample_size=4, corpus_dir=local_corpus_paths[0], k=k)
+        if local_corpus_available
+        else None
     )
     regression_all_pass = True
 
@@ -1302,6 +1428,8 @@ def _run_release_check(k: int) -> dict[str, object]:
         benchmark_assets_available=benchmark_assets_available,
         regression_all_pass=regression_all_pass,
     )
+    if local_corpus_sanity is not None and not bool(local_corpus_sanity.get("architecture_gates", {}).get("all_pass")):
+        recommendation["why"].append("local unknown-document corpus gate is failing or trust-limited")
 
     return {
         "doctor": doctor,
@@ -1330,6 +1458,10 @@ def _run_release_check(k: int) -> dict[str, object]:
             "skipped": not benchmark_assets_available,
             "all_pass": regression_all_pass if benchmark_assets_available else None,
             "results": regressions,
+        },
+        "local_corpus_sanity": {
+            "available": local_corpus_available,
+            "result": local_corpus_sanity,
         },
         "overall_pass": overall_pass,
         "recommendation": recommendation,
@@ -1843,6 +1975,12 @@ def main() -> None:
                     print("Maintainer regression gate: SKIPPED (benchmark assets not present in the active data root)")
                 else:
                     print(f"Maintainer regression gate: {_human_status(bool(payload['internal_regressions']['all_pass']))}")
+                local_corpus = payload.get("local_corpus_sanity", {})
+                if local_corpus.get("available") and local_corpus.get("result"):
+                    print(
+                        "Local corpus gate: "
+                        f"{_human_status(bool(local_corpus['result'].get('architecture_gates', {}).get('all_pass')))}"
+                    )
             else:
                 print("Maintainer gates: SKIPPED (run from a source checkout to include package and regression checks)")
             print("")
@@ -1901,6 +2039,12 @@ def main() -> None:
                 f"technical={_human_status(payload.get('technical_all_pass'))} | "
                 f"semantic={_human_status(payload.get('semantic_all_pass'))}"
             )
+            architecture_gates = payload.get("architecture_gates", {})
+            if architecture_gates:
+                print(
+                    "Corpus architecture gate: "
+                    f"{_human_status(architecture_gates.get('all_pass'))}"
+                )
             print(f"Corpus PDFs available: {payload['corpus_pdf_count']}")
             print(f"Sampled PDFs: {payload['sample_size']}")
             summary = payload["summary"]
@@ -1921,6 +2065,15 @@ def main() -> None:
             print(f"Classification status counts: {summary.get('classification_status_counts')}")
             print(f"Trust policy counts: {summary.get('trust_policy_counts')}")
             print(f"Generic warning count: {summary.get('generic_warning_count')}")
+            layer_stability = payload.get("layer_stability", {})
+            if layer_stability:
+                print(f"Corpus layer stability: {_human_status(layer_stability.get('all_pass'))}")
+                failed_layers = layer_stability.get("failed_layers", [])
+                if failed_layers:
+                    print(f"Corpus failed layers: {', '.join(failed_layers)}")
+            reasons = architecture_gates.get("reasons", []) if architecture_gates else []
+            if reasons:
+                print(f"Corpus gate reasons: {', '.join(reasons)}")
             return
 
         if command == "init":
@@ -2348,6 +2501,9 @@ def main() -> None:
                         "report_path": str(report_path),
                         "case_count": report["case_count"],
                         "summary": report["summary"],
+                        "layer_summary": report.get("layer_summary", {}),
+                        "layer_stability": report.get("layer_stability", {}),
+                        "architecture_gates": report.get("architecture_gates", {}),
                         "faithfulness_audit": report["faithfulness_audit"],
                         "retrieval_strategy_comparison": report.get("retrieval_strategy_comparison", {}),
                         "deferred_feature_decisions": report.get("deferred_feature_decisions", {}),
@@ -2366,6 +2522,24 @@ def main() -> None:
             print(f"negative_case_count: {report['summary']['negative_case_count']}")
             print(f"negative_success_rate: {report['summary']['negative_success_rate']:.3f}")
             print(f"warning_case_count: {report['summary']['warning_case_count']}")
+            layer_summary = report.get("layer_summary", {})
+            if layer_summary:
+                processing = layer_summary.get("processing", {})
+                retrieval = layer_summary.get("retrieval", {})
+                answer_faithfulness = layer_summary.get("answer_faithfulness", {})
+                print(f"layer_all_pass: {layer_summary.get('all_pass', False)}")
+                print(f"processing_layer_pass_rate: {processing.get('pass_rate', 0.0):.3f}")
+                print(f"retrieval_layer_pass_rate: {retrieval.get('pass_rate', 0.0):.3f}")
+                print(
+                    "answer_faithfulness_pass_rate: "
+                    f"{answer_faithfulness.get('pass_rate', 0.0):.3f}"
+                )
+            layer_stability = report.get("layer_stability", {})
+            if layer_stability:
+                print(f"layer_stability_all_pass: {layer_stability.get('all_pass', False)}")
+                failed_layers = layer_stability.get("failed_layers", [])
+                if failed_layers:
+                    print(f"layer_stability_failed_layers: {', '.join(failed_layers)}")
             print(
                 "faithfulness_supported_sentence_ratio: "
                 f"{report['faithfulness_audit']['avg_supported_sentence_ratio']:.3f}"
@@ -2398,6 +2572,12 @@ def main() -> None:
                 failed = stability.get("failed_labels", [])
                 if failed:
                     print(f"slice_stability_failed_labels: {', '.join(failed)}")
+            architecture_gates = report.get("architecture_gates", {})
+            if architecture_gates:
+                print(f"architecture_gates_all_pass: {architecture_gates.get('all_pass', False)}")
+                reasons = architecture_gates.get("reasons", [])
+                if reasons:
+                    print(f"architecture_gate_reasons: {', '.join(reasons)}")
             return
 
         if command == "evaluate-regression":

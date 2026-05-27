@@ -12,7 +12,7 @@ import fitz
 from PIL import Image
 import pytesseract
 
-from .content_metadata import classify_block_metadata
+from .content_metadata import classify_block_metadata, infer_layout_signals
 from .document_structure import build_document_structure_analysis
 from .document_semantics import interpret_document_semantics
 from .schemas import DocumentRecord
@@ -288,6 +288,29 @@ def _page_text_score(blocks: list[ExtractedBlock]) -> float:
     return (text_chars * 0.01) + (avg_quality * 10.0) + min(structural_bonus, 4) * 0.9
 
 
+def _page_layout_profile(blocks: list[ExtractedBlock]) -> dict[str, object]:
+    role_counts: dict[str, int] = {}
+    text_source_counts: dict[str, int] = {}
+    for block in blocks:
+        role_counts[block.block_role] = role_counts.get(block.block_role, 0) + 1
+        text_source_counts[block.text_source] = text_source_counts.get(block.text_source, 0) + 1
+    avg_text_quality = round(
+        sum(block.text_quality_score for block in blocks) / max(len(blocks), 1),
+        3,
+    ) if blocks else 0.0
+    return {
+        "block_count": len(blocks),
+        "role_counts": role_counts,
+        "text_source_counts": text_source_counts,
+        "avg_text_quality_score": avg_text_quality,
+        "layout_signals": infer_layout_signals(
+            block_roles=[block.block_role for block in blocks],
+            structural_flags=[flag for block in blocks for flag in block.structural_flags],
+            bboxes=[block.bbox for block in blocks],
+        ),
+    }
+
+
 def _fuse_page_blocks(
     native_blocks: list[ExtractedBlock],
     ocr_blocks: list[ExtractedBlock],
@@ -319,6 +342,25 @@ def _fuse_page_blocks(
         if fused_blocks:
             return sorted(fused_blocks, key=lambda block: (block.page_num, block.reading_order_index)), True
 
+    native_layout_signals = set(
+        infer_layout_signals(
+            block_roles=[block.block_role for block in native_blocks],
+            structural_flags=[flag for block in native_blocks for flag in block.structural_flags],
+            bboxes=[block.bbox for block in native_blocks],
+        )
+    )
+    ocr_layout_signals = set(
+        infer_layout_signals(
+            block_roles=[block.block_role for block in ocr_blocks],
+            structural_flags=[flag for block in ocr_blocks for flag in block.structural_flags],
+            bboxes=[block.bbox for block in ocr_blocks],
+        )
+    )
+
+    if "form_dense" in native_layout_signals and "form_dense" not in ocr_layout_signals:
+        return native_blocks, False
+    if "table_dense" in native_layout_signals and "table_dense" not in ocr_layout_signals:
+        return native_blocks, False
     if ocr_score > native_score + 2.5:
         return ocr_blocks, True
     return native_blocks, False
@@ -495,6 +537,21 @@ def build_document_record_from_native_extraction(
     for block in extraction.blocks:
         block_role_counts[block.block_role] = block_role_counts.get(block.block_role, 0) + 1
         text_source_counts[block.text_source] = text_source_counts.get(block.text_source, 0) + 1
+    page_layout_profiles = [
+        {
+            "page_num": page.page_num + 1,
+            **_page_layout_profile([block for block in extraction.blocks if block.page_num == page.page_num]),
+        }
+        for page in extraction.pages
+    ]
+    layout_signal_counts: dict[str, int] = defaultdict(int)
+    for profile in page_layout_profiles:
+        for signal in profile["layout_signals"]:
+            layout_signal_counts[str(signal)] += 1
+    avg_text_quality_score = round(
+        sum(block.text_quality_score for block in extraction.blocks) / max(len(extraction.blocks), 1),
+        3,
+    ) if extraction.blocks else 0.0
     return DocumentRecord(
         doc_id=extraction.doc_id,
         source_pdf=extraction.source_pdf,
@@ -526,6 +583,9 @@ def build_document_record_from_native_extraction(
             "ocr_used": pages_processed_with_ocr > 0,
             "block_role_counts": block_role_counts,
             "text_source_counts": text_source_counts,
+            "avg_text_quality_score": avg_text_quality_score,
+            "layout_signal_counts": dict(layout_signal_counts),
+            "page_layout_profiles": page_layout_profiles,
         },
         sections=sections,
     )

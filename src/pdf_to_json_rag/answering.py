@@ -501,6 +501,17 @@ class DocumentSelection:
     shortlist_breakdown: list[dict[str, object]] = field(default_factory=list)
 
 
+@dataclass
+class DocumentSynthesis:
+    selection: DocumentSelection
+    support_scope: str
+    support_doc_ids: list[str]
+    answer_chunk_doc_ids: list[str]
+    selected_chunk_count: int
+    answer_chunks: list[ChunkRecord] = field(default_factory=list)
+    support_entries: list[dict[str, object]] = field(default_factory=list)
+
+
 DOCUMENT_SELECTION_STRATEGIES: dict[str, str] = {
     "document_overview": "single_doc_overview",
     "source_justification": "single_doc_justification",
@@ -2767,6 +2778,7 @@ def _base_answer_trace(
     answer_contract: dict[str, object] | None = None,
     support_trace: list[dict[str, object]] | None = None,
     document_selection: dict[str, object] | None = None,
+    document_synthesis: dict[str, object] | None = None,
     retrieval_contract: dict[str, object] | None = None,
 ) -> dict[str, object]:
     plan = plan_query(query)
@@ -2787,6 +2799,7 @@ def _base_answer_trace(
         "answer_contract": answer_contract or {},
         "retrieval_contract": retrieval_contract or {},
         "document_selection": document_selection or {},
+        "document_synthesis": document_synthesis or {},
         "support_trace": support_trace or [],
         "evidence_chunk_ids": [item.chunk_id for item in evidence],
     }
@@ -2800,6 +2813,15 @@ def _document_selection_payload(selection: DocumentSelection) -> dict[str, objec
         "selected_doc_ids": list(selection.selected_doc_ids),
         "primary_doc_id": selection.primary_doc_id,
         "shortlist_breakdown": list(selection.shortlist_breakdown),
+    }
+
+
+def _document_synthesis_payload(synthesis: DocumentSynthesis) -> dict[str, object]:
+    return {
+        "support_scope": synthesis.support_scope,
+        "support_doc_ids": list(synthesis.support_doc_ids),
+        "answer_chunk_doc_ids": list(synthesis.answer_chunk_doc_ids),
+        "selected_chunk_count": synthesis.selected_chunk_count,
     }
 
 
@@ -2855,6 +2877,19 @@ def _selected_doc_ids_for_mode(
     return selected_doc_ids, primary_doc_id, strategy
 
 
+def _support_doc_ids_for_mode(
+    plan,
+    selection: DocumentSelection,
+) -> list[str]:
+    if plan.answer_mode in {"source_listing", "cross_document_compare"}:
+        return list(selection.selected_doc_ids)
+    if plan.answer_mode == "document_routing" and plan.query_features.get("plural_routing"):
+        return list(selection.selected_doc_ids)
+    if selection.primary_doc_id:
+        return [selection.primary_doc_id]
+    return list(selection.selected_doc_ids[:1])
+
+
 def _build_document_selection(
     plan,
     query: str,
@@ -2898,27 +2933,94 @@ def _build_document_selection(
     )
 
 
-def _document_overview_mode_answer(
-    selection: DocumentSelection,
+def _build_document_synthesis(
+    *,
+    plan,
     query: str,
     query_intent: str,
     top_k_hits: list[ChunkRecord],
-    context_chunks: list[ChunkRecord],
+    expanded_hits: list[ChunkRecord],
     evidence: list[EvidenceSentence],
     chunk_root: Path,
+    retrieval_contract: dict[str, object],
+) -> DocumentSynthesis:
+    selection = _build_document_selection(
+        plan=plan,
+        query=query,
+        top_k_hits=top_k_hits,
+        chunk_root=chunk_root,
+    )
+    answer_chunks = expanded_hits
+    support_scope = "expanded_hits"
+    selected_doc_ids = set(selection.selected_doc_ids)
+    if selected_doc_ids:
+        filtered = [chunk for chunk in expanded_hits if chunk.doc_id in selected_doc_ids]
+        if filtered:
+            answer_chunks = filtered
+            support_scope = "selected_docs"
+
+    retrieval_path = str(retrieval_contract.get("retrieval_path") or "")
+    contract_preferred_doc_id = retrieval_contract.get("preferred_doc_id")
+    if isinstance(contract_preferred_doc_id, str) and contract_preferred_doc_id:
+        preferred_hits = [chunk for chunk in answer_chunks if chunk.doc_id == contract_preferred_doc_id]
+        if preferred_hits and retrieval_path == "single_document_qa":
+            answer_chunks = preferred_hits
+            support_scope = "preferred_doc"
+
+    query_terms = _query_terms(query)
+    if (
+        top_k_hits
+        and query_terms.intersection(SOURCE_ANCHORED_HINTS)
+        and plan.answer_mode not in {"document_routing", "source_listing", "cross_document_compare"}
+    ):
+        doc_counts: dict[str, int] = {}
+        for chunk in top_k_hits:
+            doc_counts[chunk.doc_id] = doc_counts.get(chunk.doc_id, 0) + 1
+        dominant_doc_id, dominant_count = max(doc_counts.items(), key=lambda item: item[1])
+        if dominant_count >= max(2, (len(top_k_hits) // 2) + 1):
+            filtered = [chunk for chunk in expanded_hits if chunk.doc_id == dominant_doc_id]
+            if filtered:
+                answer_chunks = filtered
+                support_scope = "dominant_hit_doc"
+
+    answer_chunk_doc_ids = list(dict.fromkeys(chunk.doc_id for chunk in answer_chunks))
+    support_doc_ids = _support_doc_ids_for_mode(plan, selection)
+    support_entries = _build_document_support_entries(
+        query=query,
+        doc_ids=support_doc_ids,
+        top_k_hits=top_k_hits,
+        context_chunks=answer_chunks,
+        evidence=evidence,
+        chunk_root=chunk_root,
+    )
+    return DocumentSynthesis(
+        selection=selection,
+        support_scope=support_scope,
+        support_doc_ids=support_doc_ids,
+        answer_chunk_doc_ids=answer_chunk_doc_ids,
+        selected_chunk_count=len(answer_chunks),
+        answer_chunks=answer_chunks,
+        support_entries=support_entries,
+    )
+
+
+def _document_overview_mode_answer(
+    synthesis: DocumentSynthesis,
+    query: str,
+    query_intent: str,
+    top_k_hits: list[ChunkRecord],
+    chunk_root: Path,
 ) -> tuple[str | None, dict[str, object] | None]:
+    selection = synthesis.selection
     primary_doc_id = selection.primary_doc_id or (selection.selected_doc_ids[0] if selection.selected_doc_ids else None)
     if primary_doc_id is None and top_k_hits:
         primary_doc_id = top_k_hits[0].doc_id
     if primary_doc_id is None:
         return None, None
-    support_entry = _build_document_support_entry(
-        query=query,
-        doc_id=primary_doc_id,
-        top_k_hits=top_k_hits,
-        context_chunks=context_chunks,
-        evidence=evidence,
-        chunk_root=chunk_root,
+    support_entry = synthesis.support_entries[0] if synthesis.support_entries else _document_support_trace_item(
+        primary_doc_id,
+        top_k_hits,
+        chunk_root,
     )
     if query_intent == "document_type":
         answer, cues, answer_contract = _render_document_type(primary_doc_id, top_k_hits, chunk_root)
@@ -2976,26 +3078,17 @@ def _document_overview_mode_answer(
 
 def _document_routing_mode_answer(
     plan,
-    selection: DocumentSelection,
-    query: str,
+    synthesis: DocumentSynthesis,
     top_k_hits: list[ChunkRecord],
-    context_chunks: list[ChunkRecord],
-    evidence: list[EvidenceSentence],
     chunk_root: Path,
 ) -> tuple[str | None, dict[str, object] | None]:
+    selection = synthesis.selection
     if not top_k_hits or not selection.selected_doc_ids:
         return None, None
     if plan.query_features.get("plural_routing"):
         chosen_doc_ids = list(selection.selected_doc_ids)
         if len(chosen_doc_ids) >= 2:
-            support_trace = _build_document_support_entries(
-                query=query,
-                doc_ids=chosen_doc_ids,
-                top_k_hits=top_k_hits,
-                context_chunks=context_chunks,
-                evidence=evidence,
-                chunk_root=chunk_root,
-            )
+            support_trace = synthesis.support_entries
             fragments: list[str] = []
             cues: list[str] = []
             for support_entry in support_trace:
@@ -3019,13 +3112,10 @@ def _document_routing_mode_answer(
     primary_doc_id = selection.primary_doc_id
     if not primary_doc_id:
         return None, None
-    support_entry = _build_document_support_entry(
-        query=query,
-        doc_id=primary_doc_id,
-        top_k_hits=top_k_hits,
-        context_chunks=context_chunks,
-        evidence=evidence,
-        chunk_root=chunk_root,
+    support_entry = synthesis.support_entries[0] if synthesis.support_entries else _document_support_trace_item(
+        primary_doc_id,
+        top_k_hits,
+        chunk_root,
     )
     primary_label = str(support_entry["label"])
     inventory_summary = str(support_entry["inventory_summary"])
@@ -3070,23 +3160,18 @@ def _document_routing_mode_answer(
 
 
 def _source_justification_mode_answer(
-    selection: DocumentSelection,
-    query: str,
+    synthesis: DocumentSynthesis,
     top_k_hits: list[ChunkRecord],
-    context_chunks: list[ChunkRecord],
-    evidence: list[EvidenceSentence],
     chunk_root: Path,
 ) -> tuple[str | None, dict[str, object] | None]:
+    selection = synthesis.selection
     if not top_k_hits:
         return None, None
     primary_doc_id = selection.primary_doc_id or top_k_hits[0].doc_id
-    support_entry = _build_document_support_entry(
-        query=query,
-        doc_id=primary_doc_id,
-        top_k_hits=top_k_hits,
-        context_chunks=context_chunks,
-        evidence=evidence,
-        chunk_root=chunk_root,
+    support_entry = synthesis.support_entries[0] if synthesis.support_entries else _document_support_trace_item(
+        primary_doc_id,
+        top_k_hits,
+        chunk_root,
     )
     primary_label = str(support_entry["label"])
     matched_terms = list(support_entry.get("matched_terms", []))[:4]
@@ -3137,23 +3222,12 @@ def _source_justification_mode_answer(
 
 
 def _source_listing_mode_answer(
-    selection: DocumentSelection,
-    query: str,
-    top_k_hits: list[ChunkRecord],
-    context_chunks: list[ChunkRecord],
-    evidence: list[EvidenceSentence],
-    chunk_root: Path,
+    synthesis: DocumentSynthesis,
 ) -> tuple[str | None, dict[str, object] | None]:
+    selection = synthesis.selection
     if not selection.selected_doc_ids:
         return None, None
-    support_trace = _build_document_support_entries(
-        query=query,
-        doc_ids=list(selection.selected_doc_ids),
-        top_k_hits=top_k_hits,
-        context_chunks=context_chunks,
-        evidence=evidence,
-        chunk_root=chunk_root,
-    )
+    support_trace = synthesis.support_entries
     labels = [
         f"{support_entry['label']} ({support_entry['inventory_summary']})"
         for support_entry in support_trace
@@ -3173,24 +3247,14 @@ def _source_listing_mode_answer(
 
 
 def _cross_document_compare_mode_answer(
-    selection: DocumentSelection,
-    query: str,
-    top_k_hits: list[ChunkRecord],
-    context_chunks: list[ChunkRecord],
-    evidence: list[EvidenceSentence],
+    synthesis: DocumentSynthesis,
     chunk_root: Path,
 ) -> tuple[str | None, dict[str, object] | None]:
+    selection = synthesis.selection
     doc_ids = list(selection.selected_doc_ids[:3])
     if len(doc_ids) < 2:
         return None, None
-    support_entries = _build_document_support_entries(
-        query=query,
-        doc_ids=doc_ids,
-        top_k_hits=top_k_hits,
-        context_chunks=context_chunks,
-        evidence=evidence,
-        chunk_root=chunk_root,
-    )
+    support_entries = synthesis.support_entries
     fragments = [
         f"{item['label']}: {item['inventory_summary']}. Evidence: {item['support_sentences'][0]}."
         for item in support_entries
@@ -3223,12 +3287,10 @@ def _cross_document_compare_mode_answer(
 
 def _document_mode_answer(
     plan,
-    selection: DocumentSelection,
+    synthesis: DocumentSynthesis,
     query: str,
     query_intent: str,
     top_k_hits: list[ChunkRecord],
-    context_chunks: list[ChunkRecord],
-    evidence: list[EvidenceSentence],
     chunk_root: Path,
 ) -> tuple[str | None, dict[str, object] | None]:
     answer_mode = plan.answer_mode
@@ -3239,51 +3301,29 @@ def _document_mode_answer(
         return None, None
     if answer_mode == "document_overview":
         return _document_overview_mode_answer(
-            selection,
+            synthesis,
             query,
             query_intent,
             top_k_hits,
-            context_chunks,
-            evidence,
             chunk_root,
         )
     if answer_mode == "document_routing":
         return _document_routing_mode_answer(
             plan,
-            selection,
-            query,
+            synthesis,
             top_k_hits,
-            context_chunks,
-            evidence,
             chunk_root,
         )
     if answer_mode == "source_justification":
         return _source_justification_mode_answer(
-            selection,
-            query,
+            synthesis,
             top_k_hits,
-            context_chunks,
-            evidence,
             chunk_root,
         )
     if answer_mode == "source_listing":
-        return _source_listing_mode_answer(
-            selection,
-            query,
-            top_k_hits,
-            context_chunks,
-            evidence,
-            chunk_root,
-        )
+        return _source_listing_mode_answer(synthesis)
     if answer_mode == "cross_document_compare":
-        return _cross_document_compare_mode_answer(
-            selection,
-            query,
-            top_k_hits,
-            context_chunks,
-            evidence,
-            chunk_root,
-        )
+        return _cross_document_compare_mode_answer(synthesis, chunk_root)
     return None, None
 
 
@@ -3292,7 +3332,7 @@ def _finalize_answer_result(
     query: str,
     query_intent: str,
     evidence: list[EvidenceSentence],
-    document_selection: DocumentSelection,
+    document_synthesis: DocumentSynthesis,
     retrieval_contract: dict[str, object],
     mode_answer: str | None,
     mode_trace: dict[str, object] | None,
@@ -3304,7 +3344,8 @@ def _finalize_answer_result(
             query_intent=query_intent,
             evidence=evidence,
             retrieval_contract=retrieval_contract,
-            document_selection=_document_selection_payload(document_selection),
+            document_selection=_document_selection_payload(document_synthesis.selection),
+            document_synthesis=_document_synthesis_payload(document_synthesis),
         )
         return answer, answer_trace
 
@@ -3321,50 +3362,10 @@ def _finalize_answer_result(
         answer_contract=trace_source.get("answer_contract") if trace_source else None,
         support_trace=trace_source.get("support_trace") if trace_source else None,
         retrieval_contract=retrieval_contract,
-        document_selection=_document_selection_payload(document_selection),
+        document_selection=_document_selection_payload(document_synthesis.selection),
+        document_synthesis=_document_synthesis_payload(document_synthesis),
     )
     return answer, answer_trace
-
-
-def _filter_answer_chunks(
-    *,
-    plan,
-    query: str,
-    query_intent: str,
-    document_selection: DocumentSelection,
-    top_k_hits: list[ChunkRecord],
-    expanded_hits: list[ChunkRecord],
-) -> list[ChunkRecord]:
-    answer_chunks = expanded_hits
-    selected_doc_ids = set(document_selection.selected_doc_ids)
-    if selected_doc_ids:
-        filtered = [chunk for chunk in expanded_hits if chunk.doc_id in selected_doc_ids]
-        if filtered:
-            answer_chunks = filtered
-
-    query_terms = _query_terms(query)
-    preferred_doc_id = None if query_intent in {"source_listing", "cross_document_compare", "document_routing"} else (
-        plan.preferred_doc_id if plan.query_class != "evidence_lookup" else _preferred_source_doc_id(query)
-    )
-    if preferred_doc_id:
-        filtered = [chunk for chunk in answer_chunks if chunk.doc_id == preferred_doc_id]
-        if filtered:
-            return filtered
-
-    if (
-        top_k_hits
-        and query_terms.intersection(SOURCE_ANCHORED_HINTS)
-        and plan.answer_mode not in {"document_routing", "source_listing", "cross_document_compare"}
-    ):
-        doc_counts: dict[str, int] = {}
-        for chunk in top_k_hits:
-            doc_counts[chunk.doc_id] = doc_counts.get(chunk.doc_id, 0) + 1
-        preferred_doc_id, preferred_count = max(doc_counts.items(), key=lambda item: item[1])
-        if preferred_count >= max(2, (len(top_k_hits) // 2) + 1):
-            filtered = [chunk for chunk in expanded_hits if chunk.doc_id == preferred_doc_id]
-            if filtered:
-                return filtered
-    return answer_chunks
 
 
 def _format_structured_answer(
@@ -3725,27 +3726,29 @@ def answer_from_chunks(query: str, chunks: list[ChunkRecord]) -> GroundedAnswer:
     )
     plan = plan_query(query)
     retrieval_contract = retrieval_contract_payload(build_retrieval_contract(query, plan=plan))
-    document_selection = _build_document_selection(
+    document_synthesis = _build_document_synthesis(
         plan=plan,
-        query=query,
-        top_k_hits=chunks,
-        chunk_root=Path("."),
-    )
-    mode_answer, mode_trace = _document_mode_answer(
-        plan=plan,
-        selection=document_selection,
         query=query,
         query_intent=query_intent,
         top_k_hits=chunks,
-        context_chunks=chunks,
+        expanded_hits=chunks,
         evidence=evidence,
+        chunk_root=Path("."),
+        retrieval_contract=retrieval_contract,
+    )
+    mode_answer, mode_trace = _document_mode_answer(
+        plan=plan,
+        synthesis=document_synthesis,
+        query=query,
+        query_intent=query_intent,
+        top_k_hits=chunks,
         chunk_root=Path("."),
     )
     answer, answer_trace = _finalize_answer_result(
         query=query,
         query_intent=query_intent,
         evidence=evidence,
-        document_selection=document_selection,
+        document_synthesis=document_synthesis,
         retrieval_contract=retrieval_contract,
         mode_answer=mode_answer,
         mode_trace=mode_trace,
@@ -3781,41 +3784,50 @@ def answer_query_with_retrieval(
         use_lightweight_rerank=use_lightweight_rerank,
         retrieval_contract=retrieval_contract,
     )
-    document_selection = _build_document_selection(
-        plan=plan,
+    preliminary_evidence = select_evidence_sentences(
         query=query,
-        top_k_hits=top_k_hits,
-        chunk_root=chunk_root,
+        chunks=expanded_hits,
+        max_sentences=_answer_sentence_budget(query),
     )
-    answer_chunks = _filter_answer_chunks(
+    document_synthesis = _build_document_synthesis(
         plan=plan,
         query=query,
         query_intent=query_intent,
-        document_selection=document_selection,
         top_k_hits=top_k_hits,
         expanded_hits=expanded_hits,
+        evidence=preliminary_evidence,
+        chunk_root=chunk_root,
+        retrieval_contract=retrieval_contract_payload(retrieval_contract),
     )
 
     evidence = select_evidence_sentences(
         query=query,
-        chunks=answer_chunks,
+        chunks=document_synthesis.answer_chunks,
         max_sentences=_answer_sentence_budget(query),
     )
-    mode_answer, mode_trace = _document_mode_answer(
+    document_synthesis = _build_document_synthesis(
         plan=plan,
-        selection=document_selection,
         query=query,
         query_intent=query_intent,
         top_k_hits=top_k_hits,
-        context_chunks=answer_chunks,
+        expanded_hits=expanded_hits,
         evidence=evidence,
+        chunk_root=chunk_root,
+        retrieval_contract=retrieval_contract_payload(retrieval_contract),
+    )
+    mode_answer, mode_trace = _document_mode_answer(
+        plan=plan,
+        synthesis=document_synthesis,
+        query=query,
+        query_intent=query_intent,
+        top_k_hits=top_k_hits,
         chunk_root=chunk_root,
     )
     answer, answer_trace = _finalize_answer_result(
         query=query,
         query_intent=query_intent,
         evidence=evidence,
-        document_selection=document_selection,
+        document_synthesis=document_synthesis,
         retrieval_contract=retrieval_contract_payload(retrieval_contract),
         mode_answer=mode_answer,
         mode_trace=mode_trace,
@@ -3825,7 +3837,7 @@ def answer_query_with_retrieval(
         answer=answer,
         evidence=evidence,
         top_k_hits=top_k_hits,
-        expanded_hits=answer_chunks,
+        expanded_hits=document_synthesis.answer_chunks,
         query_intent=query_intent,
         answer_trace=answer_trace,
     )

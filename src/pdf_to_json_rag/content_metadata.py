@@ -110,6 +110,51 @@ def _tokenize(text: str) -> list[str]:
     return [token.lower() for token in TOKEN_RE.findall(text)]
 
 
+def infer_layout_signals(
+    *,
+    block_roles: list[str] | tuple[str, ...] = (),
+    structural_flags: list[str] | tuple[str, ...] = (),
+    bboxes: list[list[float] | None] | tuple[list[float] | None, ...] = (),
+    page_span: int | None = None,
+) -> list[str]:
+    """Infer lightweight layout signals for sections/chunks/pages from block metadata."""
+    role_counts: dict[str, int] = {}
+    for role in block_roles:
+        if not role:
+            continue
+        role_counts[role] = role_counts.get(role, 0) + 1
+    flag_set = {flag for flag in structural_flags if flag}
+    signals: list[str] = []
+
+    if role_counts.get("table_like", 0) >= 1:
+        signals.append("table_dense")
+    if role_counts.get("form_field", 0) + role_counts.get("key_value", 0) >= 1:
+        signals.append("form_dense")
+    if role_counts.get("checklist_item", 0) + role_counts.get("list_item", 0) >= 2:
+        signals.append("list_dense")
+    if role_counts.get("heading", 0) >= 2:
+        signals.append("heading_dense")
+    if "question_like" in flag_set:
+        signals.append("question_rich")
+    if "digit_heavy" in flag_set and "table_dense" not in signals:
+        signals.append("numeric_heavy")
+    valid_bboxes = [bbox for bbox in bboxes if bbox and len(bbox) == 4]
+    if len(valid_bboxes) >= 4:
+        narrow_centers = [
+            (bbox[0] + bbox[2]) / 2
+            for bbox in valid_bboxes
+            if (bbox[2] - bbox[0]) <= 0.45
+        ]
+        if len(narrow_centers) >= 4:
+            left = sum(1 for center in narrow_centers if center < 0.42)
+            right = sum(1 for center in narrow_centers if center > 0.58)
+            if left >= 2 and right >= 2:
+                signals.append("multi_column_like")
+    if page_span is not None and page_span >= 2:
+        signals.append("multi_page_span")
+    return signals
+
+
 def classify_block_metadata(text: str) -> dict[str, object]:
     """Infer lightweight structural metadata for an extracted block."""
     normalized = _normalize_text(text)

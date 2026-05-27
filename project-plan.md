@@ -52,16 +52,17 @@ The first working version stayed local-first and deliberately narrow:
 ## 5. Current Baseline
 
 Current public version: `0.1.0-beta`
-Current internal implementation level: `v0.9.0`
+Current internal implementation level: `v1.4.0`
 
 What the repo now has:
 
 - extraction-time block roles with per-block text provenance and quality signals
 - native/OCR page fusion instead of one global OCR fallback decision
+- extraction-time layout signals and per-page processing summaries
 - extraction-time sections with `section_path` and `section_kind`
-- section roles and source-block traces carried into chunking and inspection
+- section roles, layout signals, text-source profiles, and source-block traces carried into chunking and inspection
 - structure-aware chunking and chunk metadata
-- chunk-level block provenance, block-role profiles, and text-source metadata
+- chunk-level block provenance, block-role profiles, layout signals, and explicit chunk strategies
 - feature-based query planning
 - explicit `document_selection` traces
 - distinct document-level type / purpose / audience / overview answers
@@ -74,12 +75,22 @@ What the repo now has:
 - stronger unknown-document typing for registration forms, court opinions, government bulletins, and inspection-style records
 - corpus-level semantic pass metrics that separate technical success from semantic understanding
 - a dedicated `processing_layer_core` shard for block typing, section-role recovery, and chunk provenance
+- a dedicated `processing_strategy_core` shard for strategy-aware chunking on structure-heavy inputs
 - an explicit retrieval contract for `single_document_qa`, `document_understanding`, and `cross_document_discovery`
+- a shared `document_synthesis` handoff for selection strategy, support scope, and answer chunks
+- a layer-aware evaluation summary for `processing`, `retrieval`, and `answer_faithfulness`
+- layer-stability and architecture-gate summaries that turn those layers into explicit evaluation gates
+- corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
 
 Current validation snapshot:
 
 - public CLI tests rerun in the current milestone: green
+- processing-layer maintainer shards rerun in the current milestone: green
 - retrieval-contract maintainer shard rerun in the current milestone: green
+- retrieval-synthesis maintainer shard rerun in the current milestone: green
+- evaluation-layer public/unit validation rerun in the current milestone: green
+- layer-gate validation rerun in the current milestone: green
+- corpus-gate validation rerun in the current milestone: green
 - full 77-case benchmark: green
   - `precision@5 = 0.6031`
   - `recall@5 = 1.0`
@@ -147,6 +158,27 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
   - split retrieval into explicit contracts for single-document QA, document understanding, and cross-document discovery
   - exposed compact `retrieval_contract` traces in answer payloads
   - added `retrieval_contract_core` to keep those answer-path separations covered in the maintainer regression gate
+- `v1.0.0`
+  - added extraction-time layout signals and per-page processing summaries
+  - enriched section metadata with layout signals and text-source profiles
+  - upgraded chunking to carry explicit chunk strategies, layout signals, and text-quality summaries
+  - added `processing_strategy_core` to keep strategy-aware chunking covered in the maintainer regression gate
+- `v1.1.0`
+  - added a shared `document_synthesis` handoff between retrieval and document-level answering
+  - aligned support scope, selected docs, and answer chunks across overview, routing, listing, justification, and compare modes
+  - added `retrieval_synthesis_core` to keep that handoff covered in the maintainer regression gate
+- `v1.2.0`
+  - split evaluation reporting into explicit `processing`, `retrieval`, and `answer_faithfulness` layers
+  - added per-case layer status records and a layer summary to the saved evaluation report
+  - exposed the same layer summary in `evaluate-mvp --json` and CLI text output
+- `v1.3.0`
+  - added `layer_stability` thresholds for `processing`, `retrieval`, and `answer_faithfulness`
+  - added `architecture_gates` so full-suite and partial-suite evaluations can return an explicit gate decision
+  - exposed those gates in `evaluate-mvp --json` and CLI text output
+- `v1.4.0`
+  - added corpus-layer summaries for `processing`, `semantics`, and `trust` on top of `corpus-sanity-check`
+  - added a corpus architecture gate for repo-local unknown-document sampling
+  - surfaced that local corpus gate as a local-only advisory signal inside `release-check`
 
 ### 6.2. Next Steps
 

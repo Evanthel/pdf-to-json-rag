@@ -57,7 +57,7 @@ If you want the richer structure/debug payload, add `--verbose` to `plan-query`,
 
 The default answer trace now includes a compact `document_selection` block for document-level modes so you can see which documents were considered, ranked, and finally selected without needing the full verbose payload.
 
-The same compact trace now also includes `retrieval_contract`, which shows whether the query ran through `single_document_qa`, `document_understanding`, or `cross_document_discovery`.
+The same compact trace now also includes `retrieval_contract` and `document_synthesis`, which show both the retrieval path and how the answer path narrowed support to selected documents and chunks.
 
 With `--verbose`, the same document-level commands also expose richer structure fields such as section paths, section kinds, section roles, source-block traces, and shortlist breakdowns.
 
@@ -65,7 +65,7 @@ Structured-form and checklist-style answers also use the same compact default ou
 
 `inspect-document` and verbose answer traces now also expose `structure_confidence` / `layout_confidence`, extraction-time block/source summaries, and per-section source-block traces so you can see when the pipeline is less certain about an unfamiliar PDF layout.
 
-The current baseline also handles table-like and form-heavy PDFs more conservatively than earlier versions, but unfamiliar layouts are still heuristic-first rather than fully layout-aware.
+The current baseline also carries layout signals, section source profiles, and explicit chunk strategies through the processing layer, but unfamiliar layouts are still heuristic-first rather than fully layout-aware.
 
 ## Manual step-by-step path
 
@@ -99,7 +99,7 @@ If you are working from the source checkout and want a broader local-only sanity
 pdf-to-json-rag corpus-sanity-check --sample-size 12 --json
 ```
 
-That command now returns compact overview, type, purpose, audience, confidence, rationale, and limits answers for each PDF, plus corpus-level semantic rates so you can see whether unfamiliar documents are only processable or also semantically understood.
+That command now returns compact overview, type, purpose, audience, confidence, rationale, and limits answers for each PDF, plus corpus-level rates and a corpus architecture gate over `processing`, `semantics`, and `trust`.
 
 If you changed code under `src/` and have not reinstalled the package yet, run maintainer checks from the source checkout like this:
 
@@ -107,6 +107,8 @@ If you changed code under `src/` and have not reinstalled the package yet, run m
 PYTHONPATH=src python -m pdf_to_json_rag release-check --json
 PYTHONPATH=src python -m pdf_to_json_rag evaluate-mvp --top-k 5 --json
 ```
+
+`evaluate-mvp --json` now exposes `layer_summary`, `layer_stability`, and `architecture_gates` so you can distinguish processing, retrieval, and answer-faithfulness regressions and still get one compact gate decision without opening the full saved report first.
 
 ## Public-safe examples
 
