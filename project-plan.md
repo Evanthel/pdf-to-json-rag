@@ -52,18 +52,22 @@ The first working version stayed local-first and deliberately narrow:
 ## 5. Current Baseline
 
 Current public version: `0.1.0-beta`
-Current internal implementation level: `v1.4.0`
+Current internal implementation level: `v1.38.0`
 
 What the repo now has:
 
 - extraction-time block roles with per-block text provenance and quality signals
 - native/OCR page fusion instead of one global OCR fallback decision
 - extraction-time layout signals and per-page processing summaries
+- explicit multi-column reading-order normalization from extraction through chunking
+- relative font-size, bold-font, and TOC-backed heading signals during extraction
+- optional `pdfplumber` table probe metadata and supplemental `table_like` blocks when the `tables` extra is installed
 - extraction-time sections with `section_path` and `section_kind`
 - section roles, layout signals, text-source profiles, and source-block traces carried into chunking and inspection
 - structure-aware chunking and chunk metadata
 - chunk-level block provenance, block-role profiles, layout signals, and explicit chunk strategies
 - feature-based query planning
+- evidence-intent planning for treatment null-effect and subgroup-benefit questions
 - explicit `document_selection` traces
 - distinct document-level type / purpose / audience / overview answers
 - confidence-aware document classification answers and semantic confidence signals
@@ -72,11 +76,28 @@ What the repo now has:
 - public install/release checks through `doctor`, `smoke-check`, `package-check`, and `release-check`
 - local semantic sanity checks for unfamiliar PDFs through `layout-sanity-check`
 - a local corpus sampler over repo-local `pdf/` artifacts through `corpus-sanity-check`
+- bucket-level corpus diagnostics and follow-up actions for unknown-document sanity checks
+- corpus sample profiles, saved corpus snapshots, failure examples, and a contract gate for corpus diagnostics
 - stronger unknown-document typing for registration forms, court opinions, government bulletins, and inspection-style records
 - corpus-level semantic pass metrics that separate technical success from semantic understanding
 - a dedicated `processing_layer_core` shard for block typing, section-role recovery, and chunk provenance
 - a dedicated `processing_strategy_core` shard for strategy-aware chunking on structure-heavy inputs
 - an explicit retrieval contract for `single_document_qa`, `document_understanding`, and `cross_document_discovery`
+- optional cross-encoder reranking behind an env flag, with lightweight reranking as the stable fallback
+- runtime-mode comparison for baseline, sentence-transformers, cross-encoder, and opt-in LLM synthesis paths
+- full-suite runtime comparison and green promotion gate for optional sentence-transformer embeddings
+- explicit runtime diagnostics and promotion summary commands
+- explicit embedding backend selection with `hash`, `sentence-transformers`, and `auto`
+- saved promotion snapshots and backend payloads in build/workflow/smoke outputs
+- verified installed-entrypoint public path after local package install
+- reranking of the neighbor-expanded context before answer synthesis
+- an explicit grounded-only synthesis prompt contract over selected context chunks, with opt-in local-command execution
+- an LLM-as-judge prompt contract for faithfulness scoring in evaluation reports, with opt-in local-command JSON judging
+- strict JSON/fence parsing for opt-in model and judge outputs
+- answer-claim/evidence alignment diagnostics in answer traces and faithfulness records
+- provider metadata around the current env-command prompt runtime
+- prompt/eval contract validation for sampled faithfulness gates
+- optional low-confidence semantic multipass behind `PDF_TO_JSON_RAG_SEMANTIC_MULTIPASS=1`
 - a shared `document_synthesis` handoff for selection strategy, support scope, and answer chunks
 - a layer-aware evaluation summary for `processing`, `retrieval`, and `answer_faithfulness`
 - layer-stability and architecture-gate summaries that turn those layers into explicit evaluation gates
@@ -98,9 +119,13 @@ Current validation snapshot:
   - `avg_keyword_coverage = 1.0`
   - `negative_success_rate = 1.0`
   - `warning_case_count = 0`
+  - `answer_faithfulness_failing_case_count = 0`
+  - `architecture_gates.all_pass = true`
 - sampled faithfulness audit: green
   - `avg_supported_sentence_ratio = 1.0`
   - `failing_case_count = 0`
+  - `llm_judge_prompt_contract = faithfulness_context_judge.v1`
+  - `contract_validation.all_pass = true`
 
 Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.md).
 
@@ -179,19 +204,102 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
   - added corpus-layer summaries for `processing`, `semantics`, and `trust` on top of `corpus-sanity-check`
   - added a corpus architecture gate for repo-local unknown-document sampling
   - surfaced that local corpus gate as a local-only advisory signal inside `release-check`
+- `v1.5.0`
+  - added bucket-level diagnostics to `corpus-sanity-check`
+  - added deterministic follow-up actions that identify whether the next work belongs in processing, semantics, layout, or trust policy
+  - surfaced the local corpus follow-up count in text `release-check` output
+- `v1.6.0-v1.6.4`
+  - added `quick`, `balanced`, and `stress` corpus sample profiles so unknown-document checks can control cost explicitly
+  - saved corpus sanity snapshots under `data/eval/` for comparison across versions
+  - added failure examples to follow-up actions so bucket failures point at concrete PDFs and reasons
+  - added a corpus contract gate for bucket diagnostics, follow-up actions, and architecture-gate consistency
+  - kept the work aligned to processing, retrieval-contract readiness, and architecture-focused evaluation rather than adding a learned reranker
+- `v1.7.0`
+  - added explicit multi-column reading-order normalization using block x-coordinate clusters
+  - applied the same bbox-aware ordering when chunking previously saved extracted blocks
+  - added regression coverage so two-column pages read column-by-column instead of row-interleaving columns
+- `v1.8.0`
+  - added extraction-time font metadata for native PyMuPDF blocks
+  - promoted short blocks to headings when supported by relative font size, bold font, or TOC membership
+  - preserved font signals in native JSON and loaded block artifacts
+- `v1.9.0`
+  - added an optional `pdfplumber` table probe without making it a hard public dependency
+  - exposed probe status in `doctor` and extraction summaries
+  - added a `tables` package extra for installs that want the specialized table probe path
+- `v1.10.0`
+  - converted the optional `pdfplumber` path from probe-only into supplemental `table_like` block generation
+  - normalized detected table rows into pipe-separated table text that can flow through existing chunking
+  - kept `pdfplumber` optional so public installs without the `tables` extra remain stable
+- `v1.11.0`
+  - added optional cross-encoder reranking for local environments that have a cross-encoder model available
+  - exposed the active rerank backend in chunk payloads
+  - kept lightweight reranking as the default and fallback path
+- `v1.12.0`
+  - added a rerank pass over the neighbor-expanded chunk set before answer synthesis
+  - added rank signals for both initial retrieval and expanded context ranking
+  - kept the same lightweight/cross-encoder fallback behavior for the expanded context
+- `v1.13.0`
+  - taught the planner to classify treatment evidence subquestions instead of leaving them as `generic`
+  - routed vitamin C null-effect and cold-stress subgroup queries to the vitamin C source through the retrieval contract
+  - restored the `evidence_anchor_core` shard to green
+- `v1.14.0`
+  - added an LLM-ready grounded synthesis prompt contract that forbids outside knowledge and requires chunk citations
+  - exposed prompt-contract metadata in answer traces for human and future LLM-as-judge review
+  - kept LLM invocation disabled by default, so current answers remain deterministic/extractive
+- `v1.15.0`
+  - added an LLM-as-judge prompt contract for faithfulness scoring against source context
+  - embedded judge-contract metadata in sampled faithfulness audit records and summaries
+  - kept automated judge model execution disabled by default
+- `v1.16.0`
+  - added provider-agnostic local command execution for grounded synthesis via `PDF_TO_JSON_RAG_LLM_COMMAND`
+  - added provider-agnostic local command execution for strict-JSON judge diagnostics via `PDF_TO_JSON_RAG_JUDGE_COMMAND`
+  - kept both execution paths disabled by default and exposed runtime status in answer/evaluation payloads
+- `v1.17.0-v1.21.0`
+  - added strict JSON/fence parsing for prompt-runtime outputs
+  - added answer-claim/evidence alignment status as diagnostic trace data
+  - formalized provider metadata around the current env-command runtime
+  - added prompt/eval contract validation for sampled faithfulness records
+  - added optional low-confidence semantic multipass without changing default semantics
+- `v1.22.0`
+  - added `compare-runtime-modes` to measure baseline, sentence-transformers, cross-encoder, and opt-in LLM synthesis on the same case set
+  - made optional model comparisons offline-safe by reporting fallback/runtime availability instead of silently trying network downloads
+  - saved comparison reports under `data/eval/runtime_mode_comparison.json`
+- `v1.23.0`
+  - added `--all-cases` and a promotion gate for sentence-transformer embeddings
+  - measured local `all-MiniLM-L6-v2` across the full 77-case eval suite
+  - found one full-suite answer regression despite improved recall/MRR, which was fixed in `v1.24.0`
+- `v1.24.0`
+  - fixed source-anchored evidence synthesis when optional sentence-transformer retrieval returns a correct named-source top hit plus off-source neighbors
+  - reran the full 77-case baseline vs local `all-MiniLM-L6-v2` comparison: both modes pass `77/77`, and the sentence-transformer promotion gate is green
+- `v1.25.0-v1.29.0`
+  - added runtime promotion reporting and explicit runtime diagnostics
+  - added `PDF_TO_JSON_RAG_EMBEDDING_BACKEND=hash|sentence-transformers|auto` while keeping hash as the default path
+  - added `source_anchor_contract_core` and wired it into release-check
+  - updated CLI docs for backend selection, model availability, and promotion readiness
+- `v1.30.0-v1.34.0`
+  - added install/runtime context to backend diagnostics
+  - added requested/effective/fallback embedding payloads to index, smoke, and workflow outputs
+  - added saved promotion snapshots after green full-suite runtime comparisons
+  - documented local `all-MiniLM-L6-v2` as recommended opt-in, not a silent default change
+- `v1.35.0-v1.38.0`
+  - clarified tracked vs ignored eval artifacts before commit prep
+  - verified installed `pdf-to-json-rag` after `python -m pip install .`
+  - confirmed public demo smoke path through the installed entrypoint
+  - refreshed docs toward a stable checkpoint
+
 
 ### 6.2. Next Steps
 
-1. Keep strengthening the new processing layer where retrieval still depends on brittle structure recovery.
-2. Keep refining retrieval contracts and answer-path separation before considering heavier reranking.
-3. Keep evaluation focused on architecture gates and unknown-document sanity checks rather than benchmark growth for its own sake.
-4. Revisit a learned reranker only if the stronger processing and retrieval-contract baselines stop being sufficient downstream.
+1. Prepare a focused commit from the current tracked files and the promotion snapshot.
+2. Re-run a short installed-entrypoint sanity check after commit if needed.
+3. Push only after reviewing the final diff and commit message.
+4. Keep learned components opt-in until they beat the simpler baseline on clear failure patterns.
 
 ## 7. Explicitly Deferred
 
-- `pdfplumber` for difficult table extraction
-- cross-encoder reranking
-- automated LLM-as-a-judge evaluation
+- deeper `pdfplumber` table schema normalization beyond supplemental table blocks
+- mandatory/default cross-encoder reranking
+- automated LLM-as-a-judge execution against a configured judge model
 - cloud deployment
 - multi-document schema extraction
 - visual grounding UI

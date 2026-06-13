@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import sqlite3
@@ -19,6 +20,11 @@ from .schemas import ChunkRecord
 DEFAULT_COLLECTION_NAME = "pdf_to_json_rag_mvp"
 DEFAULT_EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 FALLBACK_EMBEDDING_DIM = 384
+EMBEDDING_BACKEND_ENV = "PDF_TO_JSON_RAG_EMBEDDING_BACKEND"
+SENTENCE_TRANSFORMERS_MODEL_ENV = "PDF_TO_JSON_RAG_SENTENCE_TRANSFORMERS_MODEL"
+USE_SENTENCE_TRANSFORMERS_ENV = "PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS"
+ALLOW_MODEL_DOWNLOAD_ENV = "PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD"
+SUPPORTED_EMBEDDING_BACKENDS = ("hash", "sentence-transformers", "auto")
 
 
 def _hash_embedding(text: str, dim: int = FALLBACK_EMBEDDING_DIM) -> list[float]:
@@ -38,28 +44,117 @@ def _hash_embedding(text: str, dim: int = FALLBACK_EMBEDDING_DIM) -> list[float]
     return vector.tolist()
 
 
+def _model_looks_locally_available(model_name: str) -> bool:
+    if Path(model_name).expanduser().exists():
+        return True
+    try:
+        from huggingface_hub import try_to_load_from_cache
+        from huggingface_hub.utils import _CACHED_NO_EXIST
+
+        cached = try_to_load_from_cache(model_name, "config.json")
+        return cached not in {None, _CACHED_NO_EXIST}
+    except Exception:
+        return False
+
+
+def _sentence_transformers_available() -> bool:
+    return importlib.util.find_spec("sentence_transformers") is not None
+
+
+def _requested_embedding_backend() -> str:
+    requested = os.environ.get(EMBEDDING_BACKEND_ENV, "").strip().lower()
+    if not requested:
+        if os.environ.get(USE_SENTENCE_TRANSFORMERS_ENV) == "1":
+            return "sentence-transformers"
+        if os.environ.get(ALLOW_MODEL_DOWNLOAD_ENV) == "1":
+            return "sentence-transformers"
+        return "hash"
+    if requested in SUPPORTED_EMBEDDING_BACKENDS:
+        return requested
+    return "hash"
+
+
+def embedding_runtime_diagnostics(model_name: str = DEFAULT_EMBEDDING_MODEL) -> dict[str, object]:
+    """Return public-safe embedding backend configuration and availability."""
+    resolved_model = os.environ.get(SENTENCE_TRANSFORMERS_MODEL_ENV, model_name).strip() or model_name
+    requested_backend = _requested_embedding_backend()
+    legacy_sentence_transformers = os.environ.get(USE_SENTENCE_TRANSFORMERS_ENV) == "1"
+    allow_download = os.environ.get(ALLOW_MODEL_DOWNLOAD_ENV) == "1"
+    package_available = _sentence_transformers_available()
+    model_cached = _model_looks_locally_available(resolved_model)
+
+    fallback_reason = None
+    effective_backend = "hash-fallback"
+    effective_model = f"hash-{FALLBACK_EMBEDDING_DIM}"
+    if requested_backend == "sentence-transformers":
+        if package_available and (model_cached or allow_download):
+            effective_backend = "sentence-transformers"
+            effective_model = resolved_model
+        elif not package_available:
+            fallback_reason = "sentence-transformers package is not installed"
+        else:
+            fallback_reason = f"sentence-transformers model is not cached locally: {resolved_model}"
+    elif requested_backend == "auto":
+        if package_available and model_cached:
+            effective_backend = "sentence-transformers"
+            effective_model = resolved_model
+        else:
+            fallback_reason = "auto selected hash fallback because no local sentence-transformer model is ready"
+
+    return {
+        "requested_backend": requested_backend,
+        "effective_backend": effective_backend,
+        "effective_model": effective_model,
+        "sentence_transformers_package_available": package_available,
+        "sentence_transformers_model": resolved_model,
+        "sentence_transformers_model_cached": model_cached,
+        "allow_model_download": allow_download,
+        "legacy_use_sentence_transformers": legacy_sentence_transformers,
+        "fallback_reason": fallback_reason,
+        "env": {
+            EMBEDDING_BACKEND_ENV: os.environ.get(EMBEDDING_BACKEND_ENV),
+            USE_SENTENCE_TRANSFORMERS_ENV: os.environ.get(USE_SENTENCE_TRANSFORMERS_ENV),
+            SENTENCE_TRANSFORMERS_MODEL_ENV: os.environ.get(SENTENCE_TRANSFORMERS_MODEL_ENV),
+            ALLOW_MODEL_DOWNLOAD_ENV: os.environ.get(ALLOW_MODEL_DOWNLOAD_ENV),
+        },
+    }
+
+
 def _load_embedder(model_name: str = DEFAULT_EMBEDDING_MODEL):
     """Return an embedding callable plus backend metadata."""
-    use_sentence_transformers = (
-        os.environ.get("PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS") == "1"
-        or os.environ.get("PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD") == "1"
-    )
+    model_name = os.environ.get(SENTENCE_TRANSFORMERS_MODEL_ENV, model_name).strip() or model_name
+    diagnostics = embedding_runtime_diagnostics(model_name)
+    use_sentence_transformers = diagnostics["effective_backend"] == "sentence-transformers"
     if not use_sentence_transformers:
         def embed_texts(texts: list[str]) -> list[list[float]]:
             return [_hash_embedding(text) for text in texts]
 
-        return embed_texts, {
+        info = {
             "embedding_backend": "hash-fallback",
             "embedding_model": f"hash-{FALLBACK_EMBEDDING_DIM}",
         }
+        if diagnostics.get("fallback_reason"):
+            info["embedding_fallback_reason"] = str(diagnostics["fallback_reason"])
+        info["embedding_requested_backend"] = str(diagnostics["requested_backend"])
+        return embed_texts, info
+
+    allow_download = os.environ.get(ALLOW_MODEL_DOWNLOAD_ENV) == "1"
+    if not allow_download:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        if not _model_looks_locally_available(model_name):
+            def embed_texts(texts: list[str]) -> list[list[float]]:
+                return [_hash_embedding(text) for text in texts]
+
+            return embed_texts, {
+                "embedding_backend": "hash-fallback",
+                "embedding_model": f"hash-{FALLBACK_EMBEDDING_DIM}",
+                "embedding_fallback_reason": f"sentence-transformers model is not cached locally: {model_name}",
+            }
 
     try:
         from sentence_transformers import SentenceTransformer
 
-        allow_download = os.environ.get("PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD") == "1"
-        if not allow_download:
-            os.environ.setdefault("HF_HUB_OFFLINE", "1")
-            os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
         try:
             model = SentenceTransformer(model_name, local_files_only=True)
         except Exception:
@@ -80,6 +175,7 @@ def _load_embedder(model_name: str = DEFAULT_EMBEDDING_MODEL):
         return embed_texts, {
             "embedding_backend": "sentence-transformers",
             "embedding_model": model_name,
+            "embedding_requested_backend": str(diagnostics["requested_backend"]),
         }
     except Exception:
         def embed_texts(texts: list[str]) -> list[list[float]]:

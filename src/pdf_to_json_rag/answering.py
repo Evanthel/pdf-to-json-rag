@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .answer_alignment import align_answer_claims
 from .answer_contracts import build_answer_contract
 from .document_inventory import build_inventory_summary, get_inventory_entry
 from .document_semantics import (
@@ -21,6 +22,7 @@ from .intent_config import (
     resolve_matching_source_doc_ids,
     resolve_preferred_source_doc_id,
 )
+from .llm_runtime import prompt_command_payload, run_prompt_command
 from .query_planning import plan_query
 from .retrieval import build_retrieval_contract, retrieval_contract_payload, retrieve_top_k_with_neighbors
 from .schemas import ChunkRecord, DocumentRecord
@@ -93,6 +95,15 @@ UNSUPPORTED_ENTITY_TERMS = {
 }
 
 NO_GROUNDED_ANSWER = "No grounded answer could be assembled from the retrieved context."
+GROUNDED_SYNTHESIS_PROMPT_TEMPLATE_ID = "grounded_context_only.v1"
+GROUNDED_SYNTHESIS_COMMAND_ENV = "PDF_TO_JSON_RAG_LLM_COMMAND"
+GROUNDED_SYNTHESIS_RULES = (
+    "Answer using only the provided context chunks.",
+    "Do not use outside knowledge.",
+    "If the context does not support an answer, say that no grounded answer can be assembled.",
+    "Every factual claim must be supported by one or more cited chunk IDs.",
+    "Prefer concise synthesis over copying long passages.",
+)
 
 SYMPTOM_HINTS = {
     "symptom",
@@ -1443,6 +1454,68 @@ def build_grounded_context(chunks: list[ChunkRecord]) -> str:
     return "\n\n".join(parts)
 
 
+def build_grounded_synthesis_prompt(query: str, chunks: list[ChunkRecord]) -> str:
+    """Build the LLM-ready prompt that constrains synthesis to supplied chunks."""
+    rules = "\n".join(f"- {rule}" for rule in GROUNDED_SYNTHESIS_RULES)
+    context = build_grounded_context(chunks)
+    return (
+        f"Prompt template: {GROUNDED_SYNTHESIS_PROMPT_TEMPLATE_ID}\n\n"
+        "System instructions:\n"
+        f"{rules}\n\n"
+        f"User question:\n{query}\n\n"
+        "Context chunks:\n"
+        f"{context}\n\n"
+        "Required output:\n"
+        "- Direct answer grounded only in the context.\n"
+        "- Include cited chunk IDs for the claims you use.\n"
+        "- If support is insufficient, return the no-grounded-answer statement."
+    )
+
+
+def _synthesis_prompt_contract(
+    query: str,
+    chunks: list[ChunkRecord],
+    evidence: list[EvidenceSentence],
+    runtime: str = "not_invoked",
+) -> dict[str, object]:
+    prompt = build_grounded_synthesis_prompt(query, chunks)
+    context = build_grounded_context(chunks)
+    return {
+        "template_id": GROUNDED_SYNTHESIS_PROMPT_TEMPLATE_ID,
+        "runtime": runtime,
+        "synthesis_mode": "extractive_default_llm_ready",
+        "grounding_rules": list(GROUNDED_SYNTHESIS_RULES),
+        "context_chunk_ids": [chunk.chunk_id for chunk in chunks],
+        "evidence_chunk_ids": [item.chunk_id for item in evidence],
+        "context_chunk_count": len(chunks),
+        "context_char_count": len(context),
+        "prompt_char_count": len(prompt),
+        "requires_chunk_citations": True,
+        "outside_knowledge_allowed": False,
+        "abstain_when_unsupported": True,
+    }
+
+
+def _grounded_synthesis_runtime(
+    *,
+    query: str,
+    chunks: list[ChunkRecord],
+    default_answer: str,
+) -> tuple[str, dict[str, object]]:
+    prompt = build_grounded_synthesis_prompt(query, chunks)
+    result = run_prompt_command(prompt, GROUNDED_SYNTHESIS_COMMAND_ENV)
+    payload = prompt_command_payload(result)
+    payload["env_var"] = GROUNDED_SYNTHESIS_COMMAND_ENV
+    payload["provider"] = "local_command" if result.configured else None
+    payload["used_for_final_answer"] = False
+
+    answer = default_answer
+    if result.status == "ok" and result.stdout:
+        answer = result.stdout
+        payload["used_for_final_answer"] = True
+    return answer, payload
+
+
 def _answer_sentence_budget(query: str) -> int:
     query_terms = _query_terms(query)
     query_intent = _detect_query_intent(query, query_terms)
@@ -2421,6 +2494,10 @@ def _document_support_trace_item(
             "semantic warnings: "
             + ", ".join(item.replace("_", " ") for item in assessment["semantic_warnings"][:3])
         )
+    else:
+        support_fragments.append(
+            "No major semantic warnings are present, but the result is still heuristic rather than authoritative."
+        )
     if matched_terms:
         support_fragments.append("matched terms: " + ", ".join(matched_terms[:4]))
     if support_sentences:
@@ -2780,6 +2857,9 @@ def _base_answer_trace(
     document_selection: dict[str, object] | None = None,
     document_synthesis: dict[str, object] | None = None,
     retrieval_contract: dict[str, object] | None = None,
+    synthesis_prompt_contract: dict[str, object] | None = None,
+    synthesis_runtime: dict[str, object] | None = None,
+    claim_alignment: dict[str, object] | None = None,
 ) -> dict[str, object]:
     plan = plan_query(query)
     return {
@@ -2800,6 +2880,9 @@ def _base_answer_trace(
         "retrieval_contract": retrieval_contract or {},
         "document_selection": document_selection or {},
         "document_synthesis": document_synthesis or {},
+        "synthesis_prompt_contract": synthesis_prompt_contract or {},
+        "synthesis_runtime": synthesis_runtime or {},
+        "claim_alignment": claim_alignment or {},
         "support_trace": support_trace or [],
         "evidence_chunk_ids": [item.chunk_id for item in evidence],
     }
@@ -2968,9 +3051,29 @@ def _build_document_synthesis(
             support_scope = "preferred_doc"
 
     query_terms = _query_terms(query)
+    source_anchor_preferred_doc_id = _preferred_source_doc_id(query)
+    if (
+        source_anchor_preferred_doc_id
+        and plan.answer_mode == "grounded_evidence"
+        and query_terms.intersection(SOURCE_ANCHORED_HINTS)
+    ):
+        preferred_hits = []
+        seen_preferred_chunk_ids: set[str] = set()
+        for chunk in [*top_k_hits, *expanded_hits]:
+            if chunk.doc_id != source_anchor_preferred_doc_id:
+                continue
+            if chunk.chunk_id in seen_preferred_chunk_ids:
+                continue
+            seen_preferred_chunk_ids.add(chunk.chunk_id)
+            preferred_hits.append(chunk)
+        if preferred_hits:
+            answer_chunks = preferred_hits
+            support_scope = "source_anchor_preferred_doc"
+
     if (
         top_k_hits
         and query_terms.intersection(SOURCE_ANCHORED_HINTS)
+        and support_scope != "source_anchor_preferred_doc"
         and plan.answer_mode not in {"document_routing", "source_listing", "cross_document_compare"}
     ):
         doc_counts: dict[str, int] = {}
@@ -2985,6 +3088,8 @@ def _build_document_synthesis(
 
     answer_chunk_doc_ids = list(dict.fromkeys(chunk.doc_id for chunk in answer_chunks))
     support_doc_ids = _support_doc_ids_for_mode(plan, selection)
+    if support_scope == "source_anchor_preferred_doc" and source_anchor_preferred_doc_id:
+        support_doc_ids = [source_anchor_preferred_doc_id]
     support_entries = _build_document_support_entries(
         query=query,
         doc_ids=support_doc_ids,
@@ -3339,6 +3444,22 @@ def _finalize_answer_result(
 ) -> tuple[str, dict[str, object]]:
     if _should_abstain(query, evidence) and not mode_answer:
         answer = NO_GROUNDED_ANSWER
+        answer, synthesis_runtime = _grounded_synthesis_runtime(
+            query=query,
+            chunks=document_synthesis.answer_chunks,
+            default_answer=answer,
+        )
+        synthesis_prompt_contract = _synthesis_prompt_contract(
+            query=query,
+            chunks=document_synthesis.answer_chunks,
+            evidence=evidence,
+            runtime="local_command" if synthesis_runtime.get("invoked") else "not_invoked",
+        )
+        claim_alignment = align_answer_claims(
+            answer=answer,
+            evidence_fragments=evidence,
+            context_fragments=document_synthesis.answer_chunks,
+        )
         answer_trace = _base_answer_trace(
             query=query,
             query_intent=query_intent,
@@ -3346,11 +3467,30 @@ def _finalize_answer_result(
             retrieval_contract=retrieval_contract,
             document_selection=_document_selection_payload(document_synthesis.selection),
             document_synthesis=_document_synthesis_payload(document_synthesis),
+            synthesis_prompt_contract=synthesis_prompt_contract,
+            synthesis_runtime=synthesis_runtime,
+            claim_alignment=claim_alignment,
         )
         return answer, answer_trace
 
     structured_answer, structured_trace = _format_structured_answer(query_intent, evidence)
     answer = mode_answer or structured_answer or _compress_sentences(evidence)
+    answer, synthesis_runtime = _grounded_synthesis_runtime(
+        query=query,
+        chunks=document_synthesis.answer_chunks,
+        default_answer=answer,
+    )
+    synthesis_prompt_contract = _synthesis_prompt_contract(
+        query=query,
+        chunks=document_synthesis.answer_chunks,
+        evidence=evidence,
+        runtime="local_command" if synthesis_runtime.get("invoked") else "not_invoked",
+    )
+    claim_alignment = align_answer_claims(
+        answer=answer,
+        evidence_fragments=evidence,
+        context_fragments=document_synthesis.answer_chunks,
+    )
     trace_source = mode_trace or structured_trace
     answer_trace = _base_answer_trace(
         query=query,
@@ -3364,6 +3504,9 @@ def _finalize_answer_result(
         retrieval_contract=retrieval_contract,
         document_selection=_document_selection_payload(document_synthesis.selection),
         document_synthesis=_document_synthesis_payload(document_synthesis),
+        synthesis_prompt_contract=synthesis_prompt_contract,
+        synthesis_runtime=synthesis_runtime,
+        claim_alignment=claim_alignment,
     )
     return answer, answer_trace
 
@@ -3380,11 +3523,36 @@ def _format_structured_answer(
     template_id = profile.template_id if profile else None
     pattern_id = profile.pattern_id if profile else None
     return (
-        _structured_checklist_answer(query_intent, text, template_id, pattern_id)
+        _treatment_evidence_answer(query_intent, evidence, text)
+        or _structured_checklist_answer(query_intent, text, template_id, pattern_id)
         or _structured_legend_answer(query_intent, text, template_id, pattern_id)
         or _structured_follow_up_answer(query_intent, text, template_id, pattern_id)
         or _structured_lookup_answer(query_intent, text, template_id, pattern_id)
         or (None, None)
+    )
+
+
+def _treatment_evidence_answer(
+    query_intent: str,
+    evidence: list[EvidenceSentence],
+    text: str,
+) -> tuple[str, dict[str, object]] | None:
+    if query_intent != "treatment_subgroup_benefit":
+        return None
+    if "50% reduction" not in text and "beneficial effect" not in text:
+        return None
+    if "physical stress" not in text and "cold" not in text:
+        return None
+
+    support_sentence = evidence[0].sentence if evidence else ""
+    return _structured_answer_result(
+        answer=(
+            "Yes. The review reports a beneficial effect for people under cold stress "
+            f"or physical stress: {support_sentence}"
+        ),
+        template_id="evidence.treatment_subgroup_benefit",
+        pattern_id="cold-stress-subgroup-benefit",
+        matched_cues=["beneficial effect", "cold stress", "physical stress"],
     )
 
 

@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 import re
 
 from .document_facets import derive_document_facets, facet_token_terms
 from .document_family import classify_document_family
+
+SEMANTIC_MULTIPASS_ENV = "PDF_TO_JSON_RAG_SEMANTIC_MULTIPASS"
+SEMANTIC_MULTIPASS_THRESHOLD_ENV = "PDF_TO_JSON_RAG_SEMANTIC_MULTIPASS_THRESHOLD"
+DEFAULT_SEMANTIC_MULTIPASS_THRESHOLD = 0.62
 
 
 SEMANTIC_STOPWORDS = {
@@ -178,6 +183,108 @@ def _clean_signal_values(values: list[str] | tuple[str, ...], title: str) -> tup
     return tuple(cleaned)
 
 
+def _semantic_multipass_enabled() -> bool:
+    value = os.environ.get(SEMANTIC_MULTIPASS_ENV, "").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _semantic_multipass_threshold() -> float:
+    raw_value = os.environ.get(SEMANTIC_MULTIPASS_THRESHOLD_ENV, "").strip()
+    if not raw_value:
+        return DEFAULT_SEMANTIC_MULTIPASS_THRESHOLD
+    try:
+        return max(0.0, min(1.0, float(raw_value)))
+    except ValueError:
+        return DEFAULT_SEMANTIC_MULTIPASS_THRESHOLD
+
+
+def _multipass_review_signals(
+    *,
+    title: str,
+    toc: list[str] | tuple[str, ...],
+    summary_cues: list[str] | tuple[str, ...],
+    discovery_terms: list[str] | tuple[str, ...],
+    metadata_values: list[str] | None,
+) -> tuple[list[str], list[str], list[str]]:
+    review_cues = _ordered_unique(
+        [
+            *_clean_signal_values(summary_cues, title),
+            *_clean_signal_values(discovery_terms, title)[:8],
+            *[_normalize_phrase(item) for item in toc[:8] if isinstance(item, str)],
+        ]
+    )
+    review_metadata = _ordered_unique(
+        [
+            *(metadata_values or []),
+            title,
+            *[_normalize_phrase(item) for item in toc[:4] if isinstance(item, str)],
+        ]
+    )
+    return review_cues, review_metadata, list(toc)
+
+
+def _maybe_low_confidence_multipass(
+    *,
+    derived_facets: dict[str, object],
+    source_pdf: str,
+    title: str,
+    toc: list[str] | tuple[str, ...],
+    summary_cues: list[str] | tuple[str, ...],
+    discovery_terms: list[str] | tuple[str, ...],
+    leading_block_lines: list[str],
+    metadata_values: list[str] | None,
+    page_count: int,
+) -> dict[str, object]:
+    if not _semantic_multipass_enabled():
+        return derived_facets
+
+    threshold = _semantic_multipass_threshold()
+    confidence = float(derived_facets.get("semantic_confidence") or 0.0)
+    if confidence >= threshold:
+        return {
+            **derived_facets,
+            "semantic_rationale": [
+                *list(derived_facets.get("semantic_rationale", [])),
+                "optional_multipass_not_needed",
+            ],
+        }
+
+    review_cues, review_metadata, review_toc = _multipass_review_signals(
+        title=title,
+        toc=toc,
+        summary_cues=summary_cues,
+        discovery_terms=discovery_terms,
+        metadata_values=metadata_values,
+    )
+    reviewed = derive_document_facets(
+        source_pdf=source_pdf,
+        title=title,
+        toc=review_toc,
+        summary_cues=review_cues,
+        leading_block_lines=leading_block_lines,
+        metadata_values=review_metadata,
+        page_count=page_count,
+    )
+    reviewed_confidence = float(reviewed.get("semantic_confidence") or 0.0)
+    accepted = reviewed_confidence > confidence
+    selected = reviewed if accepted else derived_facets
+    rationale = list(selected.get("semantic_rationale", []))
+    warnings = list(selected.get("semantic_warnings", []))
+    rationale.append(
+        "optional_low_confidence_multipass_accepted"
+        if accepted
+        else "optional_low_confidence_multipass_reviewed"
+    )
+    warnings.append(
+        f"low_confidence_multipass_threshold:{threshold:.2f}"
+    )
+    return {
+        **selected,
+        "semantic_rationale": _ordered_unique([str(item) for item in rationale]),
+        "semantic_warnings": _ordered_unique([str(item) for item in warnings]),
+    }
+
+
 def _candidate_coverage_phrases(
     *,
     discovery_terms: list[str] | tuple[str, ...],
@@ -309,6 +416,17 @@ def interpret_document_semantics(
         summary_cues=list(summary_cues),
         leading_block_lines=leading_block_lines,
         metadata_values=metadata_values or [],
+        page_count=page_count,
+    )
+    derived_facets = _maybe_low_confidence_multipass(
+        derived_facets=derived_facets,
+        source_pdf=source_pdf,
+        title=title,
+        toc=toc,
+        summary_cues=summary_cues,
+        discovery_terms=discovery_terms,
+        leading_block_lines=leading_block_lines,
+        metadata_values=metadata_values,
         page_count=page_count,
     )
     resolved_summary_cues = _clean_signal_values(summary_cues, title)

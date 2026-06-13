@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from .content_metadata import classify_block_metadata, derive_chunk_semantics, infer_layout_signals
-from .extraction import ExtractedBlock
+from .extraction import ExtractedBlock, _sort_extracted_blocks_reading_order
 from .quality import TOC_LEADER_RE, PAGE_NUMBER_ONLY_RE, classify_chunk_quality
 from .schemas import ChunkRecord, DocumentRecord, DocumentSectionRecord
 
@@ -202,13 +202,8 @@ OPIOID_STRUCTURED_FORM_RULES: list[dict[str, str | tuple[str, ...]]] = [
 
 
 def normalize_reading_order(blocks: list[ExtractedBlock]) -> list[ExtractedBlock]:
-    """Return blocks in deterministic reading order.
-
-    MVP target:
-    - preserve current order for single-column pages
-    - later add explicit multi-column normalization
-    """
-    return sorted(blocks, key=lambda block: (block.page_num, block.reading_order_index))
+    """Return blocks in deterministic reading order, including simple multi-column pages."""
+    return _sort_extracted_blocks_reading_order(blocks)
 
 
 def build_document_record(
@@ -968,6 +963,9 @@ def _rebuild_block(
         text_quality_score=float(metadata["text_quality_score"]),
         block_labels=list(metadata["block_labels"]),
         structural_flags=list(metadata["structural_flags"]),
+        font_size=source_block.font_size,
+        relative_font_size=source_block.relative_font_size,
+        font_is_bold=source_block.font_is_bold,
     )
 
 
@@ -1510,6 +1508,9 @@ def load_blocks_from_native_json(native_path: Path) -> list[ExtractedBlock]:
             text_quality_score=float(block.get("text_quality_score", 1.0)),
             block_labels=list(block.get("block_labels", [])),
             structural_flags=list(block.get("structural_flags", [])),
+            font_size=block.get("font_size"),
+            relative_font_size=block.get("relative_font_size"),
+            font_is_bold=bool(block.get("font_is_bold", False)),
         )
         for block in data.get("blocks", [])
     ]

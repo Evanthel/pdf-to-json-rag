@@ -10,6 +10,7 @@ from .intent_config import (
     detect_structured_intent,
     matching_source_doc_ids as configured_matching_source_doc_ids,
     preferred_source_doc_id as configured_source_doc_id,
+    resolve_preferred_source_doc_id,
 )
 
 
@@ -35,6 +36,7 @@ TREATMENT_ENTITY_TERMS = {
     "ginseng",
     "handwashing",
 }
+COMMON_COLD_TERMS = {"cold", "colds"}
 UNSUPPORTED_DISCOVERY_TERMS = {
     "insulin",
     "gadolinium",
@@ -400,6 +402,53 @@ def _answer_mode_for(query_class: str, query_intent: str) -> str:
     return "grounded_evidence"
 
 
+def _detect_evidence_query_intent(query: str, query_terms: set[str]) -> str:
+    query_lower = query.lower()
+    has_common_cold = bool(query_terms.intersection(COMMON_COLD_TERMS))
+    has_treatment_entity = bool(query_terms.intersection(TREATMENT_ENTITY_TERMS))
+    if "antibiotic" in query_terms or "antibiotics" in query_terms:
+        return "antibiotics"
+    if "ct" in query_terms and ("follow" in query_terms or "followup" in query_terms):
+        return "ct_follow_up"
+    if "ct" in query_terms and ("abnormalities" in query_terms or "sinus" in query_terms or "scans" in query_terms):
+        return "ct_findings"
+    if (
+        ("preventive" in query_terms and "interventions" in query_terms)
+        or ("handwashing" in query_terms and "prevent" in query_terms)
+        or ("best" in query_terms and "evidence" in query_terms and ("prevent" in query_terms or "preventive" in query_terms))
+    ):
+        return "review_prevention"
+    if has_treatment_entity and has_common_cold:
+        if "stress" in query_terms or ("physical" in query_terms and "stress" in query_terms) or "subgroup" in query_terms:
+            return "treatment_subgroup_benefit"
+        if "normal" in query_terms and "populations" in query_terms:
+            return "treatment_null_effect"
+        if "duration" in query_terms or "shorten" in query_terms:
+            return "treatment_duration"
+        if "conclude" in query_terms or "conclusion" in query_terms or "meta" in query_terms or "analysis" in query_terms:
+            return "treatment_overall"
+        if (
+            "prevent" in query_terms
+            or "prevents" in query_terms
+            or "preventing" in query_terms
+            or "prevention" in query_terms
+            or "prophylaxis" in query_terms
+            or "incidence" in query_terms
+        ):
+            return "treatment_prevention"
+    if "cause" in query_terms or "causes" in query_terms:
+        return "causes"
+    if "transmission" in query_terms or "spread" in query_terms:
+        return "transmission"
+    if "duration" in query_terms or "long" in query_terms:
+        return "duration"
+    if "symptom" in query_terms or "symptoms" in query_terms:
+        return "symptoms"
+    if query_lower.startswith("what is") or "definition" in query_terms or "define" in query_terms:
+        return "definition"
+    return "generic"
+
+
 def plan_query(query: str) -> QueryPlan:
     query_lower = query.lower()
     query_terms = _query_terms(query)
@@ -481,7 +530,7 @@ def plan_query(query: str) -> QueryPlan:
     elif answer_mode == "source_listing":
         query_class = "cross_document"
         query_intent = "source_listing"
-        matched_doc_ids = tuple(metadata_matches[:4]) if metadata_matches else inventory_doc_ids[:4]
+        matched_doc_ids = tuple(metadata_matches[:4]) if len(metadata_matches) >= 2 else inventory_doc_ids[:4]
         candidate_doc_ids = matched_doc_ids
     elif answer_mode == "cross_document_compare":
         query_class = "cross_document"
@@ -489,9 +538,20 @@ def plan_query(query: str) -> QueryPlan:
         matched_doc_ids = tuple(metadata_matches[:4]) if len(metadata_matches) >= 2 else inventory_doc_ids[:4]
         if len(matched_doc_ids) < 2:
             query_class = "evidence_lookup"
-            query_intent = "generic"
+            query_intent = _detect_evidence_query_intent(query, query_terms)
             answer_mode = "grounded_evidence"
         else:
+            candidate_doc_ids = matched_doc_ids
+    else:
+        query_intent = _detect_evidence_query_intent(query, query_terms)
+        if query_intent != "generic":
+            preferred_doc_id = resolve_preferred_source_doc_id(
+                query,
+                query_class=query_class,
+                query_intent=query_intent,
+                planned_preferred_doc_id=explicit_source_doc_id,
+            )
+            matched_doc_ids = (preferred_doc_id,) if preferred_doc_id else tuple()
             candidate_doc_ids = matched_doc_ids
 
     return QueryPlan(

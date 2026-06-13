@@ -1,0 +1,71 @@
+{
+  "generated_at_utc": "2026-06-13T08:53:38.619051+00:00",
+  "source_report_path": "data/eval/runtime_mode_comparison.json",
+  "case_count": 77,
+  "baseline_pass_count": 77,
+  "candidate_mode": "sentence-transformers",
+  "candidate_pass_count": 77,
+  "candidate_index_manifest": {
+    "embedding_backend": "sentence-transformers",
+    "embedding_model": ".cache/models/all-MiniLM-L6-v2",
+    "embedding_fallback_reason": null,
+    "chunk_count": 2039
+  },
+  "baseline_deltas": {
+    "pass_count_delta": 0,
+    "avg_precision_at_k_delta": 0.001,
+    "avg_recall_at_k_delta": 0.0077,
+    "mrr_delta": 0.0103,
+    "avg_keyword_coverage_delta": 0.0
+  },
+  "promotion_gate": {
+    "candidate_mode": "sentence-transformers",
+    "promotable": true,
+    "checks": [
+      {
+        "name": "candidate_is_active",
+        "passed": true,
+        "details": {
+          "embedding_backend": "sentence-transformers",
+          "embedding_model": ".cache/models/all-MiniLM-L6-v2",
+          "embedding_fallback_reason": null
+        }
+      },
+      {
+        "name": "no_pass_count_regression",
+        "passed": true,
+        "details": {
+          "baseline_pass_count": 77,
+          "candidate_pass_count": 77
+        }
+      },
+      {
+        "name": "recall_not_lower",
+        "passed": true,
+        "details": {
+          "baseline_avg_recall_at_k": 0.9923076923076923,
+          "candidate_avg_recall_at_k": 1.0
+        }
+      },
+      {
+        "name": "mrr_not_lower",
+        "passed": true,
+        "details": {
+          "baseline_mrr": 0.9897435897435897,
+          "candidate_mrr": 1.0
+        }
+      },
+      {
+        "name": "warnings_not_higher",
+        "passed": true,
+        "details": {
+          "baseline_warning_case_count": 2,
+          "candidate_warning_case_count": 0
+        }
+      }
+    ],
+    "reasons": []
+  },
+  "recommended_default_change": false,
+  "recommendation": "Sentence-transformers is validated as an opt-in backend; keep hash as default until an explicit default-change decision is made."
+}

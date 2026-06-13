@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from functools import lru_cache
-from pathlib import Path
 import re
 
+from .config import PATHS
 from .document_facets import derive_document_facets, facet_token_terms
 
 MATCH_STOPWORDS = {
@@ -258,7 +258,7 @@ SOURCE_DOC_ANCHORS = {
 
 @lru_cache(maxsize=1)
 def _document_metadata_index() -> dict[str, dict[str, object]]:
-    documents_dir = Path(__file__).resolve().parents[2] / "data" / "documents"
+    documents_dir = PATHS.data_documents
     index: dict[str, dict[str, object]] = {}
     if not documents_dir.exists():
         return index

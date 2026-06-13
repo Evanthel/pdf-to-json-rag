@@ -3,6 +3,8 @@
 import argparse
 import csv
 from dataclasses import dataclass
+from datetime import datetime, timezone
+import importlib.util
 from importlib import metadata as importlib_metadata
 from importlib import resources as importlib_resources
 import json
@@ -27,9 +29,17 @@ from .document_inventory import (
     shortlist_document_candidates,
     shortlist_documents,
 )
-from .evaluation import DEFAULT_EVAL_FILENAME, ensure_default_eval_cases, run_mvp_evaluation, run_regression_suite
+from .evaluation import (
+    DEFAULT_EVAL_FILENAME,
+    DEFAULT_RUNTIME_COMPARISON_REPORT_FILENAME,
+    DEFAULT_RUNTIME_PROMOTION_SNAPSHOT_FILENAME,
+    ensure_default_eval_cases,
+    run_mvp_evaluation,
+    run_regression_suite,
+    run_runtime_mode_comparison,
+)
 from .extraction import process_native_pdf_to_json
-from .indexing import build_local_index, load_chunk_records
+from .indexing import build_local_index, embedding_runtime_diagnostics, load_chunk_records
 from .query_planning import plan_query
 from .retrieval import retrieve_top_k, retrieve_top_k_with_neighbors
 
@@ -61,6 +71,9 @@ COMMAND_ALIASES = {
     "self-check": "doctor",
     "layout-check": "layout-sanity-check",
     "corpus-check": "corpus-sanity-check",
+    "compare-modes": "compare-runtime-modes",
+    "runtime": "runtime-check",
+    "promotion-report": "runtime-promotion-report",
 }
 
 COMMAND_HELP: dict[str, dict[str, object]] = {
@@ -124,6 +137,18 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
         "summary": "Run a smaller regression shard or explicit case subset.",
         "example": "pdf-to-json-rag evaluate-regression --shard query_planning_core --top-k 5 --json",
     },
+    "compare-runtime-modes": {
+        "summary": "Compare baseline, sentence-transformers, cross-encoder, and opt-in LLM synthesis modes on the same eval cases.",
+        "example": "pdf-to-json-rag compare-runtime-modes --shard evidence_anchor_core --json",
+    },
+    "runtime-check": {
+        "summary": "Report effective embedding/runtime backend selection and local optional-model readiness.",
+        "example": "pdf-to-json-rag runtime-check --json",
+    },
+    "runtime-promotion-report": {
+        "summary": "Summarize the latest runtime-mode comparison and promotion gate decision.",
+        "example": "pdf-to-json-rag runtime-promotion-report --json",
+    },
     "demo-profile": {
         "summary": "Show a public-safe demo profile with stable example commands and queries.",
         "example": "pdf-to-json-rag demo-profile --json",
@@ -146,7 +171,7 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
     },
     "corpus-sanity-check": {
         "summary": "Maintainer check: sample the local pdf/ corpus and run compact semantic sanity workflows on unfamiliar PDFs.",
-        "example": "pdf-to-json-rag corpus-sanity-check --sample-size 12 --json",
+        "example": "pdf-to-json-rag corpus-sanity-check --sample-profile balanced --json",
     },
     "help": {
         "summary": "Show command summaries or detailed help for one command.",
@@ -173,6 +198,11 @@ EXPECTED_EXAMPLE_FILES = (
     "plan_query.example.json",
     "answer_query.example.json",
 )
+CORPUS_SAMPLE_PROFILES = {
+    "quick": 4,
+    "balanced": 12,
+    "stress": 24,
+}
 
 
 @dataclass(frozen=True)
@@ -235,6 +265,13 @@ def _release_channel_recommendation(
 
 
 def _chunk_payload(chunk) -> dict[str, object]:
+    retrieval_signals = dict(chunk.retrieval_signals)
+    backend_code = retrieval_signals.get("rerank_backend_code")
+    backend_label = {
+        0.0: "heuristic",
+        1.0: "lightweight",
+        2.0: "cross_encoder",
+    }.get(backend_code, "unknown")
     return {
         "chunk_id": chunk.chunk_id,
         "doc_id": chunk.doc_id,
@@ -259,7 +296,8 @@ def _chunk_payload(chunk) -> dict[str, object]:
         "extraction_method": chunk.extraction_method,
         "quality_score": chunk.quality_score,
         "confidence": chunk.confidence,
-        "retrieval_signals": dict(chunk.retrieval_signals),
+        "rerank_backend": backend_label,
+        "retrieval_signals": retrieval_signals,
         "noise_labels": list(chunk.noise_labels),
         "preview": chunk.text.replace("\n", " ").strip()[:220],
     }
@@ -367,6 +405,9 @@ def _compact_answer_trace(answer_trace: dict[str, object]) -> dict[str, object]:
         "retrieval_contract": answer_trace.get("retrieval_contract", {}),
         "document_selection": answer_trace.get("document_selection", {}),
         "document_synthesis": answer_trace.get("document_synthesis", {}),
+        "synthesis_prompt_contract": answer_trace.get("synthesis_prompt_contract", {}),
+        "synthesis_runtime": answer_trace.get("synthesis_runtime", {}),
+        "claim_alignment": answer_trace.get("claim_alignment", {}),
         "template_id": answer_trace.get("template_id"),
         "matched_pattern": answer_trace.get("matched_pattern"),
         "matched_cues": answer_trace.get("matched_cues", []),
@@ -611,6 +652,12 @@ def _sample_local_pdf_corpus(entries: list[LocalPdfCorpusEntry], sample_size: in
         if not progressed:
             break
     return sampled
+
+
+def _resolve_corpus_sample_size(sample_profile: str, sample_size: int | None) -> int:
+    if sample_size is not None:
+        return sample_size
+    return CORPUS_SAMPLE_PROFILES[sample_profile]
 
 
 def _resolve_index_dir(value: str | None, default: Path) -> Path:
@@ -906,7 +953,239 @@ def _semantic_pass(item: dict[str, object]) -> bool:
     )
 
 
-def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None, k: int = 5) -> dict[str, object]:
+def _rate(count: int, total: int) -> float | None:
+    return round(count / total, 3) if total else None
+
+
+def _avg(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 3) if values else None
+
+
+def _corpus_failure_reasons(item: dict[str, object]) -> list[str]:
+    reasons: list[str] = []
+    if not bool(item.get("all_pass")):
+        reasons.append("technical_failure")
+    if not _is_specific_document_type(item.get("document_type")):
+        reasons.append("generic_document_type")
+    if not _is_specific_document_purpose(item.get("document_purpose")):
+        reasons.append("generic_document_purpose")
+    if str(item.get("classification_status", "")) == "uncertain":
+        reasons.append("uncertain_classification")
+    if str(item.get("semantic_confidence_label", "")) == "low":
+        reasons.append("low_semantic_confidence")
+    if bool(item.get("trust_limited")):
+        reasons.append("trust_limited")
+    if not bool(item.get("semantic_pass")):
+        reasons.append("semantic_gate_failed")
+    return sorted(set(reasons))
+
+
+def _corpus_failure_example(item: dict[str, object], reasons: list[str]) -> dict[str, object]:
+    return {
+        "pdf": str(item.get("pdf")),
+        "bucket": item.get("bucket"),
+        "reasons": reasons,
+        "document_type": item.get("document_type"),
+        "document_purpose": item.get("document_purpose"),
+        "semantic_confidence": item.get("semantic_confidence"),
+        "semantic_confidence_label": item.get("semantic_confidence_label"),
+        "classification_status": item.get("classification_status"),
+        "trust_policy": item.get("trust_policy"),
+    }
+
+
+def _corpus_bucket_diagnostics(sampled_results: list[dict[str, object]]) -> dict[str, dict[str, object]]:
+    grouped: dict[str, list[dict[str, object]]] = {}
+    for item in sampled_results:
+        grouped.setdefault(str(item.get("bucket") or "unknown"), []).append(item)
+
+    diagnostics: dict[str, dict[str, object]] = {}
+    for bucket, items in sorted(grouped.items()):
+        total = len(items)
+        structure_values = [
+            float(item["structure_confidence"]) for item in items if item.get("structure_confidence") is not None
+        ]
+        layout_values = [
+            float(item["layout_confidence"]) for item in items if item.get("layout_confidence") is not None
+        ]
+        semantic_values = [
+            float(item["semantic_confidence"]) for item in items if item.get("semantic_confidence") is not None
+        ]
+        reason_values: list[str] = []
+        failing_pdfs: list[str] = []
+        failure_examples: list[dict[str, object]] = []
+        for item in items:
+            reasons = _corpus_failure_reasons(item)
+            if reasons:
+                reason_values.extend(reasons)
+                failing_pdfs.append(str(item.get("pdf")))
+                if len(failure_examples) < 5:
+                    failure_examples.append(_corpus_failure_example(item, reasons))
+        diagnostics[bucket] = {
+            "sample_count": total,
+            "technical_pass_rate": _rate(sum(1 for item in items if bool(item.get("all_pass"))), total),
+            "semantic_pass_rate": _rate(sum(1 for item in items if bool(item.get("semantic_pass"))), total),
+            "specific_document_rate": _rate(
+                sum(1 for item in items if _is_specific_document_type(item.get("document_type"))),
+                total,
+            ),
+            "specific_purpose_rate": _rate(
+                sum(1 for item in items if _is_specific_document_purpose(item.get("document_purpose"))),
+                total,
+            ),
+            "low_confidence_rate": _rate(
+                sum(1 for item in items if item.get("semantic_confidence_label") == "low"),
+                total,
+            ),
+            "trust_limited_rate": _rate(sum(1 for item in items if bool(item.get("trust_limited"))), total),
+            "avg_structure_confidence": _avg(structure_values),
+            "avg_layout_confidence": _avg(layout_values),
+            "avg_semantic_confidence": _avg(semantic_values),
+            "dominant_failure_reasons": _count_values(reason_values),
+            "failing_pdf_count": len(failing_pdfs),
+            "failing_pdfs": failing_pdfs,
+            "failure_examples": failure_examples,
+        }
+    return diagnostics
+
+
+def _corpus_follow_up_actions(bucket_diagnostics: dict[str, dict[str, object]]) -> list[dict[str, object]]:
+    actions: list[dict[str, object]] = []
+    for bucket, summary in bucket_diagnostics.items():
+        failure_reasons = summary.get("dominant_failure_reasons", {})
+        failure_examples = summary.get("failure_examples", [])
+        if float(summary.get("technical_pass_rate") or 0.0) < 1.0:
+            actions.append(
+                {
+                    "bucket": bucket,
+                    "priority": "high",
+                    "focus": "processing_layer",
+                    "reason": "at least one sampled PDF did not complete the technical smoke path",
+                    "dominant_failure_reasons": failure_reasons,
+                    "failure_examples": failure_examples,
+                }
+            )
+            continue
+        if float(summary.get("semantic_pass_rate") or 0.0) < 0.66:
+            actions.append(
+                {
+                    "bucket": bucket,
+                    "priority": "high",
+                    "focus": "document_semantics",
+                    "reason": "semantic pass rate is below the corpus-layer threshold",
+                    "dominant_failure_reasons": failure_reasons,
+                    "failure_examples": failure_examples,
+                }
+            )
+            continue
+        if (
+            float(summary.get("avg_structure_confidence") or 1.0) < 0.55
+            or float(summary.get("avg_layout_confidence") or 1.0) < 0.55
+        ):
+            actions.append(
+                {
+                    "bucket": bucket,
+                    "priority": "medium",
+                    "focus": "layout_processing",
+                    "reason": "structure or layout confidence is below the processing threshold",
+                    "dominant_failure_reasons": failure_reasons,
+                    "failure_examples": failure_examples,
+                }
+            )
+            continue
+        if float(summary.get("trust_limited_rate") or 0.0) > 0.34:
+            actions.append(
+                {
+                    "bucket": bucket,
+                    "priority": "medium",
+                    "focus": "trust_policy",
+                    "reason": "too many documents are classified as trust-limited",
+                    "dominant_failure_reasons": failure_reasons,
+                    "failure_examples": failure_examples,
+                }
+            )
+            continue
+        if float(summary.get("low_confidence_rate") or 0.0) > 0.34:
+            actions.append(
+                {
+                    "bucket": bucket,
+                    "priority": "medium",
+                    "focus": "semantic_confidence",
+                    "reason": "too many documents have low semantic confidence",
+                    "dominant_failure_reasons": failure_reasons,
+                    "failure_examples": failure_examples,
+                }
+            )
+    priority_order = {"high": 0, "medium": 1, "low": 2}
+    return sorted(
+        actions,
+        key=lambda item: (priority_order.get(str(item["priority"]), 99), str(item["bucket"])),
+    )
+
+
+def _corpus_contract_checks(
+    bucket_diagnostics: dict[str, dict[str, object]],
+    follow_up_actions: list[dict[str, object]],
+    architecture_gates: dict[str, object],
+) -> dict[str, object]:
+    checks = [
+        {
+            "name": "bucket_diagnostics_present",
+            "passed": bool(bucket_diagnostics),
+        },
+        {
+            "name": "bucket_diagnostics_have_required_rates",
+            "passed": all(
+                all(
+                    key in item
+                    for key in (
+                        "sample_count",
+                        "technical_pass_rate",
+                        "semantic_pass_rate",
+                        "dominant_failure_reasons",
+                        "failure_examples",
+                    )
+                )
+                for item in bucket_diagnostics.values()
+            ),
+        },
+        {
+            "name": "architecture_gate_has_bucket_contract",
+            "passed": all(key in architecture_gates for key in ("bucket_gate_pass", "bucket_follow_up_count")),
+        },
+        {
+            "name": "follow_up_actions_have_required_fields",
+            "passed": all(
+                all(key in item for key in ("bucket", "priority", "focus", "reason", "dominant_failure_reasons"))
+                for item in follow_up_actions
+            ),
+        },
+        {
+            "name": "follow_up_count_matches_gate",
+            "passed": architecture_gates.get("bucket_follow_up_count") == len(follow_up_actions),
+        },
+    ]
+    return {
+        "all_pass": all(bool(item["passed"]) for item in checks),
+        "checks": checks,
+    }
+
+
+def _write_corpus_sanity_snapshot(payload: dict[str, object]) -> Path:
+    PATHS.data_eval.mkdir(parents=True, exist_ok=True)
+    snapshot_path = PATHS.data_eval / "corpus_sanity_snapshot.json"
+    snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return snapshot_path
+
+
+def _run_corpus_sanity_check(
+    sample_size: int,
+    *,
+    corpus_dir: Path | None = None,
+    k: int = 5,
+    sample_profile: str = "custom",
+    save_snapshot: bool = False,
+) -> dict[str, object]:
     corpus_entries = _load_local_pdf_corpus(corpus_dir)
     sampled_entries = _sample_local_pdf_corpus(corpus_entries, sample_size)
     with tempfile.TemporaryDirectory() as alias_dir_name:
@@ -958,25 +1237,30 @@ def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None
         )
     )
     summary = {
-        "technical_pass_rate": round(
-            sum(1 for item in sampled_results if bool(item.get("all_pass"))) / len(sampled_results), 3
-        ) if sampled_results else None,
-        "semantic_pass_rate": round(semantic_pass_count / len(sampled_results), 3) if sampled_results else None,
-        "avg_structure_confidence": round(sum(structure_values) / len(structure_values), 3) if structure_values else None,
-        "avg_layout_confidence": round(sum(layout_values) / len(layout_values), 3) if layout_values else None,
-        "avg_semantic_confidence": round(sum(semantic_values) / len(semantic_values), 3) if semantic_values else None,
-        "specific_document_rate": round(specific_document_count / len(sampled_results), 3) if sampled_results else None,
-        "specific_purpose_rate": round(specific_purpose_count / len(sampled_results), 3) if sampled_results else None,
-        "low_confidence_rate": round(low_confidence_count / len(sampled_results), 3) if sampled_results else None,
-        "trust_limited_rate": round(trust_limited_count / len(sampled_results), 3) if sampled_results else None,
+        "technical_pass_rate": _rate(
+            sum(1 for item in sampled_results if bool(item.get("all_pass"))),
+            len(sampled_results),
+        ),
+        "semantic_pass_rate": _rate(semantic_pass_count, len(sampled_results)),
+        "avg_structure_confidence": _avg(structure_values),
+        "avg_layout_confidence": _avg(layout_values),
+        "avg_semantic_confidence": _avg(semantic_values),
+        "specific_document_rate": _rate(specific_document_count, len(sampled_results)),
+        "specific_purpose_rate": _rate(specific_purpose_count, len(sampled_results)),
+        "low_confidence_rate": _rate(low_confidence_count, len(sampled_results)),
+        "trust_limited_rate": _rate(trust_limited_count, len(sampled_results)),
         "bucket_counts": _count_values([str(item.get("bucket", "")) for item in sampled_results]),
         "document_type_counts": _count_values([str(item.get("document_type", "")) for item in sampled_results]),
         "document_purpose_counts": _count_values([str(item.get("document_purpose", "")) for item in sampled_results]),
         "classification_status_counts": _count_values([str(item.get("classification_status", "")) for item in sampled_results]),
         "trust_policy_counts": _count_values([str(item.get("trust_policy", "")) for item in sampled_results]),
-        "semantic_confidence_label_counts": _count_values([str(item.get("semantic_confidence_label", "")) for item in sampled_results]),
+        "semantic_confidence_label_counts": _count_values(
+            [str(item.get("semantic_confidence_label", "")) for item in sampled_results]
+        ),
         "generic_warning_count": generic_warning_count,
     }
+    bucket_diagnostics = _corpus_bucket_diagnostics(sampled_results)
+    follow_up_actions = _corpus_follow_up_actions(bucket_diagnostics)
 
     processing_failed = [
         str(item.get("pdf"))
@@ -997,6 +1281,7 @@ def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None
         "processing": {
             "sample_count": len(sampled_results),
             "pass_rate": summary["technical_pass_rate"],
+            "technical_pass_rate": summary["technical_pass_rate"],
             "avg_structure_confidence": summary["avg_structure_confidence"],
             "avg_layout_confidence": summary["avg_layout_confidence"],
             "failing_pdf_count": len(processing_failed),
@@ -1005,6 +1290,7 @@ def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None
         "semantics": {
             "sample_count": len(sampled_results),
             "pass_rate": summary["semantic_pass_rate"],
+            "semantic_pass_rate": summary["semantic_pass_rate"],
             "specific_document_rate": summary["specific_document_rate"],
             "specific_purpose_rate": summary["specific_purpose_rate"],
             "failing_pdf_count": len(semantic_failed),
@@ -1055,26 +1341,41 @@ def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None
         "failed_layers": failed_layers,
         "checks": layer_stability_checks,
     }
+    bucket_gate_pass = not any(str(action.get("priority")) == "high" for action in follow_up_actions)
 
     corpus_architecture_gates = {
-        "all_pass": bool(layer_stability["all_pass"]) and bool(layout_payload["all_pass"]),
+        "all_pass": bool(layer_stability["all_pass"]) and bool(layout_payload["all_pass"]) and bucket_gate_pass,
         "technical_gate_pass": bool(layout_payload["all_pass"]),
         "layer_stability_pass": bool(layer_stability["all_pass"]),
         "semantic_gate_pass": bool(sampled_results) and semantic_pass_count == len(sampled_results),
+        "bucket_gate_pass": bucket_gate_pass,
+        "bucket_follow_up_count": len(follow_up_actions),
         "reasons": [
             *([] if layout_payload["all_pass"] else ["technical corpus smoke failures present"]),
             *([] if layer_stability["all_pass"] else ["corpus layer thresholds not met"]),
             *([] if sampled_results and semantic_pass_count == len(sampled_results) else ["not every sampled PDF reached semantic pass"]),
+            *([] if bucket_gate_pass else ["high-priority bucket-level follow-up actions are present"]),
         ],
     }
     corpus_paths = _local_pdf_corpus_paths(corpus_dir)
-    return {
+    contract_gate = _corpus_contract_checks(
+        bucket_diagnostics=bucket_diagnostics,
+        follow_up_actions=follow_up_actions,
+        architecture_gates=corpus_architecture_gates,
+    )
+    payload: dict[str, object] = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "corpus_dir": str(corpus_paths[0]) if corpus_paths else (str(corpus_dir) if corpus_dir else None),
         "metadata_path": str(corpus_paths[1]) if corpus_paths else None,
         "corpus_pdf_count": len(corpus_entries),
+        "sample_profile": sample_profile,
+        "requested_sample_size": sample_size,
         "sample_size": len(sampled_entries),
         "results": sampled_results,
         "summary": summary,
+        "bucket_diagnostics": bucket_diagnostics,
+        "follow_up_actions": follow_up_actions,
+        "contract_gate": contract_gate,
         "layer_summary": layer_summary,
         "layer_stability": layer_stability,
         "architecture_gates": corpus_architecture_gates,
@@ -1082,6 +1383,11 @@ def _run_corpus_sanity_check(sample_size: int, *, corpus_dir: Path | None = None
         "semantic_all_pass": bool(sampled_results) and semantic_pass_count == len(sampled_results),
         "all_pass": bool(layout_payload["all_pass"]),
     }
+    if save_snapshot:
+        snapshot_path = _write_corpus_sanity_snapshot(payload)
+        payload["snapshot_path"] = str(snapshot_path)
+        snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return payload
 
 
 def _run_public_surface_unittests() -> dict[str, object]:
@@ -1326,6 +1632,7 @@ RELEASE_CHECK_SHARDS = [
     "table_layout_robustness_core",
     "form_layout_robustness_core",
     "evidence_anchor_core",
+    "source_anchor_contract_core",
     "document_family_core",
     "inventory_coverage_core",
     "relationship_core",
@@ -1367,7 +1674,13 @@ def _run_release_check(k: int) -> dict[str, object]:
     local_corpus_paths = _local_pdf_corpus_paths(None)
     local_corpus_available = bool(local_corpus_paths)
     local_corpus_sanity = (
-        _run_corpus_sanity_check(sample_size=4, corpus_dir=local_corpus_paths[0], k=k)
+        _run_corpus_sanity_check(
+            sample_size=CORPUS_SAMPLE_PROFILES["quick"],
+            corpus_dir=local_corpus_paths[0],
+            k=k,
+            sample_profile="quick",
+            save_snapshot=True,
+        )
         if local_corpus_available
         else None
     )
@@ -1640,9 +1953,145 @@ def _render_help(topic: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def _runtime_check_payload() -> dict[str, object]:
+    embedding = embedding_runtime_diagnostics()
+    return {
+        "install_context": {
+            "version": __version__,
+            "python": sys.executable,
+            "module_path": str(Path(__file__).resolve()),
+            "project_root": str((_discover_project_root(PATHS.root) or _discover_project_root(Path.cwd()) or PATHS.root)),
+        },
+        "embedding": embedding,
+        "llm_synthesis": {
+            "env_var": "PDF_TO_JSON_RAG_LLM_COMMAND",
+            "configured": bool(os.environ.get("PDF_TO_JSON_RAG_LLM_COMMAND")),
+            "provider": "local_command" if os.environ.get("PDF_TO_JSON_RAG_LLM_COMMAND") else None,
+            "default_enabled": False,
+        },
+        "cross_encoder": {
+            "env_var": "PDF_TO_JSON_RAG_USE_CROSS_ENCODER",
+            "configured": os.environ.get("PDF_TO_JSON_RAG_USE_CROSS_ENCODER") == "1",
+            "default_enabled": False,
+        },
+        "default_policy": {
+            "embedding_backend": "hash",
+            "sentence_transformers": "opt_in",
+            "cross_encoder": "opt_in",
+            "llm_synthesis": "opt_in",
+        },
+    }
+
+
+def _embedding_manifest_payload(manifest: dict[str, object]) -> dict[str, object]:
+    runtime = embedding_runtime_diagnostics()
+    return {
+        "requested_backend": manifest.get("embedding_requested_backend")
+        or runtime["requested_backend"],
+        "effective_backend": manifest.get("embedding_backend"),
+        "effective_model": manifest.get("embedding_model"),
+        "fallback_reason": manifest.get("embedding_fallback_reason"),
+        "runtime_check": runtime,
+    }
+
+
+def _portable_snapshot_value(value: object) -> object:
+    if isinstance(value, dict):
+        return {str(key): _portable_snapshot_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_portable_snapshot_value(item) for item in value]
+    if isinstance(value, str):
+        try:
+            path = Path(value)
+        except (OSError, ValueError):
+            return value
+        if path.is_absolute():
+            try:
+                return path.resolve().relative_to(PATHS.root.resolve()).as_posix()
+            except ValueError:
+                return path.name
+    return value
+
+
+def _write_runtime_promotion_snapshot(report: dict[str, object], report_path: Path) -> Path | None:
+    gate = report.get("promotion_gates", {}).get("sentence-transformers", {})
+    if not (report.get("all_cases") and gate.get("promotable")):
+        return None
+    mode_results = {item.get("mode"): item for item in report.get("mode_results", [])}
+    baseline = mode_results.get("baseline", {})
+    candidate = mode_results.get("sentence-transformers", {})
+    snapshot = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "source_report_path": _portable_snapshot_value(str(report_path)),
+        "case_count": report.get("case_count", 0),
+        "baseline_pass_count": baseline.get("pass_count"),
+        "candidate_mode": "sentence-transformers",
+        "candidate_pass_count": candidate.get("pass_count"),
+        "candidate_index_manifest": _portable_snapshot_value(candidate.get("index_manifest", {})),
+        "baseline_deltas": report.get("baseline_deltas", {}).get("sentence-transformers", {}),
+        "promotion_gate": _portable_snapshot_value(gate),
+        "recommended_default_change": False,
+        "recommendation": "Sentence-transformers is validated as an opt-in backend; keep hash as default until an explicit default-change decision is made.",
+    }
+    snapshot_path = PATHS.data_eval / DEFAULT_RUNTIME_PROMOTION_SNAPSHOT_FILENAME
+    snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+    return snapshot_path
+
+
+def _runtime_promotion_report_payload(report_path: Path | None = None) -> dict[str, object]:
+    path = report_path or (PATHS.data_eval / DEFAULT_RUNTIME_COMPARISON_REPORT_FILENAME)
+    path = path.expanduser().resolve()
+    if not path.exists():
+        return {
+            "available": False,
+            "report_path": str(path),
+            "promotion_ready": False,
+            "recommendation": "Run `pdf-to-json-rag compare-runtime-modes --modes baseline,sentence-transformers --all-cases --json` first.",
+        }
+
+    report = json.loads(path.read_text(encoding="utf-8"))
+    mode_results = {item.get("mode"): item for item in report.get("mode_results", [])}
+    baseline = mode_results.get("baseline", {})
+    candidate = mode_results.get("sentence-transformers", {})
+    gate = report.get("promotion_gates", {}).get("sentence-transformers", {})
+    promotion_ready = bool(gate.get("promotable"))
+    recommendation = (
+        "Optional sentence-transformer embeddings are promotion-ready; default remains hash until an explicit default-change decision is made."
+        if promotion_ready
+        else "Keep sentence-transformers opt-in until the promotion gate is green on the full suite."
+    )
+    snapshot_path = _write_runtime_promotion_snapshot(report, path)
+    return {
+        "available": True,
+        "report_path": str(path),
+        "all_cases": bool(report.get("all_cases")),
+        "case_count": report.get("case_count", 0),
+        "baseline": {
+            "pass_count": baseline.get("pass_count"),
+            "fail_count": baseline.get("fail_count"),
+            "summary": baseline.get("summary", {}),
+            "index_manifest": baseline.get("index_manifest", {}),
+        },
+        "candidate": {
+            "mode": "sentence-transformers",
+            "pass_count": candidate.get("pass_count"),
+            "fail_count": candidate.get("fail_count"),
+            "summary": candidate.get("summary", {}),
+            "index_manifest": candidate.get("index_manifest", {}),
+        },
+        "deltas": report.get("baseline_deltas", {}).get("sentence-transformers", {}),
+        "promotion_gate": gate,
+        "promotion_ready": promotion_ready,
+        "promotion_snapshot_path": str(snapshot_path) if snapshot_path else None,
+        "recommendation": recommendation,
+    }
+
+
 def _doctor_checks() -> dict[str, object]:
     package_metadata_present, package_metadata_details = _project_metadata_available()
     examples_dir = _available_examples_dir()
+    runtime = _runtime_check_payload()
     manifest_candidates = [
         PATHS.data_index / "index_manifest.json",
         PATHS.data_index / "workflow_smoke" / "index_manifest.json",
@@ -1679,6 +2128,20 @@ def _doctor_checks() -> dict[str, object]:
             "passed": shutil.which("tesseract") is not None,
             "category": "optional_capability",
             "details": {"which": shutil.which("tesseract")},
+        },
+        {
+            "name": "pdfplumber_available",
+            "passed": importlib.util.find_spec("pdfplumber") is not None,
+            "category": "optional_capability",
+            "details": {
+                "install": "python -m pip install 'pdf-to-json-rag[tables]'",
+            },
+        },
+        {
+            "name": "embedding_backend_configured",
+            "passed": bool(runtime["embedding"].get("effective_backend")),
+            "category": "optional_capability",
+            "details": runtime["embedding"],
         },
         {
             "name": "example_assets_present",
@@ -1755,6 +2218,7 @@ def _doctor_checks() -> dict[str, object]:
         "ready_for_internal_benchmark": ready_for_internal_benchmark,
         "data_root": str(PATHS.data_dir),
         "project_root": str((_discover_project_root(PATHS.root) or _discover_project_root(Path.cwd()) or PATHS.root)),
+        "runtime": runtime,
         "next_steps": next_steps,
     }
 
@@ -1808,8 +2272,14 @@ def main() -> None:
     parser.add_argument(
         "--sample-size",
         type=int,
-        default=12,
-        help="Number of local corpus PDFs to sample for corpus-sanity-check.",
+        default=None,
+        help="Override the number of local corpus PDFs to sample for corpus-sanity-check.",
+    )
+    parser.add_argument(
+        "--sample-profile",
+        choices=tuple(CORPUS_SAMPLE_PROFILES),
+        default="balanced",
+        help="Corpus sample profile for corpus-sanity-check: quick=4, balanced=12, stress=24.",
     )
     parser.add_argument(
         "--index-dir",
@@ -1825,7 +2295,16 @@ def main() -> None:
     )
     parser.add_argument(
         "--shard",
-        help="Optional regression shard for evaluate-regression.",
+        help="Optional regression shard for evaluate-regression or compare-runtime-modes.",
+    )
+    parser.add_argument(
+        "--modes",
+        help="Optional comma-separated runtime modes for compare-runtime-modes.",
+    )
+    parser.add_argument(
+        "--all-cases",
+        action="store_true",
+        help="Use every evaluation case for compare-runtime-modes instead of the default comparison subset.",
     )
     parser.add_argument(
         "--topic",
@@ -1889,6 +2368,46 @@ def main() -> None:
                 _emit_json("demo-profile", {"profile": payload}, output_path=output_path)
                 return
             print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return
+
+        if command == "runtime-check":
+            payload = _runtime_check_payload()
+            if json_output:
+                _emit_json("runtime-check", payload, output_path=output_path)
+                return
+            embedding = payload["embedding"]
+            print(f"Requested embedding backend: {embedding.get('requested_backend')}")
+            print(f"Effective embedding backend: {embedding.get('effective_backend')}")
+            print(f"Effective embedding model: {embedding.get('effective_model')}")
+            if embedding.get("fallback_reason"):
+                print(f"Fallback reason: {embedding.get('fallback_reason')}")
+            print(f"Sentence-transformers package: {_human_status(embedding.get('sentence_transformers_package_available'))}")
+            print(f"Sentence-transformers model cached: {_human_status(embedding.get('sentence_transformers_model_cached'))}")
+            print(f"Cross-encoder opt-in configured: {_human_status(payload['cross_encoder']['configured'])}")
+            print(f"LLM synthesis opt-in configured: {_human_status(payload['llm_synthesis']['configured'])}")
+            return
+
+        if command == "runtime-promotion-report":
+            payload = _runtime_promotion_report_payload()
+            if json_output:
+                _emit_json("runtime-promotion-report", payload, output_path=output_path)
+                return
+            print(f"Runtime comparison report: {payload['report_path']}")
+            if not payload["available"]:
+                print("Available: no")
+                print(payload["recommendation"])
+                return
+            print(f"Available: yes")
+            print(f"Cases: {payload.get('case_count', 0)}")
+            baseline = payload.get("baseline", {})
+            candidate = payload.get("candidate", {})
+            print(f"Baseline pass: {baseline.get('pass_count')}")
+            print(f"Sentence-transformers pass: {candidate.get('pass_count')}")
+            print(f"Promotion ready: {_human_status(payload.get('promotion_ready'))}")
+            reasons = payload.get("promotion_gate", {}).get("reasons", [])
+            if reasons:
+                print(f"Promotion reasons: {', '.join(reasons)}")
+            print(payload["recommendation"])
             return
 
         if command == "doctor":
@@ -1977,10 +2496,14 @@ def main() -> None:
                     print(f"Maintainer regression gate: {_human_status(bool(payload['internal_regressions']['all_pass']))}")
                 local_corpus = payload.get("local_corpus_sanity", {})
                 if local_corpus.get("available") and local_corpus.get("result"):
+                    corpus_result = local_corpus["result"]
                     print(
                         "Local corpus gate: "
-                        f"{_human_status(bool(local_corpus['result'].get('architecture_gates', {}).get('all_pass')))}"
+                        f"{_human_status(bool(corpus_result.get('architecture_gates', {}).get('all_pass')))}"
                     )
+                    follow_up_count = len(corpus_result.get("follow_up_actions", []))
+                    if follow_up_count:
+                        print(f"Local corpus follow-up actions: {follow_up_count}")
             else:
                 print("Maintainer gates: SKIPPED (run from a source checkout to include package and regression checks)")
             print("")
@@ -2029,7 +2552,14 @@ def main() -> None:
         if command == "corpus-sanity-check":
             PATHS.ensure_dirs()
             corpus_dir = Path(args.corpus_dir).expanduser().resolve() if args.corpus_dir else None
-            payload = _run_corpus_sanity_check(args.sample_size, corpus_dir=corpus_dir, k=args.k)
+            sample_size = _resolve_corpus_sample_size(args.sample_profile, args.sample_size)
+            payload = _run_corpus_sanity_check(
+                sample_size,
+                corpus_dir=corpus_dir,
+                k=args.k,
+                sample_profile=args.sample_profile if args.sample_size is None else "custom",
+                save_snapshot=True,
+            )
             if json_output:
                 _emit_json("corpus-sanity-check", payload, output_path=output_path)
                 return
@@ -2045,8 +2575,11 @@ def main() -> None:
                     "Corpus architecture gate: "
                     f"{_human_status(architecture_gates.get('all_pass'))}"
                 )
+            print(f"Sample profile: {payload.get('sample_profile')}")
             print(f"Corpus PDFs available: {payload['corpus_pdf_count']}")
             print(f"Sampled PDFs: {payload['sample_size']}")
+            if payload.get("snapshot_path"):
+                print(f"Corpus snapshot: {payload['snapshot_path']}")
             summary = payload["summary"]
             print(
                 "Average confidences: "
@@ -2074,6 +2607,42 @@ def main() -> None:
             reasons = architecture_gates.get("reasons", []) if architecture_gates else []
             if reasons:
                 print(f"Corpus gate reasons: {', '.join(reasons)}")
+            contract_gate = payload.get("contract_gate", {})
+            if contract_gate:
+                print(f"Corpus contract gate: {_human_status(contract_gate.get('all_pass'))}")
+            bucket_diagnostics = payload.get("bucket_diagnostics", {})
+            if bucket_diagnostics:
+                print("Bucket diagnostics:")
+                for bucket, item in bucket_diagnostics.items():
+                    reasons_count = item.get("dominant_failure_reasons", {})
+                    reason_text = (
+                        ", ".join(list(reasons_count.keys())[:3])
+                        if isinstance(reasons_count, dict)
+                        else ""
+                    )
+                    print(
+                        f"- {bucket}: n={item.get('sample_count')} | "
+                        f"technical={item.get('technical_pass_rate')} | "
+                        f"semantic={item.get('semantic_pass_rate')} | "
+                        f"trust_limited={item.get('trust_limited_rate')} | "
+                        f"reasons={reason_text or 'none'}"
+                    )
+            follow_up_actions = payload.get("follow_up_actions", [])
+            if follow_up_actions:
+                print("Corpus follow-up:")
+                for action in follow_up_actions:
+                    print(
+                        f"- {action.get('priority')} | {action.get('bucket')} | "
+                        f"{action.get('focus')}: {action.get('reason')}"
+                    )
+                    examples = action.get("failure_examples", [])
+                    if isinstance(examples, list):
+                        for example in examples[:3]:
+                            if isinstance(example, dict):
+                                print(
+                                    f"  example: {Path(str(example.get('pdf'))).name} | "
+                                    f"reasons={', '.join(str(reason) for reason in example.get('reasons', []))}"
+                                )
             return
 
         if command == "init":
@@ -2194,6 +2763,7 @@ def main() -> None:
                 chunks.extend(load_chunk_records(chunk_dir))
             index_dir = _resolve_index_dir(args.index_dir, _default_public_index_dir())
             manifest = build_local_index(chunks=chunks, index_dir=index_dir)
+            embedding_payload = _embedding_manifest_payload(manifest)
             if json_output:
                 _emit_json(
                     "build-index",
@@ -2203,6 +2773,7 @@ def main() -> None:
                         "collection_name": manifest["collection_name"],
                         "embedding_backend": manifest["embedding_backend"],
                         "embedding_model": manifest["embedding_model"],
+                        "embedding": embedding_payload,
                         "index_dir": str(index_dir),
                     },
                     output_path=output_path,
@@ -2211,8 +2782,11 @@ def main() -> None:
             print(f"Indexed doc IDs: {', '.join(doc_ids)}")
             print(f"chunks_indexed: {manifest['chunk_count']}")
             print(f"collection_name: {manifest['collection_name']}")
-            print(f"embedding_backend: {manifest['embedding_backend']}")
-            print(f"embedding_model: {manifest['embedding_model']}")
+            print(f"requested_embedding_backend: {embedding_payload['requested_backend']}")
+            print(f"effective_embedding_backend: {embedding_payload['effective_backend']}")
+            print(f"effective_embedding_model: {embedding_payload['effective_model']}")
+            if embedding_payload.get("fallback_reason"):
+                print(f"embedding_fallback_reason: {embedding_payload['fallback_reason']}")
             print(f"index_dir: {index_dir}")
             print(
                 'Next: run `pdf-to-json-rag answer-query --query "What does this file cover?" --json`'
@@ -2237,6 +2811,7 @@ def main() -> None:
                 output_dir=PATHS.data_chunks,
             )
             manifest = build_local_index(chunks=chunks, index_dir=workflow_index_dir)
+            embedding_payload = _embedding_manifest_payload(manifest)
             inventory_entry = get_inventory_entry(document.doc_id)
             plan = plan_query(query)
             answer = answer_query_with_retrieval(
@@ -2286,6 +2861,7 @@ def main() -> None:
                     "collection_name": manifest["collection_name"],
                     "embedding_backend": manifest["embedding_backend"],
                     "embedding_model": manifest["embedding_model"],
+                    "embedding": embedding_payload,
                 },
                 "answer": _grounded_answer_payload(answer, verbose=args.verbose),
             }
@@ -2303,6 +2879,10 @@ def main() -> None:
                 for item in checks:
                     print(f"- {item['name']}: {'PASS' if item['passed'] else 'FAIL'}")
                 print(f"all_pass: {all(item['passed'] for item in checks)}")
+                print(f"requested_embedding_backend: {embedding_payload['requested_backend']}")
+                print(f"effective_embedding_backend: {embedding_payload['effective_backend']}")
+                if embedding_payload.get("fallback_reason"):
+                    print(f"embedding_fallback_reason: {embedding_payload['fallback_reason']}")
                 return
             if json_output:
                 _emit_json("run-workflow", payload, output_path=output_path)
@@ -2311,6 +2891,10 @@ def main() -> None:
             print(f"doc_id: {document.doc_id}")
             print(f"chunks_created: {len(chunks)}")
             print(f"index_dir: {workflow_index_dir}")
+            print(f"requested_embedding_backend: {embedding_payload['requested_backend']}")
+            print(f"effective_embedding_backend: {embedding_payload['effective_backend']}")
+            if embedding_payload.get("fallback_reason"):
+                print(f"embedding_fallback_reason: {embedding_payload['fallback_reason']}")
             print(format_grounded_answer(answer))
             return
 
@@ -2624,6 +3208,104 @@ def main() -> None:
             failed = report.get("failed_case_ids", [])
             if failed:
                 print(f"Failed case IDs: {', '.join(failed)}")
+            return
+
+        if command == "compare-runtime-modes":
+            PATHS.ensure_dirs()
+            eval_path = Path(args.eval_file).expanduser().resolve() if args.eval_file else None
+            case_ids = None
+            if args.case_ids:
+                case_ids = [item.strip() for item in args.case_ids.split(",") if item.strip()]
+            modes = None
+            if args.modes:
+                modes = [item.strip() for item in args.modes.split(",") if item.strip()]
+            report, report_path = run_runtime_mode_comparison(
+                index_dir=PATHS.data_index,
+                chunk_root=PATHS.data_chunks,
+                eval_dir=PATHS.data_eval,
+                k=args.k,
+                eval_path=eval_path,
+                case_ids=case_ids,
+                shard=args.shard,
+                modes=modes,
+                all_cases=args.all_cases,
+            )
+            promotion_snapshot_path = _write_runtime_promotion_snapshot(report, report_path)
+            if json_output:
+                _emit_json(
+                    "compare-runtime-modes",
+                    {
+                        "report_path": str(report_path),
+                        "selected_shard": report.get("selected_shard"),
+                        "all_cases": report.get("all_cases", False),
+                        "case_count": report.get("case_count", 0),
+                        "selected_case_ids": report.get("selected_case_ids", []),
+                        "missing_case_ids": report.get("missing_case_ids", []),
+                        "unknown_modes": report.get("unknown_modes", []),
+                        "available_modes": report.get("available_modes", []),
+                        "mode_results": [
+                            {
+                                "mode": item["mode"],
+                                "case_count": item["case_count"],
+                                "pass_count": item["pass_count"],
+                                "fail_count": item["fail_count"],
+                                "all_pass": item["all_pass"],
+                                "failed_case_ids": item["failed_case_ids"],
+                                "summary": item["summary"],
+                                "index_manifest": item["index_manifest"],
+                                "runtime_signals": item["runtime_signals"],
+                            }
+                            for item in report.get("mode_results", [])
+                        ],
+                        "baseline_deltas": report.get("baseline_deltas", {}),
+                        "promotion_gates": report.get("promotion_gates", {}),
+                        "promotion_snapshot_path": str(promotion_snapshot_path) if promotion_snapshot_path else None,
+                        "all_pass": report.get("all_pass", False),
+                    },
+                    output_path=output_path,
+                )
+                return
+            print(f"Runtime mode comparison saved to: {report_path}")
+            if promotion_snapshot_path:
+                print(f"Runtime promotion snapshot saved to: {promotion_snapshot_path}")
+            print(f"Cases: {report.get('case_count', 0)}")
+            for item in report.get("mode_results", []):
+                summary = item.get("summary", {})
+                manifest = item.get("index_manifest", {})
+                signals = item.get("runtime_signals", {})
+                print(
+                    f"{item['mode']}: pass={item['pass_count']}/{item['case_count']} "
+                    f"mrr={summary.get('mrr', 0.0):.3f} "
+                    f"recall={summary.get('avg_recall_at_k', 0.0):.3f} "
+                    f"keywords={summary.get('avg_keyword_coverage', 0.0):.3f} "
+                    f"embedding={manifest.get('embedding_backend')}/{manifest.get('embedding_model')} "
+                    f"llm_used={signals.get('llm_used_case_count', 0)}"
+                )
+            deltas = report.get("baseline_deltas", {})
+            if deltas:
+                print("Deltas vs baseline:")
+                for mode, delta in deltas.items():
+                    print(
+                        f"{mode}: mrr_delta={delta.get('mrr_delta', 0.0):+.3f} "
+                        f"recall_delta={delta.get('avg_recall_at_k_delta', 0.0):+.3f} "
+                        f"keyword_delta={delta.get('avg_keyword_coverage_delta', 0.0):+.3f}"
+                    )
+            promotion_gates = report.get("promotion_gates", {})
+            sentence_gate = promotion_gates.get("sentence-transformers")
+            if sentence_gate:
+                print(
+                    "sentence_transformers_promotable: "
+                    f"{sentence_gate.get('promotable', False)}"
+                )
+                reasons = sentence_gate.get("reasons", [])
+                if reasons:
+                    print(f"sentence_transformers_promotion_reasons: {', '.join(reasons)}")
+            missing = report.get("missing_case_ids", [])
+            if missing:
+                print(f"Missing case IDs: {', '.join(missing)}")
+            unknown = report.get("unknown_modes", [])
+            if unknown:
+                print(f"Unknown modes: {', '.join(unknown)}")
             return
 
         raise CliError("unknown_command", f"Unknown command: {command}", {"command": command})

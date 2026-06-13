@@ -1,6 +1,8 @@
 """Retrieval interfaces for the MVP pipeline."""
 
+import importlib
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 import re
@@ -57,6 +59,14 @@ EXPANSION_BLOCK_LABELS = {
     "title_fragment",
     "garbled_ocr",
 }
+CROSS_ENCODER_ENABLED_ENV = "PDF_TO_JSON_RAG_USE_CROSS_ENCODER"
+CROSS_ENCODER_MODEL_ENV = "PDF_TO_JSON_RAG_CROSS_ENCODER_MODEL"
+DEFAULT_CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+RERANK_BACKEND_HEURISTIC = 0.0
+RERANK_BACKEND_LIGHTWEIGHT = 1.0
+RERANK_BACKEND_CROSS_ENCODER = 2.0
+_CROSS_ENCODER_MODEL_CACHE: dict[str, object] = {}
+_CROSS_ENCODER_ERROR_CACHE: dict[str, str] = {}
 
 INTENT_CANDIDATE_K = {
     "generic": (4, 15),
@@ -1654,6 +1664,7 @@ def _rerank_hits(hits: list[ChunkRecord], query: str) -> list[ChunkRecord]:
             "metadata_signal": breakdown.metadata_signal,
             "rank_prior": breakdown.rank_prior,
             "total": breakdown.total,
+            "rerank_backend_code": RERANK_BACKEND_HEURISTIC,
         }
         scored.append((breakdown.total, chunk))
     scored.sort(key=lambda item: item[0], reverse=True)
@@ -1686,10 +1697,123 @@ def _lightweight_rerank_hits(hits: list[ChunkRecord], query: str) -> list[ChunkR
             "metadata_signal": breakdown.metadata_signal,
             "rank_prior": breakdown.rank_prior,
             "total": breakdown.total,
+            "rerank_backend_code": RERANK_BACKEND_LIGHTWEIGHT,
         }
         scored.append((breakdown.total, chunk))
     scored.sort(key=lambda item: item[0], reverse=True)
     return [chunk for _, chunk in scored]
+
+
+def _env_enabled(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _cross_encoder_rerank_enabled() -> bool:
+    return _env_enabled(os.environ.get(CROSS_ENCODER_ENABLED_ENV))
+
+
+def _cross_encoder_model_name() -> str:
+    return os.environ.get(CROSS_ENCODER_MODEL_ENV, DEFAULT_CROSS_ENCODER_MODEL).strip() or DEFAULT_CROSS_ENCODER_MODEL
+
+
+def _load_cross_encoder() -> tuple[object | None, str | None]:
+    model_name = _cross_encoder_model_name()
+    if model_name in _CROSS_ENCODER_MODEL_CACHE:
+        return _CROSS_ENCODER_MODEL_CACHE[model_name], None
+    if model_name in _CROSS_ENCODER_ERROR_CACHE:
+        return None, _CROSS_ENCODER_ERROR_CACHE[model_name]
+    allow_download = os.environ.get("PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD") == "1"
+    if not allow_download and not Path(model_name).expanduser().exists():
+        reason = f"cross-encoder requires a local model path or PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD=1: {model_name}"
+        _CROSS_ENCODER_ERROR_CACHE[model_name] = reason
+        return None, reason
+    try:
+        if not allow_download:
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+        module = importlib.import_module("sentence_transformers")
+        cross_encoder_cls = getattr(module, "CrossEncoder")
+        model = cross_encoder_cls(model_name)
+    except Exception as exc:  # pragma: no cover - depends on local model/cache availability
+        reason = f"{exc.__class__.__name__}: {exc}"
+        _CROSS_ENCODER_ERROR_CACHE[model_name] = reason
+        return None, reason
+    _CROSS_ENCODER_MODEL_CACHE[model_name] = model
+    return model, None
+
+
+def _cross_encoder_rerank_hits(
+    hits: list[ChunkRecord],
+    query: str,
+) -> tuple[list[ChunkRecord] | None, str | None]:
+    """Optionally rerank chunks with a cross-encoder while preserving lightweight fallback signals."""
+    if not _cross_encoder_rerank_enabled():
+        return None, "disabled"
+    if not hits:
+        return [], None
+    model, unavailable_reason = _load_cross_encoder()
+    if model is None:
+        return None, unavailable_reason or "unavailable"
+
+    baseline_hits = _lightweight_rerank_hits(hits, query)
+    pairs = [(query, chunk.text) for chunk in baseline_hits]
+    try:
+        raw_scores = model.predict(pairs)
+    except Exception as exc:  # pragma: no cover - depends on local model implementation
+        return None, f"{exc.__class__.__name__}: {exc}"
+
+    scored: list[tuple[float, ChunkRecord]] = []
+    for index, (chunk, raw_score) in enumerate(zip(baseline_hits, raw_scores)):
+        cross_encoder_signal = float(raw_score)
+        signals = dict(chunk.retrieval_signals)
+        signals["cross_encoder_signal"] = cross_encoder_signal
+        signals["rerank_backend_code"] = RERANK_BACKEND_CROSS_ENCODER
+        chunk.retrieval_signals = signals
+        scored.append((cross_encoder_signal - (index * 0.000001), chunk))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [chunk for _, chunk in scored], None
+
+
+def _select_reranked_hits(
+    hits: list[ChunkRecord],
+    query: str,
+    use_lightweight_rerank: bool,
+) -> list[ChunkRecord]:
+    if not use_lightweight_rerank:
+        return _rerank_hits(hits, query)
+    reranked_hits, fallback_reason = _cross_encoder_rerank_hits(hits, query)
+    if reranked_hits is not None:
+        return reranked_hits
+    reranked_hits = _lightweight_rerank_hits(hits, query)
+    if fallback_reason and fallback_reason != "disabled":
+        for chunk in reranked_hits:
+            chunk.retrieval_signals["cross_encoder_fallback"] = 1.0
+    return reranked_hits
+
+
+def _annotate_rank_signal(
+    hits: list[ChunkRecord],
+    signal_name: str,
+) -> list[ChunkRecord]:
+    for rank, chunk in enumerate(hits, start=1):
+        chunk.retrieval_signals[signal_name] = float(rank)
+    return hits
+
+
+def rerank_expanded_context(
+    expanded_hits: list[ChunkRecord],
+    query: str,
+    use_lightweight_rerank: bool = True,
+) -> list[ChunkRecord]:
+    """Re-score the neighbor-expanded context before answer synthesis."""
+    if not expanded_hits:
+        return []
+    reranked_hits = _select_reranked_hits(
+        hits=list(expanded_hits),
+        query=query,
+        use_lightweight_rerank=use_lightweight_rerank,
+    )
+    return _annotate_rank_signal(reranked_hits, "expanded_context_rank")
 
 
 def _diversify_hits_by_doc(
@@ -1901,7 +2025,12 @@ def retrieve_top_k(
             ]
         if preferred_hits:
             filtered_hits = preferred_hits
-    reranked_hits = _lightweight_rerank_hits(filtered_hits, query) if use_lightweight_rerank else _rerank_hits(filtered_hits, query)
+    reranked_hits = _select_reranked_hits(
+        hits=filtered_hits,
+        query=query,
+        use_lightweight_rerank=use_lightweight_rerank,
+    )
+    reranked_hits = _annotate_rank_signal(reranked_hits, "initial_retrieval_rank")
     if contract.diversify_per_doc_limit is not None:
         return _diversify_hits_by_doc(reranked_hits, k=k, per_doc_limit=contract.diversify_per_doc_limit)[:k]
     return reranked_hits[:k]
@@ -2082,5 +2211,10 @@ def retrieve_top_k_with_neighbors(
         all_chunks=all_chunks,
         query=query,
         neighbor_depth=contract.neighbor_depth,
+    )
+    expanded = rerank_expanded_context(
+        expanded_hits=expanded,
+        query=query,
+        use_lightweight_rerank=use_lightweight_rerank,
     )
     return hits, expanded

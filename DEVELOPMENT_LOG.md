@@ -8,7 +8,7 @@ Internal development iterations in this file use `v1.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v1.4.0`
+Current implementation level: `v1.38.0`
 Current public version: `0.1.0-beta`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
@@ -41,34 +41,45 @@ Repo-local regression shards currently passing in saved runs or current mileston
 - `retrieval_contract_core`
 - `retrieval_synthesis_core`
 - `evidence_anchor_core`
+- `source_anchor_contract_core`
 - `document_family_core`
 - `document_facets_core`
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v1.4.0`:
+Broad benchmark note after `v1.38.0`:
 
-- the targeted maintainer shard set is green again
-- the new document-level simplification shard is green
+- the targeted maintainer shard set run in this milestone is green
+- the opt-in local-command LLM synthesis and LLM-as-judge paths are covered in unit tests while remaining disabled by default
+- strict JSON/fence parsing, provider metadata, answer-claim alignment, prompt/eval contract validation, and opt-in semantic multipass behavior have targeted unit coverage
+- `compare-runtime-modes` now compares baseline, sentence-transformers, cross-encoder, and opt-in LLM synthesis paths on the same cases while reporting fallback/runtime availability
+- `runtime-check` reports the requested/effective embedding backend, optional model availability, and opt-in runtime state without building an index
+- `runtime-promotion-report` summarizes the latest saved runtime comparison and promotion gate without rerunning the benchmark, and writes a compact promotion snapshot after green full-suite comparisons
+- full-suite `compare-runtime-modes --all-cases --modes baseline,sentence-transformers` with local `all-MiniLM-L6-v2` is green for both modes; sentence-transformers improves recall/MRR and passes the promotion gate while remaining opt-in
+- installed-entrypoint verification passes after `python -m pip install .`; `runtime-check`, `doctor`, `create-demo-pdf`, and `smoke-check` work through `pdf-to-json-rag`
 - current broad benchmark scope:
   - `Cases`: `77`
   - `Indexed sample documents`: `25`
-- latest saved full rerun before the current `v1.1.0` retrieval/synthesis checkpoint:
+- latest saved full rerun after the `v1.15.0` judge-contract checkpoint:
   - `precision@5`: `0.6031`
   - `recall@5`: `1.0`
   - `MRR`: `1.0`
   - `avg_keyword_coverage`: `1.0`
   - `negative_success_rate`: `1.0`
   - `warning_case_count`: `0`
+  - `answer_faithfulness_failing_case_count`: `0`
+  - `architecture_gates.all_pass`: `true`
 - sampled faithfulness audit after the support-trace pass:
   - `sampled_case_count`: `20`
   - `avg_supported_sentence_ratio`: `1.0`
   - `failing_case_count`: `0`
+  - `llm_judge_prompt_contract`: `faithfulness_context_judge.v1`
+  - `contract_validation.all_pass`: `true`
 - `release-check` now includes `document_pipeline_core`, `structure_chunking_core`, `section_reconstruction_core`, `document_selection_core`, `document_maintenance_core`, and `evidence_anchor_core` in the maintainer regression gate.
 - `release-check` now also includes `structured_form_maintenance_core`, `layout_robustness_core`, and `single_doc_random_pdf_core`.
 - `release-check` now also includes `table_layout_robustness_core` and `form_layout_robustness_core`.
 - `release-check` now recommends the current public beta tag: `v0.1.0-beta`.
-- the current decision is to keep learned reranking deferred; the stronger structure-aware baseline and the explicit `document_selection` contract are green enough that a heavier learned layer is not justified yet.
+- the current decision is to keep learned reranking optional; the stronger structure-aware baseline remains the default, while cross-encoder reranking can now be tested locally behind an env flag.
 - the new maintenance direction is preserving document-root section context and shrinking the structured-form / document-level branching surface rather than adding heavier retrieval machinery.
 - the new robustness direction is exposing simple structure/layout confidence signals and testing single-document behavior on a more diverse sanity slice before considering a heavier learned retrieval layer.
 - the new semantics direction is improving document type, purpose, and audience understanding on unfamiliar PDFs before considering a learned reranker.
@@ -78,11 +89,18 @@ Broad benchmark note after `v1.4.0`:
 - the new local-corpus direction is distinguishing technical success from semantic success with explicit corpus-level pass metrics.
 - the current processing direction is moving more structure recovery into extraction-time block typing, text provenance, and section-role traces before touching retrieval.
 - the current processing direction also includes layout-signal-aware sections and strategy-aware chunking, so structure is less dependent on answer-time rescue heuristics.
-- the current retrieval direction is separating single-document QA, document-understanding, and cross-document discovery before considering a heavier learned reranker.
+- the current processing direction now includes explicit multi-column reading-order normalization rather than row-interleaving columns.
+- the current processing direction now uses relative font-size, bold-font, and TOC-backed signals for heading detection.
+- the current processing direction now includes optional `pdfplumber` supplemental table blocks, while deeper table schema normalization remains a later step.
+- the current corpus direction now reports bucket-specific failure reasons and follow-up actions, so unknown-document work can target processing, semantics, layout, or trust-policy issues directly.
+- the current corpus direction also saves comparable snapshots and validates the bucket/action contract directly.
+- the current retrieval direction is separating single-document QA, document-understanding, and cross-document discovery while keeping cross-encoder reranking opt-in until it proves value.
 - the current synthesis direction is keeping document selection, support scope, and answer chunks on one shared handoff instead of re-deriving them inside each document-level renderer.
 - the current evaluation direction is separating processing, retrieval, and answer-faithfulness signals instead of treating the benchmark as one flat pass/fail surface.
 - the current gating direction is turning those layer summaries into explicit architecture gates instead of leaving them as report-only diagnostics.
 - the current corpus direction is turning repo-local unknown-document sampling into a real `processing / semantics / trust` gate instead of a descriptive sanity report.
+- the current prompt-runtime direction is enforcing strict output parsing and provider boundaries before adding more model behavior.
+- the current faithfulness direction is exposing claim/evidence alignment status as diagnostic payload, not as a replacement for human review.
 
 ## Delivered Architecture
 
@@ -354,6 +372,152 @@ Representative validation that has already been completed:
 - Added corpus-layer summaries for `processing`, `semantics`, and `trust` inside `corpus-sanity-check`.
 - Added a corpus architecture gate so repo-local unknown-document sampling returns an explicit decision instead of only rates and counts.
 - Surfaced that local corpus gate inside `release-check` as a local-only advisory signal.
+
+### v1.5.0
+
+- Added bucket-level diagnostics to `corpus-sanity-check` for technical, semantic, specificity, confidence, and trust-limited rates.
+- Added deterministic follow-up actions so local unknown-document sampling points to the next maintenance focus instead of only reporting aggregate failure.
+- Surfaced local corpus follow-up counts in text `release-check` output.
+
+### v1.6.0-v1.6.4
+
+- Added corpus sample profiles: `quick`, `balanced`, and `stress`.
+- Added saved corpus sanity snapshots under `data/eval/corpus_sanity_snapshot.json`.
+- Added concrete failure examples to bucket-level follow-up actions.
+- Added a corpus contract gate for bucket diagnostics, follow-up actions, and bucket architecture gate consistency.
+- Updated docs to make profile-based corpus checks the default maintainer path.
+
+### v1.7.0
+
+- Added explicit multi-column reading-order normalization based on x-coordinate clusters.
+- Applied bbox-aware ordering in `chunking.normalize_reading_order` for saved extracted blocks.
+- Added regression coverage for column-by-column ordering on two-column page layouts.
+
+### v1.8.0
+
+- Added native PyMuPDF font metadata to extracted blocks.
+- Added relative font-size, bold-font, and TOC-backed heading signals during extraction.
+- Preserved font metadata through native JSON serialization and block loading for chunking.
+
+### v1.9.0
+
+- Added an optional `pdfplumber` table probe that reports availability and per-page table counts when installed.
+- Exposed `pdfplumber_available` as an optional `doctor` capability.
+- Added the `tables` package extra for installs that want the optional table probe path.
+
+### v1.10.0
+
+- Converted the optional `pdfplumber` path from probe-only into supplemental `table_like` block generation.
+- Normalized extracted table rows into pipe-separated table text so existing chunking can classify them as table chunks.
+- Kept the public install path stable when `pdfplumber` is not installed.
+
+### v1.11.0
+
+- Added optional cross-encoder reranking behind `PDF_TO_JSON_RAG_USE_CROSS_ENCODER=1`.
+- Kept lightweight reranking as the default and fallback path when the model or dependency is unavailable.
+- Exposed the active rerank backend in chunk payloads and added unit coverage for opt-in and fallback behavior.
+
+### v1.12.0
+
+- Added a rerank pass over the neighbor-expanded chunk set before answer synthesis.
+- Preserved separate `initial_retrieval_rank` and `expanded_context_rank` signals so retrieval diagnostics can distinguish candidate retrieval from context ordering.
+- Reused the same optional cross-encoder path and lightweight fallback for expanded context ranking.
+
+### v1.13.0
+
+- Added evidence-intent planning for treatment subquestions that were previously left as `generic`.
+- Routed vitamin C normal-population null-effect and cold-stress subgroup-benefit queries to the vitamin C source through the retrieval contract.
+- Restored `evidence_anchor_core` to green after the expanded-context rerank work exposed those retrieval-anchor gaps.
+
+### v1.14.0
+
+- Added an LLM-ready synthesis prompt contract over selected answer chunks.
+- The prompt contract requires context-only answers, chunk-ID citations, and abstention when support is insufficient.
+- Exposed prompt-contract metadata in answer traces so human review and future LLM-as-judge scoring can inspect the exact grounding boundary without invoking an LLM by default.
+
+### v1.15.0
+
+- Added an LLM-as-judge prompt contract for faithfulness scoring.
+- The judge contract compares the final answer against source context only, forbids outside knowledge, and requires strict JSON output.
+- Embedded judge-contract metadata in sampled faithfulness audit records and summaries while keeping model execution disabled by default.
+
+### v1.16.0
+
+- Added a provider-agnostic local command runtime for prompt-based LLM hooks.
+- `PDF_TO_JSON_RAG_LLM_COMMAND` can now run grounded synthesis over selected answer chunks and replace the final answer only when explicitly configured and successful.
+- `PDF_TO_JSON_RAG_JUDGE_COMMAND` can now run a strict-JSON faithfulness judge and store parsed judge diagnostics in evaluation records.
+- Kept both runtime hooks disabled by default, with public metadata showing configured/invoked/status/usage state.
+
+### v1.17.0
+
+- Added a local strict JSON/fence parser for opt-in LLM and judge output.
+- Accepted raw JSON objects or one clean `json`/`jsonc` fenced block.
+- Rejected empty output, multiple fenced blocks, non-JSON fences, text outside the fence, invalid JSON, and non-object payloads when an object is required.
+
+### v1.18.0
+
+- Added answer-claim/evidence alignment diagnostics.
+- Answer traces now report claim count, supported/weak/unsupported counts, supported ratio, and per-claim support previews.
+- Faithfulness audit records carry the same alignment status alongside sampled sentence-support checks.
+
+### v1.19.0
+
+- Split the prompt runtime behind a small provider protocol.
+- Kept the current env-command subprocess provider as the only implementation and preserved the existing public env vars.
+- Runtime payloads now expose `provider_id` and `provider_kind`.
+
+### v1.20.0
+
+- Added a prompt/eval contract validation gate for sampled faithfulness records.
+- The gate checks judge template identity, no-outside-knowledge policy, strict-JSON requirement, source-context availability, and parser-contract reporting for invoked runtimes.
+
+### v1.21.0
+
+- Added optional low-confidence semantic multipass behind `PDF_TO_JSON_RAG_SEMANTIC_MULTIPASS=1`.
+- The second pass enriches low-confidence document-facet review with existing title/TOC/discovery metadata and only accepts the reviewed facets when confidence improves.
+- Default document semantics remain single-pass and unchanged unless the env flag is set.
+
+### v1.22.0
+
+- Added `compare-runtime-modes` for side-by-side measurement of the current baseline, optional sentence-transformer embeddings, optional cross-encoder reranking, and opt-in local-command LLM synthesis.
+- The comparison writes `data/eval/runtime_mode_comparison.json` and reports pass/fail counts, retrieval metrics, keyword coverage, embedding backend, rerank backend counts, cross-encoder fallback counts, and LLM usage counts.
+- Tightened optional model loading so local comparisons do not try network downloads unless `PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD=1` is explicitly set.
+
+### v1.23.0
+
+- Added `--all-cases` to `compare-runtime-modes` so runtime comparisons can run against the full evaluation suite instead of only the small comparison subset or a shard.
+- Added a sentence-transformer promotion gate that requires an active sentence-transformer backend, no pass-count regression, recall not lower than baseline, MRR not lower than baseline, and warning count not higher than baseline.
+- Ran the full 77-case comparison with local `all-MiniLM-L6-v2`: retrieval recall improved from `0.9923` to `1.0` and MRR improved from `0.9897` to `1.0`, but `ajmedp_frostbite_severe_zone` regressed from pass to answer failure. This was fixed in `v1.24.0`.
+
+### v1.24.0
+
+- Fixed source-anchored grounded evidence synthesis so named-source queries can use preferred-document hits from both `top_k_hits` and neighbor-expanded context.
+- Prevented dominant-document rescue from overriding explicit source anchors when top-k is polluted by another document family.
+- Added a regression test for the AJMedP severe-frostbite case with majority off-source context.
+- Reran the full 77-case `baseline,sentence-transformers` comparison with local `all-MiniLM-L6-v2`: both modes pass `77/77`; sentence-transformers reaches `recall@5=1.0`, `MRR=1.0`, `warning_case_count=0`, and `promotion_gates.sentence-transformers.promotable=true`.
+
+### v1.25.0-v1.29.0
+
+- Added `runtime-check` for explicit backend/runtime diagnostics without building an index.
+- Added `runtime-promotion-report` to summarize the latest saved runtime comparison and sentence-transformer promotion gate without rerunning the benchmark.
+- Added `PDF_TO_JSON_RAG_EMBEDDING_BACKEND=hash|sentence-transformers|auto`; default remains deterministic hash, while legacy `PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1` still works.
+- Added `source_anchor_contract_core` to make named-source evidence behavior easy to run as a compact shard.
+- Included the source-anchor contract shard in `release-check` and updated docs around backend selection, runtime diagnostics, and promotion readiness.
+
+### v1.30.0-v1.34.0
+
+- Added install context to `runtime-check` so source vs installed entrypoint diagnostics are explicit.
+- Added normalized `index.embedding` payloads to `build-index`, `run-workflow`, and `smoke-check` outputs.
+- Added saved runtime promotion snapshots at `data/eval/runtime_promotion_snapshot.json` after green full-suite sentence-transformer gates.
+- Documented local `all-MiniLM-L6-v2` as the recommended opt-in embedding backend while keeping deterministic hash as the default.
+- Refreshed quickstart/reference docs around backend fallback visibility and promotion snapshots.
+
+### v1.35.0-v1.38.0
+
+- Clarified `.gitignore` policy: generated eval reports stay ignored, while `runtime_promotion_snapshot.json` remains a tracked promotion checkpoint.
+- Verified the installed console script after `python -m pip install .`; `runtime-check` reports the installed `site-packages` module path and the public demo smoke path passes.
+- Performed a docs final pass to keep one canonical backend policy: hash default, local `all-MiniLM-L6-v2` recommended opt-in, cross-encoder and LLM hooks experimental.
+- Re-ran final package and source release gates after installed-entrypoint verification.
 
 ### v0.1.1-v0.1.2
 
@@ -635,9 +799,9 @@ Representative validation that has already been completed:
 
 Still intentionally deferred:
 
-- `pdfplumber`
-- cross-encoder reranking
-- automated LLM-as-a-judge evaluation
+- deeper `pdfplumber` table schema normalization beyond supplemental table blocks
+- mandatory/default cross-encoder reranking
+- automated LLM-as-a-judge execution against a configured judge model
 - cloud deployment
 - multi-document schema extraction
 - visual grounding UI

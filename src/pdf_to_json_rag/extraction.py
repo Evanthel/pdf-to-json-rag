@@ -2,6 +2,8 @@
 
 import json
 from dataclasses import dataclass, field
+import importlib
+import importlib.util
 from pathlib import Path
 import re
 import shutil
@@ -55,6 +57,9 @@ class ExtractedBlock:
     text_quality_score: float = 1.0
     block_labels: list[str] = field(default_factory=list)
     structural_flags: list[str] = field(default_factory=list)
+    font_size: float | None = None
+    relative_font_size: float | None = None
+    font_is_bold: bool = False
 
 
 @dataclass
@@ -77,6 +82,7 @@ class NativePdfExtraction:
     metadata: dict[str, str]
     pages: list[ExtractedPage]
     blocks: list[ExtractedBlock]
+    table_probe: dict[str, object] = field(default_factory=dict)
 
 
 def _slugify_doc_id(value: str) -> str:
@@ -103,6 +109,287 @@ def _normalize_bbox(
         max(0.0, min(1.0, x1 / page_width)),
         max(0.0, min(1.0, y1 / page_height)),
     ]
+
+
+def _cluster_column_lefts(lefts: list[float], page_width: float) -> list[float]:
+    if len(lefts) < 4:
+        return []
+    threshold = page_width * 0.12 if page_width <= 2.0 else max(36.0, page_width * 0.12)
+    clusters: list[list[float]] = []
+    for left in sorted(lefts):
+        if not clusters or abs(left - (sum(clusters[-1]) / len(clusters[-1]))) > threshold:
+            clusters.append([left])
+        else:
+            clusters[-1].append(left)
+    column_lefts = [sum(cluster) / len(cluster) for cluster in clusters if len(cluster) >= 2]
+    if len(column_lefts) < 2:
+        return []
+    if max(column_lefts) - min(column_lefts) < page_width * 0.25:
+        return []
+    return column_lefts[:3]
+
+
+def _sort_page_blocks_reading_order(
+    page_blocks: list[tuple[float, float, float, float, str]],
+    *,
+    page_width: float,
+) -> list[tuple[float, float, float, float, str]]:
+    """Sort native text blocks, using column order when the page is visibly multi-column."""
+    default_order = sorted(page_blocks, key=lambda item: (item[1], item[0]))
+    body_blocks = [
+        item
+        for item in default_order
+        if page_width > 0 and ((item[2] - item[0]) / page_width) < 0.65
+    ]
+    column_lefts = _cluster_column_lefts([item[0] for item in body_blocks], page_width)
+    if not column_lefts:
+        return default_order
+
+    top = min(item[1] for item in body_blocks)
+    bottom = max(item[3] for item in body_blocks)
+    vertical_tolerance = page_width * 0.04 if page_width <= 2.0 else max(24.0, page_width * 0.04)
+
+    def column_index(item: tuple[float, float, float, float, str]) -> int:
+        return min(range(len(column_lefts)), key=lambda index: abs(item[0] - column_lefts[index]))
+
+    def sort_key(item: tuple[float, float, float, float, str]) -> tuple[float, float, float, float]:
+        x0, y0, x1, y1, _text = item
+        width_ratio = ((x1 - x0) / page_width) if page_width else 0.0
+        if width_ratio >= 0.65:
+            if y1 <= top + vertical_tolerance:
+                return (0.0, y0, x0, 0.0)
+            if y0 >= bottom - vertical_tolerance:
+                return (2.0, y0, x0, 0.0)
+            return (1.0, y0, x0, 0.0)
+        return (1.0, float(column_index(item)), y0, x0)
+
+    return sorted(default_order, key=sort_key)
+
+
+def _sort_page_block_dicts_reading_order(
+    page_blocks: list[dict[str, object]],
+    *,
+    page_width: float,
+) -> list[dict[str, object]]:
+    indexed = [
+        (
+            float(block["x0"]),
+            float(block["y0"]),
+            float(block["x1"]),
+            float(block["y1"]),
+            str(index),
+        )
+        for index, block in enumerate(page_blocks)
+    ]
+    sorted_indexes = [
+        int(item[4])
+        for item in _sort_page_blocks_reading_order(indexed, page_width=page_width)
+    ]
+    return [page_blocks[index] for index in sorted_indexes]
+
+
+def _sort_extracted_blocks_reading_order(blocks: list[ExtractedBlock]) -> list[ExtractedBlock]:
+    page_groups: dict[int, list[ExtractedBlock]] = defaultdict(list)
+    for block in blocks:
+        page_groups[block.page_num].append(block)
+
+    ordered: list[ExtractedBlock] = []
+    for page_num in sorted(page_groups):
+        page_blocks = page_groups[page_num]
+        if not all(block.bbox and len(block.bbox) == 4 for block in page_blocks):
+            ordered.extend(sorted(page_blocks, key=lambda block: (block.reading_order_index, block.block_id)))
+            continue
+        positioned = [
+            (
+                float(block.bbox[0]),
+                float(block.bbox[1]),
+                float(block.bbox[2]),
+                float(block.bbox[3]),
+                block.block_id,
+            )
+            for block in page_blocks
+            if block.bbox
+        ]
+        sorted_ids = [
+            item[4]
+            for item in _sort_page_blocks_reading_order(positioned, page_width=1.0)
+        ]
+        block_by_id = {block.block_id: block for block in page_blocks}
+        ordered.extend(block_by_id[block_id] for block_id in sorted_ids)
+    return ordered
+
+
+def _span_is_bold(span: dict) -> bool:
+    font_name = str(span.get("font", "")).lower()
+    return any(token in font_name for token in ("bold", "black", "heavy", "demi")) or bool(int(span.get("flags", 0)) & 16)
+
+
+def _page_font_median(page_dict: dict) -> float | None:
+    sizes: list[float] = []
+    for block in page_dict.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                text = str(span.get("text", "")).strip()
+                if text:
+                    sizes.append(float(span.get("size", 0.0) or 0.0))
+    sizes = sorted(size for size in sizes if size > 0)
+    if not sizes:
+        return None
+    midpoint = len(sizes) // 2
+    if len(sizes) % 2:
+        return sizes[midpoint]
+    return (sizes[midpoint - 1] + sizes[midpoint]) / 2
+
+
+def _native_page_blocks_with_font(page: fitz.Page) -> list[dict[str, object]]:
+    page_dict = page.get_text("dict")
+    median_font_size = _page_font_median(page_dict) or 0.0
+    page_blocks: list[dict[str, object]] = []
+    for raw_block in page_dict.get("blocks", []):
+        if raw_block.get("type") != 0:
+            continue
+        lines: list[str] = []
+        font_sizes: list[float] = []
+        bold = False
+        for line in raw_block.get("lines", []):
+            line_parts: list[str] = []
+            for span in line.get("spans", []):
+                span_text = str(span.get("text", ""))
+                if not span_text.strip():
+                    continue
+                line_parts.append(span_text)
+                size = float(span.get("size", 0.0) or 0.0)
+                if size > 0:
+                    font_sizes.append(size)
+                bold = bold or _span_is_bold(span)
+            line_text = "".join(line_parts).strip()
+            if line_text:
+                lines.append(line_text)
+        clean_text = "\n".join(lines).strip()
+        if not clean_text:
+            continue
+        x0, y0, x1, y1 = raw_block.get("bbox", (0.0, 0.0, 0.0, 0.0))
+        font_size = max(font_sizes) if font_sizes else None
+        page_blocks.append(
+            {
+                "x0": float(x0),
+                "y0": float(y0),
+                "x1": float(x1),
+                "y1": float(y1),
+                "text": clean_text,
+                "font_size": font_size,
+                "relative_font_size": (font_size / median_font_size) if font_size and median_font_size else None,
+                "font_is_bold": bold,
+            }
+        )
+    return page_blocks
+
+
+def _load_pdfplumber_module() -> tuple[object | None, str | None]:
+    if importlib.util.find_spec("pdfplumber") is None:
+        return None, "not_installed"
+    try:
+        return importlib.import_module("pdfplumber"), None
+    except Exception as exc:  # pragma: no cover - defensive around optional dependency import failures
+        return None, f"import_failed:{type(exc).__name__}"
+
+
+def _pdfplumber_rows_to_text(rows: list[list[object]]) -> str:
+    lines: list[str] = []
+    for row in rows:
+        cells = [re.sub(r"\s+", " ", str(cell or "")).strip() for cell in row]
+        while cells and not cells[-1]:
+            cells.pop()
+        if any(cells):
+            lines.append(" | ".join(cells))
+    return "\n".join(lines).strip()
+
+
+def _pdfplumber_table_bbox(table: object, page: object) -> list[float] | None:
+    bbox = getattr(table, "bbox", None)
+    if not bbox or len(bbox) != 4:
+        return None
+    page_width = float(getattr(page, "width", 0.0) or 0.0)
+    page_height = float(getattr(page, "height", 0.0) or 0.0)
+    if page_width <= 0 or page_height <= 0:
+        return None
+    x0, top, x1, bottom = [float(value) for value in bbox]
+    return _normalize_bbox(x0, top, x1, bottom, page_width, page_height)
+
+
+def extract_pdfplumber_table_blocks(pdf_path: Path, *, doc_id: str) -> tuple[list[ExtractedBlock], dict[str, object]]:
+    """Extract optional pdfplumber table blocks without making pdfplumber a hard dependency."""
+    pdfplumber, unavailable_reason = _load_pdfplumber_module()
+    if pdfplumber is None:
+        return [], {
+            "engine": "pdfplumber",
+            "available": False,
+            "table_count": 0,
+            "supplemental_block_count": 0,
+            "page_table_counts": [],
+            "reason": unavailable_reason,
+        }
+
+    table_blocks: list[ExtractedBlock] = []
+    page_table_counts: list[dict[str, int]] = []
+    try:
+        with pdfplumber.open(str(pdf_path)) as pdf:
+            for index, page in enumerate(pdf.pages, start=1):
+                tables: list[tuple[list[list[object]], list[float] | None]] = []
+                if hasattr(page, "find_tables"):
+                    for table in page.find_tables() or []:
+                        rows = table.extract() or []
+                        tables.append((rows, _pdfplumber_table_bbox(table, page)))
+                else:
+                    tables.extend((rows, None) for rows in (page.extract_tables() or []))
+                page_table_counts.append({"page_num": index, "table_count": len(tables)})
+                for table_index, (rows, bbox) in enumerate(tables, start=1):
+                    table_text = _pdfplumber_rows_to_text(rows)
+                    if not table_text:
+                        continue
+                    table_blocks.append(
+                        ExtractedBlock(
+                            block_id=f"{doc_id}-p{index:03d}-pdfplumber-table-{table_index:03d}",
+                            page_num=index - 1,
+                            text=table_text,
+                            bbox=bbox,
+                            reading_order_index=0,
+                            extraction_method="native",
+                            text_source="native",
+                            block_kind="table_like",
+                            block_role="table_like",
+                            line_count=len(table_text.splitlines()),
+                            token_count=len(re.findall(r"\w+", table_text)),
+                            text_quality_score=0.95,
+                            block_labels=["table_like"],
+                            structural_flags=["pdfplumber_table", "structured_signal", "table_like"],
+                        )
+                    )
+    except Exception as exc:  # pragma: no cover - depends on optional parser internals
+        return table_blocks, {
+            "engine": "pdfplumber",
+            "available": True,
+            "table_count": sum(item["table_count"] for item in page_table_counts),
+            "supplemental_block_count": len(table_blocks),
+            "page_table_counts": page_table_counts,
+            "reason": f"probe_failed:{type(exc).__name__}",
+        }
+    return table_blocks, {
+        "engine": "pdfplumber",
+        "available": True,
+        "table_count": sum(item["table_count"] for item in page_table_counts),
+        "supplemental_block_count": len(table_blocks),
+        "page_table_counts": page_table_counts,
+        "reason": None,
+    }
+
+
+def probe_pdfplumber_tables(pdf_path: Path) -> dict[str, object]:
+    """Return optional pdfplumber table-detection metadata without making it a hard dependency."""
+    _, probe = extract_pdfplumber_table_blocks(pdf_path, doc_id="probe")
+    return probe
 
 
 def _guess_title_from_blocks(blocks: list[ExtractedBlock]) -> str | None:
@@ -221,6 +508,35 @@ def _derive_discovery_terms(
     return terms[:20]
 
 
+def _normalize_heading_match(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip().lower()
+
+
+def _font_heading_signal(
+    *,
+    text: str,
+    relative_font_size: float | None,
+    font_is_bold: bool,
+    toc_entries: set[str],
+) -> tuple[bool, list[str]]:
+    normalized = _normalize_heading_match(text)
+    flags: list[str] = []
+    if normalized and normalized in toc_entries:
+        flags.append("toc_heading")
+    line_count = max(1, len([line for line in text.splitlines() if line.strip()]))
+    token_count = len(re.findall(r"\w+", text))
+    if (
+        relative_font_size is not None
+        and relative_font_size >= 1.18
+        and line_count <= 2
+        and token_count <= 18
+    ):
+        flags.append("relative_font_heading")
+    if font_is_bold and line_count <= 2 and token_count <= 18:
+        flags.append("bold_font_heading")
+    return bool(flags), flags
+
+
 def _build_extracted_block(
     *,
     block_id: str,
@@ -230,8 +546,27 @@ def _build_extracted_block(
     reading_order_index: int,
     extraction_method: str,
     text_source: str | None = None,
+    font_size: float | None = None,
+    relative_font_size: float | None = None,
+    font_is_bold: bool = False,
+    toc_entries: set[str] | None = None,
 ) -> ExtractedBlock:
     metadata = classify_block_metadata(text)
+    font_heading, font_flags = _font_heading_signal(
+        text=text,
+        relative_font_size=relative_font_size,
+        font_is_bold=font_is_bold,
+        toc_entries=toc_entries or set(),
+    )
+    block_kind = str(metadata["block_kind"])
+    block_role = str(metadata["block_role"])
+    block_labels = list(metadata["block_labels"])
+    structural_flags = list(metadata["structural_flags"])
+    if font_heading and block_role in {"paragraph", "unknown"}:
+        block_kind = "heading"
+        block_role = "heading"
+        block_labels.append("heading")
+    structural_flags.extend(font_flags)
     return ExtractedBlock(
         block_id=block_id,
         page_num=page_num,
@@ -240,13 +575,16 @@ def _build_extracted_block(
         reading_order_index=reading_order_index,
         extraction_method=extraction_method,
         text_source=text_source or ("ocr" if extraction_method == "ocr" else "native"),
-        block_kind=str(metadata["block_kind"]),
-        block_role=str(metadata["block_role"]),
+        block_kind=block_kind,
+        block_role=block_role,
         line_count=int(metadata["line_count"]),
         token_count=int(metadata["token_count"]),
         text_quality_score=float(metadata["text_quality_score"]),
-        block_labels=list(metadata["block_labels"]),
-        structural_flags=list(metadata["structural_flags"]),
+        block_labels=sorted(set(block_labels)),
+        structural_flags=sorted(set(structural_flags)),
+        font_size=round(font_size, 3) if font_size is not None else None,
+        relative_font_size=round(relative_font_size, 3) if relative_font_size is not None else None,
+        font_is_bold=font_is_bold,
     )
 
 
@@ -272,6 +610,9 @@ def _clone_extracted_block(
         text_quality_score=source_block.text_quality_score,
         block_labels=list(source_block.block_labels),
         structural_flags=list(source_block.structural_flags),
+        font_size=source_block.font_size,
+        relative_font_size=source_block.relative_font_size,
+        font_is_bold=source_block.font_is_bold,
     )
 
 
@@ -392,6 +733,7 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
             for entry in pdf_doc.get_toc(simple=True)
             if len(entry) >= 2 and entry[1].strip()
         ]
+        toc_entries = {_normalize_heading_match(item) for item in toc if _normalize_heading_match(item)}
         metadata_title = metadata.get("title")
         preferred_doc_id_source = (
             metadata_title
@@ -399,28 +741,27 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
             else pdf_path.stem
         )
         doc_id = _slugify_doc_id(preferred_doc_id_source)
+        pdfplumber_table_blocks, table_probe = extract_pdfplumber_table_blocks(pdf_path, doc_id=doc_id)
+        pdfplumber_blocks_by_page: dict[int, list[ExtractedBlock]] = defaultdict(list)
+        for table_block in pdfplumber_table_blocks:
+            pdfplumber_blocks_by_page[table_block.page_num].append(table_block)
 
         for page_num, page in enumerate(pdf_doc):
             page_width = float(page.rect.width) or 1.0
             page_height = float(page.rect.height) or 1.0
-            raw_blocks = page.get_text("blocks")
-
-            page_blocks = []
-            for raw_block in raw_blocks:
-                x0, y0, x1, y1, text, _block_no, block_type = raw_block
-                if block_type != 0:
-                    continue
-                clean_text = text.strip()
-                if not clean_text:
-                    continue
-                page_blocks.append((x0, y0, x1, y1, clean_text))
-
-            # Keep a deterministic order even before dedicated multi-column logic lands.
-            page_blocks.sort(key=lambda item: (item[1], item[0]))
+            page_blocks = _sort_page_block_dicts_reading_order(
+                _native_page_blocks_with_font(page),
+                page_width=page_width,
+            )
 
             candidate_blocks: list[ExtractedBlock] = []
             page_text_parts: list[str] = []
-            for x0, y0, x1, y1, clean_text in page_blocks:
+            for block in page_blocks:
+                x0 = float(block["x0"])
+                y0 = float(block["y0"])
+                x1 = float(block["x1"])
+                y1 = float(block["y1"])
+                clean_text = str(block["text"])
                 page_text_parts.append(clean_text)
                 candidate_blocks.append(
                     _build_extracted_block(
@@ -437,6 +778,14 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
                         ),
                         reading_order_index=0,
                         extraction_method="native",
+                        font_size=block.get("font_size") if isinstance(block.get("font_size"), float) else None,
+                        relative_font_size=(
+                            block.get("relative_font_size")
+                            if isinstance(block.get("relative_font_size"), float)
+                            else None
+                        ),
+                        font_is_bold=bool(block.get("font_is_bold")),
+                        toc_entries=toc_entries,
                     )
                 )
 
@@ -449,6 +798,11 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
                 if ocr_blocks:
                     final_page_blocks, ocr_used = _fuse_page_blocks(candidate_blocks, ocr_blocks)
                     page_text = "\n\n".join(block.text for block in final_page_blocks)
+            if pdfplumber_blocks_by_page.get(page_num):
+                final_page_blocks = _sort_extracted_blocks_reading_order(
+                    [*final_page_blocks, *pdfplumber_blocks_by_page[page_num]]
+                )
+                page_text = "\n\n".join(block.text for block in final_page_blocks)
 
             for final_block in final_page_blocks:
                 blocks.append(
@@ -483,6 +837,7 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
             metadata=metadata,
             pages=pages,
             blocks=blocks,
+            table_probe=table_probe,
         )
 
 
@@ -586,6 +941,7 @@ def build_document_record_from_native_extraction(
             "avg_text_quality_score": avg_text_quality_score,
             "layout_signal_counts": dict(layout_signal_counts),
             "page_layout_profiles": page_layout_profiles,
+            "table_probe": extraction.table_probe,
         },
         sections=sections,
     )
@@ -600,6 +956,7 @@ def native_extraction_to_dict(extraction: NativePdfExtraction) -> dict:
         "title": extraction.title,
         "toc": extraction.toc,
         "metadata": extraction.metadata,
+        "table_probe": extraction.table_probe,
         "pages": [
             {
                 "page_num": page.page_num,
@@ -627,6 +984,9 @@ def native_extraction_to_dict(extraction: NativePdfExtraction) -> dict:
                 "text_quality_score": block.text_quality_score,
                 "block_labels": block.block_labels,
                 "structural_flags": block.structural_flags,
+                "font_size": block.font_size,
+                "relative_font_size": block.relative_font_size,
+                "font_is_bold": block.font_is_bold,
             }
             for block in extraction.blocks
         ],

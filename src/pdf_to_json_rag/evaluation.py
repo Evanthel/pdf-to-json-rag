@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 import re
+import tempfile
 from typing import Any
 
 from .answering import GroundedAnswer, answer_query_with_retrieval
+from .indexing import build_local_index
 from .intent_config import resolve_preferred_source_doc_id
+from .llm_output import parsed_json_payload, parse_strict_json_output
+from .llm_runtime import prompt_command_payload, run_prompt_command
 from .query_planning import plan_query
 from .retrieval import retrieve_top_k, retrieve_top_k_with_neighbors
 from .schemas import ChunkRecord
@@ -18,7 +23,23 @@ from .schemas import ChunkRecord
 DEFAULT_EVAL_FILENAME = "mvp_eval_cases.json"
 DEFAULT_REPORT_FILENAME = "mvp_eval_report.json"
 DEFAULT_REGRESSION_REPORT_FILENAME = "regression_report.json"
+DEFAULT_RUNTIME_COMPARISON_REPORT_FILENAME = "runtime_mode_comparison.json"
+DEFAULT_RUNTIME_PROMOTION_SNAPSHOT_FILENAME = "runtime_promotion_snapshot.json"
 DEFAULT_FAITHFULNESS_AUDIT_FILENAME = "faithfulness_audit_cases.json"
+LLM_JUDGE_PROMPT_TEMPLATE_ID = "faithfulness_context_judge.v1"
+LLM_JUDGE_COMMAND_ENV = "PDF_TO_JSON_RAG_JUDGE_COMMAND"
+LLM_JUDGE_RULES = (
+    "Judge only whether the answer is supported by the provided source context.",
+    "Do not use outside knowledge to fill gaps.",
+    "Mark a sentence unsupported if the context does not directly support it.",
+    "Return strict JSON only.",
+)
+LLM_JUDGE_OUTPUT_SCHEMA = {
+    "faithful": "boolean",
+    "supported_sentence_ratio": "number between 0 and 1",
+    "unsupported_sentences": "array of strings",
+    "rationale": "short string grounded in the provided context",
+}
 DEFAULT_FAITHFULNESS_AUDIT_CASE_IDS = [
     "antibiotics",
     "echinacea_overall_conclusion",
@@ -81,6 +102,11 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "ajmedp_hypothermia_predisposition",
         "ajmedp_frostbite_severe_zone",
         "ajmedp_immersion_neck_limit",
+    ],
+    "source_anchor_contract_core": [
+        "ajmedp_frostbite_severe_zone",
+        "ajmedp_hypothermia_symptoms",
+        "negative_ajmedp_aspirin_frostbite",
     ],
     "document_discovery_core": [
         "lbdl_document_overview",
@@ -282,6 +308,21 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "model_report_niger_document_type",
     ],
 }
+DEFAULT_RUNTIME_COMPARISON_CASE_IDS = [
+    "symptoms",
+    "vitamin_c_normal_populations",
+    "vitamin_c_cold_stress",
+    "lbdl_document_overview",
+    "source_listing_humanitarian_model_reports",
+    "compare_niger_chad_model_reports",
+    "model_report_niger_justification",
+]
+RUNTIME_COMPARISON_MODES = (
+    "baseline",
+    "sentence-transformers",
+    "cross-encoder",
+    "llm-synthesis",
+)
 SLICE_STABILITY_THRESHOLDS: dict[str, dict[str, float]] = {
     "checklist_fields": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
     "legend_lookup": {"mrr": 1.0, "avg_keyword_coverage": 0.95},
@@ -1030,6 +1071,77 @@ def _summarize_retrieval_results(retrieval_results: list[dict], answer_results: 
     }
 
 
+def build_llm_judge_prompt(
+    *,
+    question: str,
+    answer: str,
+    source_context: list[str],
+) -> str:
+    """Build a strict faithfulness judge prompt without invoking an LLM."""
+    rules = "\n".join(f"- {rule}" for rule in LLM_JUDGE_RULES)
+    context = "\n".join(f"[source {index}] {fragment}" for index, fragment in enumerate(source_context, start=1))
+    output_schema = json.dumps(LLM_JUDGE_OUTPUT_SCHEMA, ensure_ascii=False, indent=2)
+    return (
+        f"Prompt template: {LLM_JUDGE_PROMPT_TEMPLATE_ID}\n\n"
+        "Task:\n"
+        "Evaluate whether the answer is faithful to the provided source context.\n\n"
+        "Rules:\n"
+        f"{rules}\n\n"
+        f"Question:\n{question}\n\n"
+        f"Answer:\n{answer}\n\n"
+        "Source context:\n"
+        f"{context}\n\n"
+        "Return JSON matching this schema:\n"
+        f"{output_schema}"
+    )
+
+
+def _llm_judge_prompt_contract(
+    *,
+    debug_case: dict[str, Any],
+    source_context: list[str],
+    runtime_payload: dict[str, object] | None = None,
+) -> dict[str, Any]:
+    prompt = build_llm_judge_prompt(
+        question=str(debug_case.get("query", "")),
+        answer=str(debug_case["answer"].get("full_answer", "")),
+        source_context=source_context,
+    )
+    runtime_invoked = bool((runtime_payload or {}).get("invoked"))
+    return {
+        "template_id": LLM_JUDGE_PROMPT_TEMPLATE_ID,
+        "runtime": "local_command" if runtime_invoked else "not_invoked",
+        "judge_model": None,
+        "grounding_rules": list(LLM_JUDGE_RULES),
+        "output_schema": dict(LLM_JUDGE_OUTPUT_SCHEMA),
+        "source_context_count": len(source_context),
+        "prompt_char_count": len(prompt),
+        "outside_knowledge_allowed": False,
+        "strict_json_required": True,
+        "prompt_preview": _preview_text(prompt, limit=500),
+    }
+
+
+def _llm_judge_runtime_payload(prompt: str) -> dict[str, object]:
+    result = run_prompt_command(prompt, LLM_JUDGE_COMMAND_ENV)
+    payload = prompt_command_payload(result)
+    payload["env_var"] = LLM_JUDGE_COMMAND_ENV
+    payload["provider"] = "local_command" if result.configured else None
+    payload["json_valid"] = False
+    payload["parsed_json"] = None
+    payload["strict_json_parser"] = {}
+
+    if result.status == "ok" and result.stdout:
+        parsed_output = parse_strict_json_output(result.stdout, require_object=True)
+        payload["strict_json_parser"] = parsed_json_payload(parsed_output)
+        if parsed_output.ok:
+            payload["json_valid"] = True
+            payload["parsed_json"] = parsed_output.value
+        else:
+            payload["status"] = parsed_output.status
+    return payload
+
+
 def _faithfulness_audit_record(debug_case: dict[str, Any]) -> dict[str, Any]:
     answer_mode = str(debug_case["answer"]["trace"].get("answer_mode", "grounded_evidence"))
     support_trace = debug_case["answer"].get("support_trace", [])
@@ -1063,12 +1175,25 @@ def _faithfulness_audit_record(debug_case: dict[str, Any]) -> dict[str, Any]:
             unsupported.append(sentence)
 
     supported_ratio = (len(supported) / len(answer_sentences)) if answer_sentences else 0.0
+    llm_judge_prompt = build_llm_judge_prompt(
+        question=str(debug_case.get("query", "")),
+        answer=str(debug_case["answer"].get("full_answer", "")),
+        source_context=support_fragments[:12],
+    )
+    llm_judge_runtime = _llm_judge_runtime_payload(llm_judge_prompt)
     return {
         "case_id": debug_case["case_id"],
         "supported_sentence_ratio": supported_ratio,
         "supported_sentences": supported,
         "unsupported_sentences": unsupported,
+        "claim_alignment": debug_case["answer"].get("trace", {}).get("claim_alignment", {}),
         "evidence_preview": support_fragments[:6],
+        "llm_judge_prompt_contract": _llm_judge_prompt_contract(
+            debug_case=debug_case,
+            source_context=support_fragments[:12],
+            runtime_payload=llm_judge_runtime,
+        ),
+        "llm_judge_runtime": llm_judge_runtime,
     }
 
 
@@ -1274,6 +1399,13 @@ def _run_faithfulness_audit(debug_cases: list[dict[str, Any]], audit_case_ids: l
     failing_case_ids = [
         item["case_id"] for item in records if item["supported_sentence_ratio"] < 1.0
     ]
+    judge_invoked_case_count = sum(
+        1 for item in records if item.get("llm_judge_runtime", {}).get("invoked")
+    )
+    judge_valid_json_count = sum(
+        1 for item in records if item.get("llm_judge_runtime", {}).get("json_valid")
+    )
+    contract_validation = _faithfulness_contract_validation(records)
     return {
         "sampled_case_count": len(records),
         "avg_supported_sentence_ratio": _average(
@@ -1282,7 +1414,63 @@ def _run_faithfulness_audit(debug_cases: list[dict[str, Any]], audit_case_ids: l
         "failing_case_count": len(failing_case_ids),
         "failing_case_ids": failing_case_ids,
         "recommend_llm_judge": len(failing_case_ids) > 0,
+        "llm_judge_prompt_contract": {
+            "template_id": LLM_JUDGE_PROMPT_TEMPLATE_ID,
+            "runtime": "local_command" if judge_invoked_case_count else "not_invoked",
+            "sampled_prompt_count": len(records),
+            "judge_invoked_case_count": judge_invoked_case_count,
+            "judge_valid_json_count": judge_valid_json_count,
+            "outside_knowledge_allowed": False,
+            "strict_json_required": True,
+        },
+        "contract_validation": contract_validation,
         "cases": records,
+    }
+
+
+def _faithfulness_contract_validation(records: list[dict[str, Any]]) -> dict[str, Any]:
+    checks: list[dict[str, object]] = []
+    for record in records:
+        case_id = str(record.get("case_id", ""))
+        contract = record.get("llm_judge_prompt_contract", {})
+        runtime = record.get("llm_judge_runtime", {})
+        checks.extend(
+            [
+                {
+                    "case_id": case_id,
+                    "name": "judge_template_id",
+                    "passed": contract.get("template_id") == LLM_JUDGE_PROMPT_TEMPLATE_ID,
+                },
+                {
+                    "case_id": case_id,
+                    "name": "judge_forbids_outside_knowledge",
+                    "passed": contract.get("outside_knowledge_allowed") is False,
+                },
+                {
+                    "case_id": case_id,
+                    "name": "judge_requires_strict_json",
+                    "passed": contract.get("strict_json_required") is True,
+                },
+                {
+                    "case_id": case_id,
+                    "name": "judge_has_source_context",
+                    "passed": int(contract.get("source_context_count") or 0) > 0,
+                },
+                {
+                    "case_id": case_id,
+                    "name": "runtime_reports_parser_contract",
+                    "passed": (
+                        not runtime.get("invoked")
+                        or isinstance(runtime.get("strict_json_parser"), dict)
+                    ),
+                },
+            ]
+        )
+    failed = [item for item in checks if not item["passed"]]
+    return {
+        "all_pass": not failed,
+        "check_count": len(checks),
+        "failed_checks": failed,
     }
 
 
@@ -1858,5 +2046,467 @@ def run_regression_suite(
     }
 
     report_path = eval_dir / DEFAULT_REGRESSION_REPORT_FILENAME
+    report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    return report, report_path
+
+
+def _load_all_chunk_records(chunk_root: Path) -> list[ChunkRecord]:
+    chunk_root = chunk_root.expanduser().resolve()
+    chunks: list[ChunkRecord] = []
+    for chunk_path in sorted(chunk_root.glob("*/*.json")):
+        data = json.loads(chunk_path.read_text(encoding="utf-8"))
+        chunks.append(ChunkRecord.model_validate(data))
+    return chunks
+
+
+def _with_runtime_env(updates: dict[str, str | None]):
+    previous: dict[str, str | None] = {}
+    for key, value in updates.items():
+        previous[key] = os.environ.get(key)
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    return previous
+
+
+def _restore_runtime_env(previous: dict[str, str | None]) -> None:
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _retrieval_result_from_grounded_answer(
+    *,
+    case: dict[str, Any],
+    grounded_answer: GroundedAnswer,
+    k: int,
+) -> dict[str, Any]:
+    retrieved_ids = [chunk.chunk_id for chunk in grounded_answer.top_k_hits]
+    retrieved_doc_ids = _ordered_unique([chunk.doc_id for chunk in grounded_answer.top_k_hits])
+    case_type = case.get("case_type", "grounded")
+    if case_type == "negative":
+        return {
+            "case_id": case["case_id"],
+            "case_type": case_type,
+            "query": case["query"],
+            "evaluation_level": "document" if case.get("relevant_doc_ids") else "chunk",
+            "retrieved_ids": retrieved_ids,
+            "retrieved_doc_ids": retrieved_doc_ids,
+            "precision_at_k": None,
+            "recall_at_k": None,
+            "reciprocal_rank": None,
+        }
+
+    relevant_doc_ids = set(case.get("relevant_doc_ids", []))
+    if relevant_doc_ids:
+        return {
+            "case_id": case["case_id"],
+            "case_type": case_type,
+            "query": case["query"],
+            "evaluation_level": "document",
+            "retrieved_ids": retrieved_ids,
+            "retrieved_doc_ids": retrieved_doc_ids,
+            "precision_at_k": precision_at_k(retrieved_doc_ids, relevant_doc_ids, k),
+            "recall_at_k": recall_at_k(retrieved_doc_ids, relevant_doc_ids, k),
+            "reciprocal_rank": reciprocal_rank(retrieved_doc_ids, relevant_doc_ids),
+        }
+
+    relevant = set(case.get("relevant_chunk_ids", []))
+    return {
+        "case_id": case["case_id"],
+        "case_type": case_type,
+        "query": case["query"],
+        "evaluation_level": "chunk",
+        "retrieved_ids": retrieved_ids,
+        "retrieved_doc_ids": retrieved_doc_ids,
+        "precision_at_k": precision_at_k(retrieved_ids, relevant, k),
+        "recall_at_k": recall_at_k(retrieved_ids, relevant, k),
+        "reciprocal_rank": reciprocal_rank(retrieved_ids, relevant),
+    }
+
+
+def _answer_result_from_grounded_answer(
+    *,
+    case: dict[str, Any],
+    grounded_answer: GroundedAnswer,
+) -> dict[str, Any]:
+    case_type = case.get("case_type", "grounded")
+    keyword_eval = _keyword_matches(
+        grounded_answer.answer,
+        case.get("expected_keywords", []),
+    )
+    abstained = grounded_answer.answer.startswith("No grounded answer")
+    return {
+        "case_id": case["case_id"],
+        "case_type": case_type,
+        "query": case["query"],
+        "answer": grounded_answer.answer,
+        "top_k_hit_ids": [chunk.chunk_id for chunk in grounded_answer.top_k_hits],
+        "expanded_hit_ids": [chunk.chunk_id for chunk in grounded_answer.expanded_hits],
+        "evidence_chunk_ids": [item.chunk_id for item in grounded_answer.evidence],
+        "evidence_sentences": [item.sentence for item in grounded_answer.evidence],
+        "abstained": abstained,
+        "negative_success": abstained if case_type == "negative" else None,
+        **keyword_eval,
+    }
+
+
+def _runtime_signal_summary(answers: list[GroundedAnswer]) -> dict[str, Any]:
+    backend_counts: dict[str, int] = {}
+    cross_encoder_fallback_count = 0
+    llm_configured_count = 0
+    llm_invoked_count = 0
+    llm_used_count = 0
+    for answer in answers:
+        for chunk in answer.top_k_hits + answer.expanded_hits:
+            backend_code = chunk.retrieval_signals.get("rerank_backend_code")
+            backend = {
+                0.0: "heuristic",
+                1.0: "lightweight",
+                2.0: "cross_encoder",
+            }.get(backend_code, "unknown")
+            backend_counts[backend] = backend_counts.get(backend, 0) + 1
+            if chunk.retrieval_signals.get("cross_encoder_fallback"):
+                cross_encoder_fallback_count += 1
+        synthesis_runtime = answer.answer_trace.get("synthesis_runtime", {})
+        if synthesis_runtime.get("configured"):
+            llm_configured_count += 1
+        if synthesis_runtime.get("invoked"):
+            llm_invoked_count += 1
+        if synthesis_runtime.get("used_for_final_answer"):
+            llm_used_count += 1
+    return {
+        "rerank_backend_counts": backend_counts,
+        "cross_encoder_fallback_chunk_count": cross_encoder_fallback_count,
+        "llm_configured_case_count": llm_configured_count,
+        "llm_invoked_case_count": llm_invoked_count,
+        "llm_used_case_count": llm_used_count,
+    }
+
+
+def _evaluate_runtime_mode(
+    *,
+    mode: str,
+    cases: list[dict[str, Any]],
+    index_dir: Path,
+    chunk_root: Path,
+    k: int,
+    index_manifest: dict[str, Any],
+    env_updates: dict[str, str | None],
+) -> dict[str, Any]:
+    previous_env = _with_runtime_env(env_updates)
+    try:
+        retrieval_results: list[dict[str, Any]] = []
+        answer_results: list[dict[str, Any]] = []
+        case_results: list[dict[str, Any]] = []
+        grounded_answers: list[GroundedAnswer] = []
+        failed_case_ids: list[str] = []
+        for case in cases:
+            grounded_answer = answer_query_with_retrieval(
+                query=case["query"],
+                index_dir=index_dir,
+                chunk_root=chunk_root,
+                k=k,
+                use_lightweight_rerank=True,
+            )
+            grounded_answers.append(grounded_answer)
+            retrieval_result = _retrieval_result_from_grounded_answer(
+                case=case,
+                grounded_answer=grounded_answer,
+                k=k,
+            )
+            answer_result = _answer_result_from_grounded_answer(
+                case=case,
+                grounded_answer=grounded_answer,
+            )
+            status = _regression_case_status(
+                case.get("case_type", "grounded"),
+                retrieval_result,
+                answer_result,
+            )
+            if status != "pass":
+                failed_case_ids.append(case["case_id"])
+            retrieval_results.append(retrieval_result)
+            answer_results.append(answer_result)
+            case_results.append(
+                {
+                    "case_id": case["case_id"],
+                    "case_type": case.get("case_type", "grounded"),
+                    "status": status,
+                    "retrieval": retrieval_result,
+                    "answer": {
+                        "keyword_coverage": answer_result.get("keyword_coverage"),
+                        "abstained": answer_result.get("abstained"),
+                        "negative_success": answer_result.get("negative_success"),
+                        "answer_preview": _preview_text(str(answer_result.get("answer", "")), limit=240),
+                    },
+                    "runtime": {
+                        "synthesis_runtime": grounded_answer.answer_trace.get("synthesis_runtime", {}),
+                        "claim_alignment": grounded_answer.answer_trace.get("claim_alignment", {}),
+                    },
+                }
+            )
+
+        summary = _summarize_retrieval_results(retrieval_results, answer_results)
+        runtime_signals = _runtime_signal_summary(grounded_answers)
+        return {
+            "mode": mode,
+            "case_count": len(cases),
+            "pass_count": len(cases) - len(failed_case_ids),
+            "fail_count": len(failed_case_ids),
+            "failed_case_ids": failed_case_ids,
+            "all_pass": len(failed_case_ids) == 0,
+            "summary": summary,
+            "index_manifest": {
+                "embedding_backend": index_manifest.get("embedding_backend"),
+                "embedding_model": index_manifest.get("embedding_model"),
+                "embedding_fallback_reason": index_manifest.get("embedding_fallback_reason"),
+                "chunk_count": index_manifest.get("chunk_count"),
+            },
+            "runtime_signals": runtime_signals,
+            "case_results": case_results,
+        }
+    finally:
+        _restore_runtime_env(previous_env)
+
+
+def _runtime_mode_deltas(
+    baseline: dict[str, Any],
+    mode_result: dict[str, Any],
+) -> dict[str, float | int]:
+    base_summary = baseline.get("summary", {})
+    summary = mode_result.get("summary", {})
+    return {
+        "pass_count_delta": int(mode_result.get("pass_count", 0)) - int(baseline.get("pass_count", 0)),
+        "avg_precision_at_k_delta": round(
+            float(summary.get("avg_precision_at_k") or 0.0)
+            - float(base_summary.get("avg_precision_at_k") or 0.0),
+            4,
+        ),
+        "avg_recall_at_k_delta": round(
+            float(summary.get("avg_recall_at_k") or 0.0)
+            - float(base_summary.get("avg_recall_at_k") or 0.0),
+            4,
+        ),
+        "mrr_delta": round(
+            float(summary.get("mrr") or 0.0) - float(base_summary.get("mrr") or 0.0),
+            4,
+        ),
+        "avg_keyword_coverage_delta": round(
+            float(summary.get("avg_keyword_coverage") or 0.0)
+            - float(base_summary.get("avg_keyword_coverage") or 0.0),
+            4,
+        ),
+    }
+
+
+def _runtime_promotion_gate(
+    *,
+    baseline: dict[str, Any] | None,
+    candidate: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if baseline is None or candidate is None:
+        return {
+            "candidate_mode": candidate.get("mode") if candidate else None,
+            "promotable": False,
+            "checks": [],
+            "reasons": ["baseline or candidate result is missing"],
+        }
+
+    baseline_summary = baseline.get("summary", {})
+    candidate_summary = candidate.get("summary", {})
+    candidate_manifest = candidate.get("index_manifest", {})
+    checks = [
+        {
+            "name": "candidate_is_active",
+            "passed": candidate_manifest.get("embedding_backend") == "sentence-transformers",
+            "details": {
+                "embedding_backend": candidate_manifest.get("embedding_backend"),
+                "embedding_model": candidate_manifest.get("embedding_model"),
+                "embedding_fallback_reason": candidate_manifest.get("embedding_fallback_reason"),
+            },
+        },
+        {
+            "name": "no_pass_count_regression",
+            "passed": int(candidate.get("pass_count", 0)) >= int(baseline.get("pass_count", 0)),
+            "details": {
+                "baseline_pass_count": baseline.get("pass_count", 0),
+                "candidate_pass_count": candidate.get("pass_count", 0),
+            },
+        },
+        {
+            "name": "recall_not_lower",
+            "passed": float(candidate_summary.get("avg_recall_at_k") or 0.0)
+            >= float(baseline_summary.get("avg_recall_at_k") or 0.0),
+            "details": {
+                "baseline_avg_recall_at_k": baseline_summary.get("avg_recall_at_k"),
+                "candidate_avg_recall_at_k": candidate_summary.get("avg_recall_at_k"),
+            },
+        },
+        {
+            "name": "mrr_not_lower",
+            "passed": float(candidate_summary.get("mrr") or 0.0)
+            >= float(baseline_summary.get("mrr") or 0.0),
+            "details": {
+                "baseline_mrr": baseline_summary.get("mrr"),
+                "candidate_mrr": candidate_summary.get("mrr"),
+            },
+        },
+        {
+            "name": "warnings_not_higher",
+            "passed": int(candidate_summary.get("warning_case_count") or 0)
+            <= int(baseline_summary.get("warning_case_count") or 0),
+            "details": {
+                "baseline_warning_case_count": baseline_summary.get("warning_case_count"),
+                "candidate_warning_case_count": candidate_summary.get("warning_case_count"),
+            },
+        },
+    ]
+    failed = [item for item in checks if not item["passed"]]
+    return {
+        "candidate_mode": candidate.get("mode"),
+        "promotable": not failed,
+        "checks": checks,
+        "reasons": [item["name"] for item in failed],
+    }
+
+
+def run_runtime_mode_comparison(
+    *,
+    index_dir: Path,
+    chunk_root: Path,
+    eval_dir: Path,
+    k: int = 5,
+    eval_path: Path | None = None,
+    case_ids: list[str] | None = None,
+    shard: str | None = None,
+    modes: list[str] | None = None,
+    all_cases: bool = False,
+) -> tuple[dict[str, Any], Path]:
+    """Compare default retrieval against optional local model/runtime modes."""
+    eval_dir = eval_dir.expanduser().resolve()
+    eval_dir.mkdir(parents=True, exist_ok=True)
+    if eval_path is None:
+        eval_path = ensure_default_eval_cases(eval_dir)
+    else:
+        eval_path = eval_path.expanduser().resolve()
+
+    eval_cases = load_eval_cases(eval_path)
+    case_map = {item["case_id"]: item for item in eval_cases}
+    if all_cases:
+        selected_case_ids = [item["case_id"] for item in eval_cases]
+    else:
+        selected_case_ids = (
+            case_ids
+            or DEFAULT_REGRESSION_SHARDS.get(shard or "", DEFAULT_RUNTIME_COMPARISON_CASE_IDS)
+        )
+    selected_modes = modes or list(RUNTIME_COMPARISON_MODES)
+    unknown_modes = [mode for mode in selected_modes if mode not in RUNTIME_COMPARISON_MODES]
+    missing_case_ids = [case_id for case_id in selected_case_ids if case_id not in case_map]
+    selected_cases = [case_map[case_id] for case_id in selected_case_ids if case_id in case_map]
+
+    index_dir = index_dir.expanduser().resolve()
+    chunk_root = chunk_root.expanduser().resolve()
+    with tempfile.TemporaryDirectory(prefix="pdf-to-json-rag-runtime-compare-") as workspace:
+        workspace_path = Path(workspace)
+        mode_index_dirs: dict[str, Path] = {"baseline": index_dir, "cross-encoder": index_dir, "llm-synthesis": index_dir}
+        mode_manifests: dict[str, dict[str, Any]] = {}
+        baseline_manifest_path = index_dir / "index_manifest.json"
+        mode_manifests["baseline"] = json.loads(baseline_manifest_path.read_text(encoding="utf-8"))
+        mode_manifests["cross-encoder"] = mode_manifests["baseline"]
+        mode_manifests["llm-synthesis"] = mode_manifests["baseline"]
+
+        if "sentence-transformers" in selected_modes:
+            chunks = _load_all_chunk_records(chunk_root)
+            sentence_index_dir = workspace_path / "sentence_transformers_index"
+            previous_env = _with_runtime_env({"PDF_TO_JSON_RAG_EMBEDDING_BACKEND": "sentence-transformers"})
+            try:
+                mode_manifests["sentence-transformers"] = build_local_index(
+                    chunks=chunks,
+                    index_dir=sentence_index_dir,
+                )
+            finally:
+                _restore_runtime_env(previous_env)
+            mode_index_dirs["sentence-transformers"] = sentence_index_dir
+
+        mode_envs = {
+            "baseline": {
+                "PDF_TO_JSON_RAG_USE_CROSS_ENCODER": None,
+                "PDF_TO_JSON_RAG_LLM_COMMAND": None,
+            },
+            "sentence-transformers": {
+                "PDF_TO_JSON_RAG_USE_CROSS_ENCODER": None,
+                "PDF_TO_JSON_RAG_LLM_COMMAND": None,
+            },
+            "cross-encoder": {
+                "PDF_TO_JSON_RAG_USE_CROSS_ENCODER": "1",
+                "HF_HUB_OFFLINE": os.environ.get("HF_HUB_OFFLINE", "1"),
+                "TRANSFORMERS_OFFLINE": os.environ.get("TRANSFORMERS_OFFLINE", "1"),
+                "PDF_TO_JSON_RAG_LLM_COMMAND": None,
+            },
+            "llm-synthesis": {
+                "PDF_TO_JSON_RAG_USE_CROSS_ENCODER": None,
+            },
+        }
+
+        mode_results: list[dict[str, Any]] = []
+        for mode in selected_modes:
+            if mode in unknown_modes:
+                continue
+            if mode == "sentence-transformers" and mode not in mode_index_dirs:
+                continue
+            mode_results.append(
+                _evaluate_runtime_mode(
+                    mode=mode,
+                    cases=selected_cases,
+                    index_dir=mode_index_dirs[mode],
+                    chunk_root=chunk_root,
+                    k=k,
+                    index_manifest=mode_manifests[mode],
+                    env_updates=mode_envs[mode],
+                )
+            )
+
+    baseline_result = next((item for item in mode_results if item["mode"] == "baseline"), None)
+    sentence_transformers_result = next(
+        (item for item in mode_results if item["mode"] == "sentence-transformers"),
+        None,
+    )
+    deltas = {
+        item["mode"]: _runtime_mode_deltas(baseline_result, item)
+        for item in mode_results
+        if baseline_result is not None and item["mode"] != "baseline"
+    }
+    promotion_gates = {}
+    if sentence_transformers_result is not None:
+        promotion_gates["sentence-transformers"] = _runtime_promotion_gate(
+            baseline=baseline_result,
+            candidate=sentence_transformers_result,
+        )
+    report: dict[str, Any] = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "k": k,
+        "eval_file": str(eval_path),
+        "selected_shard": shard,
+        "all_cases": all_cases,
+        "selected_case_ids": selected_case_ids,
+        "missing_case_ids": missing_case_ids,
+        "unknown_modes": unknown_modes,
+        "available_modes": list(RUNTIME_COMPARISON_MODES),
+        "case_count": len(selected_cases),
+        "mode_results": mode_results,
+        "baseline_deltas": deltas,
+        "promotion_gates": promotion_gates,
+        "all_pass": (
+            not missing_case_ids
+            and not unknown_modes
+            and all(item.get("all_pass") for item in mode_results)
+        ),
+    }
+
+    report_path = eval_dir / DEFAULT_RUNTIME_COMPARISON_REPORT_FILENAME
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     return report, report_path

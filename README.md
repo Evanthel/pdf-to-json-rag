@@ -10,6 +10,7 @@ This repo is a personal implementation inspired by:
 
 - the upstream course repo [https-deeplearning-ai/sc-landingai](https://github.com/https-deeplearning-ai/sc-landingai)
 - the course [Document AI: From OCR to Agentic Doc Extraction](https://learn.deeplearning.ai/courses/document-ai-from-ocr-to-agentic-doc-extraction/information)
+- selected architecture ideas from Google's LangExtract project, used as conceptual inspiration for grounded extraction contracts, strict output parsing, provider boundaries, and multipass review patterns
 
 The working course fork and setup/debug history are preserved separately in:
 
@@ -23,18 +24,22 @@ Current public version: `0.1.0-beta`
 
 Internal development iterations in this repo use `v1.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
 
-Current internal milestone: `v1.4.0`
+Current internal milestone: `v1.38.0`
 
 The current baseline includes:
 
 - extraction-time block roles with per-block text provenance and quality signals
 - native/OCR page fusion that can merge or switch sources per page instead of one global fallback
 - extraction-time layout signals and per-page processing summaries
+- explicit multi-column reading-order normalization from extraction through chunking
+- relative font-size, bold-font, and TOC-backed heading signals during extraction
+- optional `pdfplumber` table probe metadata and supplemental `table_like` blocks when the `tables` extra is installed
 - extraction-time sections with `section_path` and `section_kind`
 - section roles, layout signals, text-source profiles, and source-block traces carried from extraction into inspection and chunking
 - structure-aware chunking and chunk metadata
 - chunk-level block provenance, block-role profiles, layout signals, and explicit chunk strategies
 - feature-based query planning and explicit `document_selection` traces
+- evidence-intent planning for treatment subquestions such as null-effect and subgroup-benefit queries
 - shared document-level mode renderers and shared answer finalization helpers
 - preserved document-root section context for inline and synthetic section splits
 - shared structured-form answer helpers and a dedicated structured-form maintenance gate
@@ -53,22 +58,42 @@ The current baseline includes:
 - a dedicated `processing_layer_core` maintainer gate for block typing, section roles, and chunk provenance
 - a dedicated `processing_strategy_core` maintainer gate for strategy-aware chunking on structure-heavy inputs
 - an explicit `retrieval_contract` split for single-document QA, document understanding, and cross-document discovery
+- optional cross-encoder reranking behind `PDF_TO_JSON_RAG_USE_CROSS_ENCODER=1`, with lightweight reranking as the stable fallback
+- runtime-mode comparison for baseline, sentence-transformers, cross-encoder, and opt-in LLM synthesis
+- full-suite runtime comparison with a green promotion gate for optional sentence-transformer embeddings
+- explicit `runtime-check` and `runtime-promotion-report` commands for backend selection and promotion readiness
+- explicit embedding backend policy via `PDF_TO_JSON_RAG_EMBEDDING_BACKEND=hash|sentence-transformers|auto`
+- promotion snapshots saved after green full-suite runtime comparisons
+- installed-entrypoint verification for `runtime-check`, `doctor`, and public smoke workflow
+- reranking of the neighbor-expanded context before answer synthesis, with `initial_retrieval_rank` and `expanded_context_rank` signals
+- an explicit grounded-only synthesis prompt contract with opt-in local-command LLM execution
+- strict local JSON/fence parsing for opt-in LLM outputs and judge diagnostics
+- an LLM-as-judge faithfulness prompt contract with opt-in local-command JSON judging
+- answer-claim/evidence alignment status in answer traces and faithfulness audit records
+- provider abstraction over the current env-command prompt runtime
+- prompt/eval contract validation for sampled faithfulness gates
+- optional low-confidence semantic multipass behind an env flag, with no default-path change
 - a shared `document_synthesis` handoff so document selection, support scope, and answer chunks stay aligned
 - a layer-aware evaluation report that separates processing, retrieval, and answer-faithfulness signals
 - layer-stability and architecture-gate summaries on top of the layer-aware evaluation report
 - corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
+- bucket-level corpus diagnostics and follow-up actions for unknown-document sanity checks
+- corpus sample profiles, saved corpus snapshots, and a contract gate for bucket diagnostics
 - compact default JSON output with richer debug state behind `--verbose`
-- deterministic local embeddings by default, with optional `sentence-transformers`
+- deterministic local embeddings by default, with optional `sentence-transformers` or `auto` backend selection
 
 Validation state:
 
 - public CLI tests rerun in the current milestone: green
+- full-suite baseline vs local `all-MiniLM-L6-v2` runtime comparison: green, `77/77` for both modes, sentence-transformer promotion gate green
 - processing-layer maintainer shards rerun in the current milestone: green
 - retrieval-contract maintainer shard rerun in the current milestone: green
 - retrieval-synthesis maintainer shard rerun in the current milestone: green
 - evaluation-layer public/unit validation rerun in the current milestone: green
 - layer-gate validation rerun in the current milestone: green
 - corpus-gate validation rerun in the current milestone: green
+- bucket-diagnostics validation rerun in the current milestone: green
+- corpus snapshot/profile/contract validation rerun in the current milestone: green
 - latest saved full 77-case benchmark: green
   - `precision@5 = 0.6031`
   - `recall@5 = 1.0`
@@ -76,9 +101,13 @@ Validation state:
   - `avg_keyword_coverage = 1.0`
   - `negative_success_rate = 1.0`
   - `warning_case_count = 0`
+  - `answer_faithfulness_failing_case_count = 0`
+  - `architecture_gates.all_pass = true`
 - sampled faithfulness audit: green
   - `avg_supported_sentence_ratio = 1.0`
   - `failing_case_count = 0`
+  - `llm_judge_prompt_contract = faithfulness_context_judge.v1`
+  - `contract_validation.all_pass = true`
 
 Current engineering direction:
 
@@ -86,7 +115,7 @@ Current engineering direction:
 - keep retrieval behavior aligned to explicit answer-path contracts instead of one shared fallback path
 - keep improving unknown-document semantics on unfamiliar PDFs without hiding uncertainty
 - keep using the repo-local `pdf/` corpus as a local-only semantic stress test, not just a layout stress test
-- keep learned reranking deferred until the heuristic baseline stops being sufficient
+- keep heavier reranking optional until it proves value over the structure-aware lightweight baseline
 
 ## Capabilities
 
@@ -144,7 +173,26 @@ The current baseline is still heuristic-first. It now behaves more sanely on unf
 Optional stronger local embeddings:
 
 ```bash
-export PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1
+export PDF_TO_JSON_RAG_EMBEDDING_BACKEND=sentence-transformers
+export PDF_TO_JSON_RAG_SENTENCE_TRANSFORMERS_MODEL=/path/to/local/all-MiniLM-L6-v2
+pdf-to-json-rag runtime-check --json
+```
+
+`PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1` remains supported as a legacy alias. The default remains `hash`; `auto` selects sentence-transformers only when the local model is already available.
+
+The latest full-suite comparison promotes local `all-MiniLM-L6-v2` as the recommended opt-in embedding backend for retrieval quality, not as a silent default change. Run `pdf-to-json-rag runtime-promotion-report --json` to inspect the saved promotion snapshot and gate decision.
+
+Optional local LLM hooks are provider-agnostic and disabled by default. Commands receive the prompt on stdin and must write the answer or strict judge JSON to stdout:
+
+```bash
+export PDF_TO_JSON_RAG_LLM_COMMAND="/path/to/your/synthesis-wrapper"
+export PDF_TO_JSON_RAG_JUDGE_COMMAND="/path/to/your/judge-wrapper"
+```
+
+Opt-in low-confidence semantic multipass is disabled by default:
+
+```bash
+export PDF_TO_JSON_RAG_SEMANTIC_MULTIPASS=1
 ```
 
 Fastest full workflow:
@@ -171,7 +219,7 @@ That local sanity path now returns compact overview, type, purpose, audience, co
 Local corpus sanity check over the repo-local `pdf/` directory:
 
 ```bash
-pdf-to-json-rag corpus-sanity-check --sample-size 12 --json
+pdf-to-json-rag corpus-sanity-check --sample-profile balanced --json
 ```
 
 That local-only corpus path now reports both `technical_all_pass` and `semantic_all_pass`, plus rates for specific document typing, specific purpose inference, low-confidence classifications, trust-limited results, and a compact corpus architecture gate over `processing`, `semantics`, and `trust`.
@@ -224,32 +272,37 @@ The saved evaluation report includes:
 - compact maintainer shards for planning, structure, selection, anchors, semantics, confidence-aware document understanding, and relationship reasoning
 - a layer-aware summary for `processing`, `retrieval`, and `answer_faithfulness`
 - a trust-policy shard for classification rationale and classification limits answers
+- strict JSON parser and prompt/eval contract diagnostics for opt-in LLM judge output
+- a runtime-mode comparison report for baseline vs optional sentence-transformer, cross-encoder, and LLM synthesis paths
+- a promotion gate that verifies optional sentence-transformer promotion against full-suite pass count, recall, MRR, and warning count
 - processing-layer shards for block typing, section-role recovery, chunk provenance, and strategy-aware chunking
 - a retrieval-contract shard that keeps single-doc, doc-understanding, and cross-doc paths separated in regression coverage
 - a retrieval-synthesis shard that keeps document selection, support scope, and answer-chunk handoff aligned
 - extra sanity shards for layout, single-document, table-like, and form-heavy behavior, plus a sampled faithfulness audit
-- a local corpus sanity pass that distinguishes technical success from semantic success on repo-local unknown PDFs
+- a local corpus sanity pass that distinguishes technical success, semantic success, bucket-specific follow-up, and saved snapshot/contract state on repo-local unknown PDFs
 
 Current gate status:
 
 - public release gates are green
 - the maintainer shard set used by `release-check` is green
 - `release-check` distinguishes public checks, maintainer checks, and benchmark-only regressions
-- the current focus is preserving the structure-aware, heuristic-first baseline and broadening unknown-document semantics rather than adding a learned reranker
+- the current focus is preserving the structure-aware lightweight baseline while testing learned reranking only as an opt-in local path
 - the current focus is moving more unfamiliar PDFs out of `document/reference_lookup` while keeping confidence signalling honest
 
 ## Limitations
 
 - OCR fallback is still heuristic and not fully layout-aware
+- `pdfplumber` table extraction is optional and currently supplements table-like blocks; deeper table schema normalization is still not implemented
 - Section detection is improved, but still rule-based and fragile on unfamiliar layouts
 - Chunking and document-level reasoning are still heuristic-first rather than learned
-- Retrieval still depends on heuristic scoring, structure cues, and lightweight reranking
+- Retrieval still defaults to heuristic scoring, structure cues, and lightweight reranking; cross-encoder reranking is opt-in and model availability depends on the local environment
 - Stronger local sentence-transformer embeddings are opt-in; the default public path uses deterministic fallback embeddings
 - Document facets, document families, shortlist decisions, and type/purpose/audience inference are still handcrafted metadata layers
-- Grounded answers are extractive, not LLM-synthesized
+- Grounded answers are still extractive by default; opt-in local-command synthesis can replace the final answer when explicitly configured
+- Claim/evidence alignment is diagnostic; it is not a replacement for human review on high-risk answers
 - The benchmark is still hand-built and not broad enough to prove true generalization
 - The scanned and structure-heavy coverage is still modest
-- The faithfulness audit is still a checkpoint, not a substitute for broader human review
+- The faithfulness audit emits an LLM-as-judge prompt contract and can run an opt-in local JSON judge command, but does not invoke one by default
 - Multilingual robustness is not validated yet
 
 ## Notes on Reference Material
@@ -258,6 +311,7 @@ This repo was brainstormed with ideas from:
 
 - [DeepLearning.AI Skill Builder](https://skillbuilder.deeplearning.ai/)
 - ChatGPT 5.4
+- Google's LangExtract, as architecture inspiration only; this repo does not vendor or copy its implementation
 
 Earlier in development, a small set of course notebooks from [Document AI: From OCR to Agentic Doc Extraction](https://learn.deeplearning.ai/courses/document-ai-from-ocr-to-agentic-doc-extraction/information) was copied into a temporary `references/` folder and used only as design input for OCR fallback planning, reading-order/layout handling, schema design, and grounding-aware RAG flow.
 

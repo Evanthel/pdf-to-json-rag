@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from unittest import mock
 
@@ -17,19 +18,35 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from pdf_to_json_rag import cli as cli_module
-from pdf_to_json_rag.chunking import chunk_document
+from pdf_to_json_rag import retrieval as retrieval_module
+from pdf_to_json_rag.answering import answer_from_chunks
+from pdf_to_json_rag.chunking import chunk_document, normalize_reading_order
 from pdf_to_json_rag.content_metadata import classify_block_metadata, infer_layout_signals
 from pdf_to_json_rag.document_facets import derive_document_facets
+from pdf_to_json_rag.document_semantics import interpret_document_semantics
 from pdf_to_json_rag.evaluation import (
     _answer_faithfulness_layer_record,
     _evaluate_layer_stability,
+    _faithfulness_contract_validation,
+    _faithfulness_audit_record,
     _processing_layer_record,
     _retrieval_layer_record,
+    build_llm_judge_prompt,
+    run_runtime_mode_comparison,
 )
-from pdf_to_json_rag.extraction import ExtractedBlock
+from pdf_to_json_rag.extraction import (
+    ExtractedBlock,
+    _build_extracted_block,
+    _sort_page_blocks_reading_order,
+    extract_pdfplumber_table_blocks,
+    probe_pdfplumber_tables,
+)
+from pdf_to_json_rag.llm_output import parse_strict_json_output
+from pdf_to_json_rag.llm_runtime import prompt_command_payload, provider_for_env_command
+from pdf_to_json_rag.indexing import build_local_index
 from pdf_to_json_rag.query_planning import plan_query
 from pdf_to_json_rag.retrieval import build_retrieval_contract
-from pdf_to_json_rag.schemas import DocumentRecord
+from pdf_to_json_rag.schemas import ChunkRecord, DocumentRecord
 
 
 class CliPublicSurfaceTests(unittest.TestCase):
@@ -94,6 +111,90 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIn("package_metadata_present", check_names)
         self.assertIn("example_assets_present", check_names)
         self.assertIn("demo_pdf_generation_available", check_names)
+        self.assertIn("pdfplumber_available", check_names)
+        self.assertIn("embedding_backend_configured", check_names)
+        self.assertEqual(result["runtime"]["embedding"]["requested_backend"], "hash")
+        self.assertEqual(result["runtime"]["embedding"]["effective_backend"], "hash-fallback")
+
+    def test_runtime_check_reports_default_hash_backend(self) -> None:
+        process = self._run("runtime-check", "--json")
+        payload = json.loads(process.stdout)
+        self.assertTrue(payload["ok"])
+        embedding = payload["result"]["embedding"]
+        self.assertEqual(payload["result"]["install_context"]["version"], "0.1.0")
+        self.assertTrue(payload["result"]["install_context"]["module_path"].endswith("cli.py"))
+        self.assertEqual(embedding["requested_backend"], "hash")
+        self.assertEqual(embedding["effective_backend"], "hash-fallback")
+        self.assertEqual(payload["result"]["default_policy"]["llm_synthesis"], "opt_in")
+
+    def test_runtime_check_reports_sentence_transformer_env_request(self) -> None:
+        env = dict(self.base_env)
+        env["PDF_TO_JSON_RAG_EMBEDDING_BACKEND"] = "sentence-transformers"
+        env["PDF_TO_JSON_RAG_SENTENCE_TRANSFORMERS_MODEL"] = "definitely-not-cached-local-model"
+        process = subprocess.run(
+            [sys.executable, "-m", "pdf_to_json_rag", "runtime-check", "--json"],
+            cwd=REPO_ROOT,
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(process.returncode, 0, process.stderr)
+        payload = json.loads(process.stdout)
+        embedding = payload["result"]["embedding"]
+        self.assertEqual(embedding["requested_backend"], "sentence-transformers")
+        self.assertEqual(embedding["effective_backend"], "hash-fallback")
+        self.assertIn("not cached locally", embedding["fallback_reason"])
+
+    def test_runtime_promotion_report_summarizes_saved_gate(self) -> None:
+        eval_dir = Path(self.base_env["PDF_TO_JSON_RAG_DATA_DIR"]) / "eval"
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        report_path = eval_dir / "runtime_mode_comparison.json"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "all_cases": True,
+                    "case_count": 2,
+                    "mode_results": [
+                        {
+                            "mode": "baseline",
+                            "pass_count": 2,
+                            "fail_count": 0,
+                            "summary": {"mrr": 0.9, "avg_recall_at_k": 0.8},
+                            "index_manifest": {"embedding_backend": "hash-fallback"},
+                        },
+                        {
+                            "mode": "sentence-transformers",
+                            "pass_count": 2,
+                            "fail_count": 0,
+                            "summary": {"mrr": 1.0, "avg_recall_at_k": 1.0},
+                            "index_manifest": {"embedding_backend": "sentence-transformers"},
+                        },
+                    ],
+                    "baseline_deltas": {"sentence-transformers": {"mrr_delta": 0.1}},
+                    "promotion_gates": {
+                        "sentence-transformers": {
+                            "promotable": True,
+                            "checks": [],
+                            "reasons": [],
+                        }
+                    },
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        process = self._run("runtime-promotion-report", "--json")
+        payload = json.loads(process.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertTrue(payload["result"]["available"])
+        self.assertTrue(payload["result"]["promotion_ready"])
+        self.assertEqual(payload["result"]["candidate"]["pass_count"], 2)
+        snapshot_path = Path(payload["result"]["promotion_snapshot_path"])
+        self.assertTrue(snapshot_path.exists())
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["candidate_mode"], "sentence-transformers")
+        self.assertFalse(snapshot["recommended_default_change"])
 
     def test_create_demo_pdf_json(self) -> None:
         self._run("init", "--json")
@@ -105,6 +206,59 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(result["pdf"], str(demo_path.resolve()))
         self.assertTrue(demo_path.exists())
         self.assertGreaterEqual(len(result["suggested_queries"]), 1)
+
+    def test_pdfplumber_table_probe_is_optional(self) -> None:
+        with mock.patch("importlib.util.find_spec", return_value=None):
+            probe = probe_pdfplumber_tables(self.pdf_path)
+        self.assertFalse(probe["available"])
+        self.assertEqual(probe["engine"], "pdfplumber")
+        self.assertEqual(probe["reason"], "not_installed")
+
+    def test_pdfplumber_tables_can_be_supplemental_blocks(self) -> None:
+        class FakeTable:
+            bbox = (10.0, 20.0, 190.0, 120.0)
+
+            def extract(self) -> list[list[str]]:
+                return [["Name", "Score"], ["Alpha", "10"]]
+
+        class FakePage:
+            width = 200.0
+            height = 400.0
+
+            def find_tables(self) -> list[FakeTable]:
+                return [FakeTable()]
+
+        class FakePdf:
+            pages = [FakePage()]
+
+            def __enter__(self) -> "FakePdf":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+        fake_pdfplumber = types.SimpleNamespace(open=lambda _path: FakePdf())
+        with (
+            mock.patch("importlib.util.find_spec", return_value=object()),
+            mock.patch.dict(sys.modules, {"pdfplumber": fake_pdfplumber}),
+        ):
+            blocks, probe = extract_pdfplumber_table_blocks(self.pdf_path, doc_id="demo")
+
+        self.assertTrue(probe["available"])
+        self.assertEqual(probe["table_count"], 1)
+        self.assertEqual(probe["supplemental_block_count"], 1)
+        self.assertEqual(len(blocks), 1)
+        self.assertEqual(blocks[0].block_kind, "table_like")
+        self.assertEqual(blocks[0].block_role, "table_like")
+        self.assertIn("pdfplumber_table", blocks[0].structural_flags)
+        self.assertIn("Name | Score", blocks[0].text)
+        self.assertEqual(blocks[0].bbox, [0.05, 0.05, 0.95, 0.3])
+
+    def test_corpus_sample_profile_resolution(self) -> None:
+        self.assertEqual(cli_module._resolve_corpus_sample_size("quick", None), 4)
+        self.assertEqual(cli_module._resolve_corpus_sample_size("balanced", None), 12)
+        self.assertEqual(cli_module._resolve_corpus_sample_size("stress", None), 24)
+        self.assertEqual(cli_module._resolve_corpus_sample_size("stress", 3), 3)
 
     def test_smoke_check_end_to_end_json(self) -> None:
         self._run("init", "--json")
@@ -124,6 +278,8 @@ class CliPublicSurfaceTests(unittest.TestCase):
         result = payload["result"]
         self.assertTrue(result["all_pass"])
         self.assertTrue(result["document"]["inventory_summary"])
+        self.assertEqual(result["index"]["embedding"]["requested_backend"], "hash")
+        self.assertEqual(result["index"]["embedding"]["effective_backend"], "hash-fallback")
         self.assertTrue(result["answer"]["answer"])
         written = json.loads(output_path.read_text(encoding="utf-8"))
         self.assertEqual(written["command"], "smoke-check")
@@ -162,6 +318,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIn("block_role_counts", inspect_payload["result"]["extraction_summary"])
         self.assertIn("text_source_counts", inspect_payload["result"]["extraction_summary"])
         self.assertIn("layout_signal_counts", inspect_payload["result"]["extraction_summary"])
+        self.assertIn("table_probe", inspect_payload["result"]["extraction_summary"])
         self.assertIn("section_role", inspect_payload["result"]["sections"][0])
         self.assertIn("layout_signals", inspect_payload["result"]["sections"][0])
         self.assertIn("text_source_profile", inspect_payload["result"]["sections"][0])
@@ -177,6 +334,8 @@ class CliPublicSurfaceTests(unittest.TestCase):
         smoke_payload = json.loads(smoke.stdout)
         self.assertTrue(smoke_payload["ok"])
         self.assertTrue(smoke_payload["result"]["all_pass"])
+        self.assertIn("embedding", smoke_payload["result"]["index"])
+        self.assertEqual(smoke_payload["result"]["index"]["embedding"]["requested_backend"], "hash")
         self.assertIsNotNone(smoke_payload["result"]["document"]["structure_confidence"])
         self.assertIsNotNone(smoke_payload["result"]["document"]["layout_confidence"])
         self.assertIsNotNone(smoke_payload["result"]["document"]["semantic_confidence"])
@@ -223,6 +382,20 @@ class CliPublicSurfaceTests(unittest.TestCase):
             answer_payload["result"]["answer_trace"]["retrieval_contract"]["doc_scope"],
             "all_docs",
         )
+        synthesis_prompt_contract = answer_payload["result"]["answer_trace"]["synthesis_prompt_contract"]
+        self.assertEqual(synthesis_prompt_contract["template_id"], "grounded_context_only.v1")
+        self.assertEqual(synthesis_prompt_contract["runtime"], "not_invoked")
+        self.assertFalse(synthesis_prompt_contract["outside_knowledge_allowed"])
+        self.assertTrue(synthesis_prompt_contract["requires_chunk_citations"])
+        self.assertEqual(
+            synthesis_prompt_contract["context_chunk_count"],
+            len(answer_payload["result"]["expanded_hits"]),
+        )
+        self.assertGreater(synthesis_prompt_contract["prompt_char_count"], 0)
+        synthesis_runtime = answer_payload["result"]["answer_trace"]["synthesis_runtime"]
+        self.assertFalse(synthesis_runtime["configured"])
+        self.assertFalse(synthesis_runtime["invoked"])
+        self.assertFalse(synthesis_runtime["used_for_final_answer"])
         self.assertIn(
             "shortlist_breakdown",
             answer_payload["result"]["answer_trace"]["document_selection"],
@@ -242,6 +415,38 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIsNotNone(answer_payload["result"]["top_k_hits"][0]["layout_confidence"])
         self.assertTrue(answer_payload["result"]["top_k_hits"][0]["chunk_strategy"])
         self.assertIn("layout_signals", answer_payload["result"]["top_k_hits"][0])
+
+    def test_opt_in_llm_synthesis_command_can_replace_final_answer(self) -> None:
+        fake_llm = self.workspace / "fake_llm.py"
+        fake_llm.write_text(
+            "import sys\n"
+            "sys.stdin.read()\n"
+            "print('LLM grounded answer [demo-chunk-1]')\n",
+            encoding="utf-8",
+        )
+        chunk = ChunkRecord(
+            doc_id="demo-doc",
+            chunk_id="demo-chunk-1",
+            source_pdf="demo.pdf",
+            text="Safety checks are required before field work.",
+            page_start=1,
+            page_end=1,
+            reading_order_index=0,
+            section_title="Safety Checks",
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"PDF_TO_JSON_RAG_LLM_COMMAND": f"{sys.executable} {fake_llm}"},
+        ):
+            result = answer_from_chunks("What safety checks are required?", [chunk])
+
+        self.assertEqual(result.answer, "LLM grounded answer [demo-chunk-1]")
+        synthesis_runtime = result.answer_trace["synthesis_runtime"]
+        self.assertTrue(synthesis_runtime["configured"])
+        self.assertTrue(synthesis_runtime["invoked"])
+        self.assertTrue(synthesis_runtime["used_for_final_answer"])
+        self.assertEqual(result.answer_trace["synthesis_prompt_contract"]["runtime"], "local_command")
 
     def test_plan_query_distinguishes_type_purpose_audience_confidence_rationale_and_limits(self) -> None:
         type_payload = json.loads(
@@ -312,12 +517,176 @@ class CliPublicSurfaceTests(unittest.TestCase):
             "Which sources discuss prevention or procedural guidance?",
             plan=plan_query("Which sources discuss prevention or procedural guidance?"),
         )
+        nonmedical_listing_plan = plan_query(
+            "Which sources in the benchmark discuss deep learning or data incident response?"
+        )
+        vitamin_null_plan = plan_query("Does vitamin C prevent the common cold in normal populations?")
+        vitamin_stress_plan = plan_query("Does vitamin C help people under cold stress?")
+        cmaj_prevention_plan = plan_query(
+            "What preventive interventions have the best evidence in the CMAJ common cold review?"
+        )
+        vitamin_null_contract = build_retrieval_contract(
+            vitamin_null_plan.query,
+            plan=vitamin_null_plan,
+        )
+        vitamin_stress_contract = build_retrieval_contract(
+            vitamin_stress_plan.query,
+            plan=vitamin_stress_plan,
+        )
+        cmaj_prevention_contract = build_retrieval_contract(
+            cmaj_prevention_plan.query,
+            plan=cmaj_prevention_plan,
+        )
 
         self.assertEqual(evidence_contract.retrieval_path, "single_document_qa")
         self.assertEqual(overview_contract.retrieval_path, "document_understanding")
         self.assertEqual(listing_contract.retrieval_path, "cross_document_discovery")
         self.assertEqual(listing_contract.doc_scope, "candidate_docs")
         self.assertEqual(listing_contract.diversify_per_doc_limit, 1)
+        self.assertEqual(nonmedical_listing_plan.answer_mode, "source_listing")
+        self.assertIn("lbdl", nonmedical_listing_plan.candidate_doc_ids)
+        self.assertIn(
+            "guidance-note-data-incident-management",
+            nonmedical_listing_plan.candidate_doc_ids,
+        )
+        self.assertEqual(vitamin_null_plan.query_intent, "treatment_null_effect")
+        self.assertEqual(vitamin_stress_plan.query_intent, "treatment_subgroup_benefit")
+        self.assertEqual(cmaj_prevention_plan.query_intent, "review_prevention")
+        self.assertEqual(vitamin_null_contract.doc_scope, "preferred_doc")
+        self.assertEqual(vitamin_stress_contract.doc_scope, "preferred_doc")
+        self.assertEqual(cmaj_prevention_contract.doc_scope, "preferred_doc")
+        self.assertEqual(
+            vitamin_null_contract.preferred_doc_id,
+            "vitamin-c-for-preventing-and-treating-the-common-cold",
+        )
+        self.assertEqual(
+            vitamin_stress_contract.preferred_doc_id,
+            "vitamin-c-for-preventing-and-treating-the-common-cold",
+        )
+        self.assertEqual(
+            cmaj_prevention_contract.preferred_doc_id,
+            "prevention-and-treatment-of-the-common-cold",
+        )
+
+    def test_cross_encoder_rerank_is_optional_and_records_backend_signal(self) -> None:
+        class FakeCrossEncoder:
+            def predict(self, pairs):
+                return [0.9 if "high value" in text else 0.1 for _, text in pairs]
+
+        chunks = [
+            ChunkRecord(
+                doc_id="doc",
+                chunk_id="low",
+                source_pdf="demo.pdf",
+                text="low value support text",
+                page_start=1,
+                page_end=1,
+                reading_order_index=1,
+            ),
+            ChunkRecord(
+                doc_id="doc",
+                chunk_id="high",
+                source_pdf="demo.pdf",
+                text="high value support text",
+                page_start=1,
+                page_end=1,
+                reading_order_index=2,
+            ),
+        ]
+
+        with mock.patch.dict(os.environ, {"PDF_TO_JSON_RAG_USE_CROSS_ENCODER": "1"}):
+            with mock.patch.object(
+                retrieval_module,
+                "_load_cross_encoder",
+                return_value=(FakeCrossEncoder(), None),
+            ):
+                reranked, fallback_reason = retrieval_module._cross_encoder_rerank_hits(chunks, "value")
+
+        self.assertIsNone(fallback_reason)
+        self.assertIsNotNone(reranked)
+        self.assertEqual(reranked[0].chunk_id, "high")
+        self.assertEqual(
+            reranked[0].retrieval_signals["rerank_backend_code"],
+            retrieval_module.RERANK_BACKEND_CROSS_ENCODER,
+        )
+        self.assertEqual(reranked[0].retrieval_signals["cross_encoder_signal"], 0.9)
+
+    def test_cross_encoder_unavailable_falls_back_to_lightweight_rerank(self) -> None:
+        chunks = [
+            ChunkRecord(
+                doc_id="doc",
+                chunk_id="a",
+                source_pdf="demo.pdf",
+                text="plain support text",
+                page_start=1,
+                page_end=1,
+                reading_order_index=1,
+            )
+        ]
+
+        with mock.patch.dict(os.environ, {"PDF_TO_JSON_RAG_USE_CROSS_ENCODER": "1"}):
+            with mock.patch.object(
+                retrieval_module,
+                "_load_cross_encoder",
+                return_value=(None, "not installed"),
+            ):
+                reranked = retrieval_module._select_reranked_hits(
+                    hits=chunks,
+                    query="support",
+                    use_lightweight_rerank=True,
+                )
+
+        self.assertEqual(len(reranked), 1)
+        self.assertEqual(
+            reranked[0].retrieval_signals["rerank_backend_code"],
+            retrieval_module.RERANK_BACKEND_LIGHTWEIGHT,
+        )
+        self.assertEqual(reranked[0].retrieval_signals["cross_encoder_fallback"], 1.0)
+
+    def test_expanded_context_is_reranked_after_neighbor_expansion(self) -> None:
+        class FakeCrossEncoder:
+            def predict(self, pairs):
+                return [0.95 if "neighbor answer" in text else 0.2 for _, text in pairs]
+
+        expanded = [
+            ChunkRecord(
+                doc_id="doc",
+                chunk_id="anchor",
+                source_pdf="demo.pdf",
+                text="anchor context",
+                page_start=1,
+                page_end=1,
+                reading_order_index=1,
+            ),
+            ChunkRecord(
+                doc_id="doc",
+                chunk_id="neighbor",
+                source_pdf="demo.pdf",
+                text="neighbor answer context",
+                page_start=1,
+                page_end=1,
+                reading_order_index=2,
+            ),
+        ]
+
+        with mock.patch.dict(os.environ, {"PDF_TO_JSON_RAG_USE_CROSS_ENCODER": "1"}):
+            with mock.patch.object(
+                retrieval_module,
+                "_load_cross_encoder",
+                return_value=(FakeCrossEncoder(), None),
+            ):
+                reranked = retrieval_module.rerank_expanded_context(
+                    expanded,
+                    "answer",
+                    use_lightweight_rerank=True,
+                )
+
+        self.assertEqual(reranked[0].chunk_id, "neighbor")
+        self.assertEqual(reranked[0].retrieval_signals["expanded_context_rank"], 1.0)
+        self.assertEqual(
+            reranked[0].retrieval_signals["rerank_backend_code"],
+            retrieval_module.RERANK_BACKEND_CROSS_ENCODER,
+        )
 
     def test_evaluation_layers_distinguish_processing_retrieval_and_faithfulness(self) -> None:
         processing = _processing_layer_record(
@@ -356,6 +725,375 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertTrue(processing["pass"])
         self.assertTrue(retrieval["pass"])
         self.assertTrue(answer_faithfulness["pass"])
+
+    def test_llm_judge_prompt_contract_is_context_only_and_not_invoked(self) -> None:
+        prompt = build_llm_judge_prompt(
+            question="What is supported?",
+            answer="The answer is supported.",
+            source_context=["The answer is supported."],
+        )
+        self.assertIn("Do not use outside knowledge", prompt)
+        self.assertIn("Return strict JSON only", prompt)
+        self.assertIn("unsupported_sentences", prompt)
+
+        record = _faithfulness_audit_record(
+            {
+                "case_id": "demo",
+                "case_type": "grounded",
+                "query": "What is supported?",
+                "answer": {
+                    "trace": {"answer_mode": "grounded_evidence"},
+                    "support_trace": [],
+                    "full_answer": "The answer is supported.",
+                    "evidence_snapshots": [
+                        {
+                            "sentence": "The answer is supported.",
+                        }
+                    ],
+                },
+            }
+        )
+        contract = record["llm_judge_prompt_contract"]
+        self.assertEqual(contract["template_id"], "faithfulness_context_judge.v1")
+        self.assertEqual(contract["runtime"], "not_invoked")
+        self.assertFalse(contract["outside_knowledge_allowed"])
+        self.assertTrue(contract["strict_json_required"])
+        self.assertGreater(contract["prompt_char_count"], 0)
+        runtime = record["llm_judge_runtime"]
+        self.assertFalse(runtime["configured"])
+        self.assertFalse(runtime["invoked"])
+
+    def test_opt_in_llm_judge_command_records_strict_json_result(self) -> None:
+        fake_judge = self.workspace / "fake_judge.py"
+        fake_judge.write_text(
+            "import sys\n"
+            "sys.stdin.read()\n"
+            "print('```json')\n"
+            "print('{\"faithful\": true, \"supported_sentence_ratio\": 1.0, "
+            "\"unsupported_sentences\": [], \"rationale\": \"Supported by supplied context.\"}')\n"
+            "print('```')\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"PDF_TO_JSON_RAG_JUDGE_COMMAND": f"{sys.executable} {fake_judge}"},
+        ):
+            record = _faithfulness_audit_record(
+                {
+                    "case_id": "demo",
+                    "case_type": "grounded",
+                    "query": "What is supported?",
+                    "answer": {
+                        "trace": {"answer_mode": "grounded_evidence"},
+                        "support_trace": [],
+                        "full_answer": "The answer is supported.",
+                        "evidence_snapshots": [
+                            {
+                                "sentence": "The answer is supported.",
+                            }
+                        ],
+                    },
+                }
+            )
+
+        contract = record["llm_judge_prompt_contract"]
+        runtime = record["llm_judge_runtime"]
+        self.assertEqual(contract["runtime"], "local_command")
+        self.assertTrue(runtime["configured"])
+        self.assertTrue(runtime["invoked"])
+        self.assertTrue(runtime["json_valid"])
+        self.assertTrue(runtime["strict_json_parser"]["ok"])
+        self.assertEqual(runtime["provider_id"], "local_command")
+        self.assertEqual(runtime["provider_kind"], "subprocess")
+        self.assertTrue(runtime["parsed_json"]["faithful"])
+
+    def test_strict_json_output_parser_accepts_single_json_fence_only(self) -> None:
+        raw = parse_strict_json_output('{"ok": true}')
+        fenced = parse_strict_json_output('```json\n{"ok": true}\n```')
+        noisy = parse_strict_json_output('answer:\n```json\n{"ok": true}\n```')
+        duplicate = parse_strict_json_output('```json\n{"a": 1}\n```\n```json\n{"b": 2}\n```')
+
+        self.assertTrue(raw.ok)
+        self.assertEqual(raw.output_format, "raw_json")
+        self.assertTrue(fenced.ok)
+        self.assertEqual(fenced.output_format, "fenced_json")
+        self.assertFalse(noisy.ok)
+        self.assertEqual(noisy.status, "text_outside_fence")
+        self.assertFalse(duplicate.ok)
+        self.assertEqual(duplicate.status, "multiple_fenced_blocks")
+
+    def test_prompt_provider_payload_reports_provider_contract(self) -> None:
+        provider = provider_for_env_command("PDF_TO_JSON_RAG_TEST_LLM_COMMAND")
+        with mock.patch.dict(os.environ, {}, clear=True):
+            result = provider.run("hello")
+
+        payload = prompt_command_payload(result)
+        self.assertFalse(payload["configured"])
+        self.assertFalse(payload["invoked"])
+        self.assertEqual(payload["provider_id"], "local_command")
+        self.assertEqual(payload["provider_kind"], "subprocess")
+
+    def test_answer_trace_includes_claim_alignment_status(self) -> None:
+        chunks = [
+            ChunkRecord(
+                doc_id="doc",
+                chunk_id="c1",
+                source_pdf="demo.pdf",
+                text="Common cold symptoms include cough, fever, and sore throat.",
+                page_start=1,
+                page_end=1,
+                reading_order_index=1,
+            )
+        ]
+
+        answer = answer_from_chunks("What are common cold symptoms?", chunks)
+        alignment = answer.answer_trace["claim_alignment"]
+        self.assertGreaterEqual(alignment["claim_count"], 1)
+        self.assertIn(alignment["alignment_status"], {"pass", "needs_review"})
+        self.assertIn("claims", alignment)
+
+    def test_source_anchored_grounded_answer_filters_to_preferred_document(self) -> None:
+        chunks = [
+            ChunkRecord(
+                doc_id="ajmedp-4-2-srd-eda-v1-e-2561",
+                chunk_id="ajmedp-4-2-srd-eda-v1-e-2561-chunk-0124",
+                source_pdf="ajmedp.pdf",
+                text=(
+                    "Severe. Mandatory buddy checks every 10 minutes. "
+                    "Wear ECWCS or equivalent and wind protection including head, hands, feet, face."
+                ),
+                page_start=124,
+                page_end=124,
+                reading_order_index=1,
+                section_title="Severe",
+            ),
+            ChunkRecord(
+                doc_id="actionable-gamification-full-book",
+                chunk_id="actionable-gamification-full-book-chunk-0010",
+                source_pdf="gamification.pdf",
+                text="Gamification systems use quests, points, and progress loops to influence behavior.",
+                page_start=10,
+                page_end=10,
+                reading_order_index=2,
+                section_title="Motivation",
+            ),
+            ChunkRecord(
+                doc_id="actionable-gamification-full-book",
+                chunk_id="actionable-gamification-full-book-chunk-0011",
+                source_pdf="gamification.pdf",
+                text="Player journeys can be optimized through badges and social feedback.",
+                page_start=11,
+                page_end=11,
+                reading_order_index=3,
+                section_title="Motivation",
+            ),
+            ChunkRecord(
+                doc_id="actionable-gamification-full-book",
+                chunk_id="actionable-gamification-full-book-chunk-0012",
+                source_pdf="gamification.pdf",
+                text="A system designer can use scarcity, ownership, and status loops.",
+                page_start=12,
+                page_end=12,
+                reading_order_index=4,
+                section_title="Motivation",
+            ),
+        ]
+
+        answer = answer_from_chunks(
+            "According to AJMedP Table 3-4, what is recommended for the severe frostbite risk zone?",
+            chunks,
+        )
+
+        self.assertIn("Mandatory buddy checks every 10 minutes", answer.answer)
+        self.assertIn("ECWCS", answer.answer)
+        self.assertEqual(
+            answer.answer_trace["document_synthesis"]["support_scope"],
+            "source_anchor_preferred_doc",
+        )
+
+    def test_faithfulness_contract_validation_gate_passes_on_valid_records(self) -> None:
+        record = _faithfulness_audit_record(
+            {
+                "case_id": "demo",
+                "case_type": "grounded",
+                "query": "What is supported?",
+                "answer": {
+                    "trace": {"answer_mode": "grounded_evidence"},
+                    "support_trace": [],
+                    "full_answer": "The answer is supported.",
+                    "evidence_snapshots": [
+                        {
+                            "sentence": "The answer is supported.",
+                        }
+                    ],
+                },
+            }
+        )
+
+        validation = _faithfulness_contract_validation([record])
+        self.assertTrue(validation["all_pass"])
+        self.assertGreaterEqual(validation["check_count"], 5)
+        self.assertEqual(validation["failed_checks"], [])
+
+    def test_optional_low_confidence_semantics_multipass_is_env_gated(self) -> None:
+        base = interpret_document_semantics(
+            source_pdf="mystery.pdf",
+            title="Mystery",
+            toc=[],
+            summary_cues=[],
+            discovery_terms=["financial statement", "total assets", "total liabilities"],
+            leading_block_lines=[],
+            metadata_values=[],
+            page_count=1,
+        )
+        with mock.patch.dict(os.environ, {"PDF_TO_JSON_RAG_SEMANTIC_MULTIPASS": "1"}):
+            reviewed = interpret_document_semantics(
+                source_pdf="mystery.pdf",
+                title="Mystery",
+                toc=[],
+                summary_cues=[],
+                discovery_terms=["financial statement", "total assets", "total liabilities"],
+                leading_block_lines=[],
+                metadata_values=[],
+                page_count=1,
+            )
+
+        self.assertNotIn("optional_low_confidence_multipass_accepted", base.semantic_rationale)
+        self.assertIn("optional_low_confidence_multipass_accepted", reviewed.semantic_rationale)
+        self.assertGreaterEqual(reviewed.semantic_confidence, base.semantic_confidence)
+
+    def test_runtime_mode_comparison_reports_opt_in_llm_usage(self) -> None:
+        chunk_root = self.workspace / "chunks"
+        doc_chunk_dir = chunk_root / "doc"
+        doc_chunk_dir.mkdir(parents=True)
+        chunk = ChunkRecord(
+            doc_id="doc",
+            chunk_id="c1",
+            source_pdf="demo.pdf",
+            text="Common cold symptoms include cough and fever.",
+            page_start=1,
+            page_end=1,
+            reading_order_index=1,
+        )
+        (doc_chunk_dir / "c1.json").write_text(
+            json.dumps(chunk.model_dump(mode="json"), ensure_ascii=False),
+            encoding="utf-8",
+        )
+        index_dir = self.workspace / "index"
+        build_local_index([chunk], index_dir=index_dir)
+        eval_dir = self.workspace / "eval"
+        eval_dir.mkdir()
+        eval_path = eval_dir / "cases.json"
+        eval_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "case_id": "demo_case",
+                        "query": "What are common cold symptoms?",
+                        "relevant_chunk_ids": ["c1"],
+                        "expected_keywords": ["cough", "fever"],
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        fake_llm = self.workspace / "fake_llm.py"
+        fake_llm.write_text(
+            "import sys\n"
+            "sys.stdin.read()\n"
+            "print('Common cold symptoms include cough and fever [c1].')\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(
+            os.environ,
+            {"PDF_TO_JSON_RAG_LLM_COMMAND": f"{sys.executable} {fake_llm}"},
+        ):
+            report, report_path = run_runtime_mode_comparison(
+                index_dir=index_dir,
+                chunk_root=chunk_root,
+                eval_dir=eval_dir,
+                eval_path=eval_path,
+                case_ids=["demo_case"],
+                modes=["baseline", "llm-synthesis"],
+            )
+
+        self.assertTrue(report_path.exists())
+        mode_results = {item["mode"]: item for item in report["mode_results"]}
+        self.assertEqual(mode_results["baseline"]["runtime_signals"]["llm_used_case_count"], 0)
+        self.assertEqual(mode_results["llm-synthesis"]["runtime_signals"]["llm_used_case_count"], 1)
+        self.assertTrue(report["all_pass"])
+
+    def test_runtime_mode_comparison_all_cases_and_promotion_gate(self) -> None:
+        chunk_root = self.workspace / "chunks-all-cases"
+        doc_chunk_dir = chunk_root / "doc"
+        doc_chunk_dir.mkdir(parents=True)
+        chunks = [
+            ChunkRecord(
+                doc_id="doc",
+                chunk_id="c1",
+                source_pdf="demo.pdf",
+                text="Common cold symptoms include cough and fever.",
+                page_start=1,
+                page_end=1,
+                reading_order_index=1,
+            ),
+            ChunkRecord(
+                doc_id="doc",
+                chunk_id="c2",
+                source_pdf="demo.pdf",
+                text="Rest and hydration are common supportive care steps.",
+                page_start=1,
+                page_end=1,
+                reading_order_index=2,
+            ),
+        ]
+        for chunk in chunks:
+            (doc_chunk_dir / f"{chunk.chunk_id}.json").write_text(
+                json.dumps(chunk.model_dump(mode="json"), ensure_ascii=False),
+                encoding="utf-8",
+            )
+        index_dir = self.workspace / "index-all-cases"
+        build_local_index(chunks, index_dir=index_dir)
+        eval_dir = self.workspace / "eval-all-cases"
+        eval_dir.mkdir()
+        eval_path = eval_dir / "cases.json"
+        eval_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "case_id": "symptoms_case",
+                        "query": "What symptoms are mentioned?",
+                        "relevant_chunk_ids": ["c1"],
+                        "expected_keywords": ["cough", "fever"],
+                    },
+                    {
+                        "case_id": "care_case",
+                        "query": "What supportive care is mentioned?",
+                        "relevant_chunk_ids": ["c2"],
+                        "expected_keywords": ["hydration"],
+                    },
+                ],
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        report, _ = run_runtime_mode_comparison(
+            index_dir=index_dir,
+            chunk_root=chunk_root,
+            eval_dir=eval_dir,
+            eval_path=eval_path,
+            modes=["baseline", "sentence-transformers"],
+            all_cases=True,
+        )
+
+        self.assertTrue(report["all_cases"])
+        self.assertEqual(report["case_count"], 2)
+        self.assertEqual(report["selected_case_ids"], ["symptoms_case", "care_case"])
+        self.assertIn("sentence-transformers", report["promotion_gates"])
 
     def test_layer_stability_passes_for_green_layer_summary(self) -> None:
         stability = _evaluate_layer_stability(
@@ -479,6 +1217,37 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(heading["block_role"], "heading")
         self.assertIn("heading", heading["block_labels"])
 
+    def test_relative_font_signal_promotes_heading_role(self) -> None:
+        block = _build_extracted_block(
+            block_id="font-heading",
+            page_num=0,
+            text="Executive Summary",
+            bbox=[0.1, 0.1, 0.8, 0.14],
+            reading_order_index=0,
+            extraction_method="native",
+            font_size=18.0,
+            relative_font_size=1.5,
+            font_is_bold=False,
+            toc_entries=set(),
+        )
+        self.assertEqual(block.block_role, "heading")
+        self.assertIn("relative_font_heading", block.structural_flags)
+        self.assertEqual(block.font_size, 18.0)
+        self.assertEqual(block.relative_font_size, 1.5)
+
+    def test_toc_signal_promotes_heading_role(self) -> None:
+        block = _build_extracted_block(
+            block_id="toc-heading",
+            page_num=0,
+            text="Risk Assessment",
+            bbox=[0.1, 0.2, 0.8, 0.24],
+            reading_order_index=1,
+            extraction_method="native",
+            toc_entries={"risk assessment"},
+        )
+        self.assertEqual(block.block_role, "heading")
+        self.assertIn("toc_heading", block.structural_flags)
+
     def test_infer_layout_signals_detects_multi_column_and_form_density(self) -> None:
         signals = infer_layout_signals(
             block_roles=["form_field", "form_field", "paragraph", "paragraph"],
@@ -494,6 +1263,58 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIn("form_dense", signals)
         self.assertIn("multi_column_like", signals)
         self.assertIn("multi_page_span", signals)
+
+    def test_multi_column_native_blocks_sort_by_column_before_row(self) -> None:
+        blocks = [
+            (70.0, 100.0, 250.0, 130.0, "left column first"),
+            (340.0, 100.0, 520.0, 130.0, "right column first"),
+            (72.0, 150.0, 248.0, 180.0, "left column second"),
+            (342.0, 150.0, 522.0, 180.0, "right column second"),
+        ]
+        ordered = _sort_page_blocks_reading_order(blocks, page_width=600.0)
+        self.assertEqual(
+            [item[4] for item in ordered],
+            [
+                "left column first",
+                "left column second",
+                "right column first",
+                "right column second",
+            ],
+        )
+
+    def test_normalize_reading_order_uses_bbox_for_multi_column_blocks(self) -> None:
+        blocks = [
+            ExtractedBlock(
+                block_id="left-1",
+                page_num=0,
+                text="left column first",
+                bbox=[0.10, 0.10, 0.40, 0.14],
+                reading_order_index=0,
+            ),
+            ExtractedBlock(
+                block_id="right-1",
+                page_num=0,
+                text="right column first",
+                bbox=[0.58, 0.10, 0.88, 0.14],
+                reading_order_index=1,
+            ),
+            ExtractedBlock(
+                block_id="left-2",
+                page_num=0,
+                text="left column second",
+                bbox=[0.11, 0.18, 0.39, 0.22],
+                reading_order_index=2,
+            ),
+            ExtractedBlock(
+                block_id="right-2",
+                page_num=0,
+                text="right column second",
+                bbox=[0.59, 0.18, 0.89, 0.22],
+                reading_order_index=3,
+            ),
+        ]
+        ordered = normalize_reading_order(blocks)
+        self.assertEqual([block.block_id for block in ordered], ["left-1", "left-2", "right-1", "right-2"])
 
     def test_chunk_records_keep_block_provenance_and_section_role(self) -> None:
         document = DocumentRecord(
@@ -717,8 +1538,11 @@ class CliPublicSurfaceTests(unittest.TestCase):
         result = payload["result"]
         self.assertTrue(result["all_pass"])
         self.assertEqual(result["corpus_pdf_count"], 3)
+        self.assertEqual(result["sample_profile"], "custom")
+        self.assertEqual(result["requested_sample_size"], 3)
         self.assertEqual(result["sample_size"], 3)
         self.assertEqual(len(result["results"]), 3)
+        self.assertTrue(Path(result["snapshot_path"]).exists())
         self.assertIn("classification_status_counts", result["summary"])
         self.assertIn("trust_policy_counts", result["summary"])
         self.assertIn("bucket_counts", result["summary"])
@@ -728,11 +1552,22 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIn("layer_summary", result)
         self.assertIn("layer_stability", result)
         self.assertIn("architecture_gates", result)
+        self.assertIn("bucket_diagnostics", result)
+        self.assertIn("follow_up_actions", result)
+        self.assertIn("contract_gate", result)
+        self.assertTrue(result["contract_gate"]["all_pass"])
         self.assertIn("processing", result["layer_summary"])
         self.assertIn("semantics", result["layer_summary"])
         self.assertIn("trust", result["layer_summary"])
+        self.assertIn("technical_pass_rate", result["layer_summary"]["processing"])
+        self.assertIn("semantic_pass_rate", result["layer_summary"]["semantics"])
         self.assertIn("semantic_gate_pass", result["architecture_gates"])
+        self.assertIn("bucket_gate_pass", result["architecture_gates"])
+        self.assertIn("bucket_follow_up_count", result["architecture_gates"])
         self.assertGreaterEqual(result["summary"]["bucket_counts"].get("form_like", 0), 1)
+        self.assertGreaterEqual(result["bucket_diagnostics"]["form_like"]["sample_count"], 1)
+        self.assertIn("dominant_failure_reasons", result["bucket_diagnostics"]["form_like"])
+        self.assertIn("failure_examples", result["bucket_diagnostics"]["form_like"])
         self.assertGreater(result["summary"]["specific_document_rate"], 0.0)
         self.assertGreater(result["summary"]["specific_purpose_rate"], 0.0)
         self.assertTrue(all(item["overview_answer"] for item in result["results"]))

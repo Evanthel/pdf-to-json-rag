@@ -22,6 +22,11 @@ dependencies = [
   "numpy",
 ]
 
+[project.optional-dependencies]
+tables = [
+  "pdfplumber",
+]
+
 [project.scripts]
 pdf-to-json-rag = "pdf_to_json_rag.cli:main"
 
