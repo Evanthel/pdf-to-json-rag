@@ -24,7 +24,11 @@ Current public version: `0.1.0-beta`
 
 Internal development iterations in this repo use `v1.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
 
-Current internal milestone: `v1.38.0`
+Current package metadata version: `0.1.0`
+
+Current internal milestone: `v1.43.0`
+
+The public release label is `0.1.0-beta`; package metadata remains PEP440-compatible `0.1.0` until the first non-beta public cut.
 
 The current baseline includes:
 
@@ -62,9 +66,10 @@ The current baseline includes:
 - runtime-mode comparison for baseline, sentence-transformers, cross-encoder, and opt-in LLM synthesis
 - full-suite runtime comparison with a green promotion gate for optional sentence-transformer embeddings
 - explicit `runtime-check` and `runtime-promotion-report` commands for backend selection and promotion readiness
+- explicit runtime decision output with `hash` default, recommended opt-in backend, and not-default rationale
 - explicit embedding backend policy via `PDF_TO_JSON_RAG_EMBEDDING_BACKEND=hash|sentence-transformers|auto`
 - promotion snapshots saved after green full-suite runtime comparisons
-- installed-entrypoint verification for `runtime-check`, `doctor`, and public smoke workflow
+- installed-entrypoint verification for the public README flow through `readme-smoke-check`
 - reranking of the neighbor-expanded context before answer synthesis, with `initial_retrieval_rank` and `expanded_context_rank` signals
 - an explicit grounded-only synthesis prompt contract with opt-in local-command LLM execution
 - strict local JSON/fence parsing for opt-in LLM outputs and judge diagnostics
@@ -78,8 +83,9 @@ The current baseline includes:
 - layer-stability and architecture-gate summaries on top of the layer-aware evaluation report
 - corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
 - bucket-level corpus diagnostics and follow-up actions for unknown-document sanity checks
-- corpus sample profiles, saved corpus snapshots, and a contract gate for bucket diagnostics
+- corpus sample profiles, deterministic sample manifests, saved corpus snapshots, and a contract gate for bucket diagnostics
 - compact default JSON output with richer debug state behind `--verbose`
+- compact `release-check --json` summaries, with full release payloads behind `--verbose`
 - deterministic local embeddings by default, with optional `sentence-transformers` or `auto` backend selection
 
 Validation state:
@@ -206,7 +212,25 @@ Maintainer release validation:
 ```bash
 pdf-to-json-rag package-check --json
 pdf-to-json-rag release-check --json
+pdf-to-json-rag release-check --json --verbose
+pdf-to-json-rag readme-smoke-check --json
 ```
+
+`release-check --json` returns a compact pass/fail/skip summary. Add `--verbose` when you need the full maintainer payload with doctor details, package tails, shard results, and corpus diagnostics.
+
+Release candidate sanity before tagging:
+
+```bash
+python -m pip install .
+export PDF_TO_JSON_RAG_DATA_DIR="$(mktemp -d)"
+pdf-to-json-rag init --json
+pdf-to-json-rag doctor --json
+pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
+pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
+pdf-to-json-rag runtime-check --json
+```
+
+Maintainers can run the same installed README flow in one command with `pdf-to-json-rag readme-smoke-check --json`. It validates the public installed path only; use `release-check` for benchmark regressions.
 
 Local sanity check for unfamiliar PDFs:
 
@@ -219,10 +243,12 @@ That local sanity path now returns compact overview, type, purpose, audience, co
 Local corpus sanity check over the repo-local `pdf/` directory:
 
 ```bash
-pdf-to-json-rag corpus-sanity-check --sample-profile balanced --json
+pdf-to-json-rag corpus-sanity-check --profile quick --json
 ```
 
 That local-only corpus path now reports both `technical_all_pass` and `semantic_all_pass`, plus rates for specific document typing, specific purpose inference, low-confidence classifications, trust-limited results, and a compact corpus architecture gate over `processing`, `semantics`, and `trust`.
+
+It also returns a deterministic `sample_manifest` with the bucket round-robin algorithm, selected bucket counts, selected digests, and a checksum for the sampled set.
 
 When you want to inspect the new processing layer on one extracted document, `inspect-document --json` now includes `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, `extraction_summary.layout_signal_counts`, and per-section `section_role` / `source_block_roles`.
 
@@ -275,11 +301,13 @@ The saved evaluation report includes:
 - strict JSON parser and prompt/eval contract diagnostics for opt-in LLM judge output
 - a runtime-mode comparison report for baseline vs optional sentence-transformer, cross-encoder, and LLM synthesis paths
 - a promotion gate that verifies optional sentence-transformer promotion against full-suite pass count, recall, MRR, and warning count
+- a runtime decision block that keeps `hash` as default while recommending sentence-transformers only as an opt-in backend
 - processing-layer shards for block typing, section-role recovery, chunk provenance, and strategy-aware chunking
 - a retrieval-contract shard that keeps single-doc, doc-understanding, and cross-doc paths separated in regression coverage
 - a retrieval-synthesis shard that keeps document selection, support scope, and answer-chunk handoff aligned
 - extra sanity shards for layout, single-document, table-like, and form-heavy behavior, plus a sampled faithfulness audit
 - a local corpus sanity pass that distinguishes technical success, semantic success, bucket-specific follow-up, and saved snapshot/contract state on repo-local unknown PDFs
+- compact release summaries that expose public, maintainer, shard, runtime, and corpus gates without requiring the full JSON payload
 
 Current gate status:
 

@@ -8,8 +8,9 @@ Internal development iterations in this file use `v1.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v1.38.0`
+Current implementation level: `v1.43.0`
 Current public version: `0.1.0-beta`
+Current package metadata version: `0.1.0`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
 
@@ -47,16 +48,20 @@ Repo-local regression shards currently passing in saved runs or current mileston
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v1.38.0`:
+Broad benchmark note after `v1.43.0`:
 
 - the targeted maintainer shard set run in this milestone is green
 - the opt-in local-command LLM synthesis and LLM-as-judge paths are covered in unit tests while remaining disabled by default
 - strict JSON/fence parsing, provider metadata, answer-claim alignment, prompt/eval contract validation, and opt-in semantic multipass behavior have targeted unit coverage
 - `compare-runtime-modes` now compares baseline, sentence-transformers, cross-encoder, and opt-in LLM synthesis paths on the same cases while reporting fallback/runtime availability
 - `runtime-check` reports the requested/effective embedding backend, optional model availability, and opt-in runtime state without building an index
+- `runtime-check` now also reports the runtime decision: `hash` default, recommended opt-in backend, promotion-snapshot source, and not-default rationale
 - `runtime-promotion-report` summarizes the latest saved runtime comparison and promotion gate without rerunning the benchmark, and writes a compact promotion snapshot after green full-suite comparisons
 - full-suite `compare-runtime-modes --all-cases --modes baseline,sentence-transformers` with local `all-MiniLM-L6-v2` is green for both modes; sentence-transformers improves recall/MRR and passes the promotion gate while remaining opt-in
 - installed-entrypoint verification passes after `python -m pip install .`; `runtime-check`, `doctor`, `create-demo-pdf`, and `smoke-check` work through `pdf-to-json-rag`
+- `readme-smoke-check` now replays the installed public README flow in one maintainer command without running benchmark regressions
+- `corpus-sanity-check` now returns a deterministic sample manifest with bucket counts, selected digests, and a sample checksum
+- `release-check --json` now returns a compact public/maintainer/shard/corpus gate summary by default; use `--verbose` for the full legacy payload
 - current broad benchmark scope:
   - `Cases`: `77`
   - `Indexed sample documents`: `25`
@@ -517,6 +522,15 @@ Representative validation that has already been completed:
 - Clarified `.gitignore` policy: generated eval reports stay ignored, while `runtime_promotion_snapshot.json` remains a tracked promotion checkpoint.
 - Verified the installed console script after `python -m pip install .`; `runtime-check` reports the installed `site-packages` module path and the public demo smoke path passes.
 - Performed a docs final pass to keep one canonical backend policy: hash default, local `all-MiniLM-L6-v2` recommended opt-in, cross-encoder and LLM hooks experimental.
+
+### v1.39.0-v1.43.0
+
+- Clarified the release-state policy: public docs use `0.1.0-beta`, while package metadata remains PEP440-compatible `0.1.0`.
+- Added `readme-smoke-check` as a repeatable installed-entrypoint public smoke gate covering install, init, doctor, demo PDF generation, smoke-check, and runtime-check.
+- Extended `package-check` so the packaged wheel validation reuses the same installed README flow and includes runtime-check status.
+- Added deterministic corpus sample manifests to `corpus-sanity-check` so quick/balanced/stress local-corpus runs expose bucket counts, selected digests, and a checksum.
+- Added `runtime_decision` output to `runtime-check`, including `default_backend`, `recommended_opt_in_backend`, and the reason sentence-transformers is not the default.
+- Made `release-check --json` compact by default with explicit pass/fail/skip records for public, maintainer, shard, runtime, and corpus gates; the full payload remains available with `--verbose`.
 - Re-ran final package and source release gates after installed-entrypoint verification.
 
 ### v0.1.1-v0.1.2

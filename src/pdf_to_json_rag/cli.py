@@ -4,6 +4,7 @@ import argparse
 import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import importlib.util
 from importlib import metadata as importlib_metadata
 from importlib import resources as importlib_resources
@@ -74,6 +75,7 @@ COMMAND_ALIASES = {
     "compare-modes": "compare-runtime-modes",
     "runtime": "runtime-check",
     "promotion-report": "runtime-promotion-report",
+    "readme-smoke": "readme-smoke-check",
 }
 
 COMMAND_HELP: dict[str, dict[str, object]] = {
@@ -149,6 +151,10 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
         "summary": "Summarize the latest runtime-mode comparison and promotion gate decision.",
         "example": "pdf-to-json-rag runtime-promotion-report --json",
     },
+    "readme-smoke-check": {
+        "summary": "Maintainer check: install the package into a temporary environment and replay the public README smoke workflow.",
+        "example": "pdf-to-json-rag readme-smoke-check --json",
+    },
     "demo-profile": {
         "summary": "Show a public-safe demo profile with stable example commands and queries.",
         "example": "pdf-to-json-rag demo-profile --json",
@@ -171,7 +177,7 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
     },
     "corpus-sanity-check": {
         "summary": "Maintainer check: sample the local pdf/ corpus and run compact semantic sanity workflows on unfamiliar PDFs.",
-        "example": "pdf-to-json-rag corpus-sanity-check --sample-profile balanced --json",
+        "example": "pdf-to-json-rag corpus-sanity-check --profile quick --json",
     },
     "help": {
         "summary": "Show command summaries or detailed help for one command.",
@@ -203,6 +209,7 @@ CORPUS_SAMPLE_PROFILES = {
     "balanced": 12,
     "stress": 24,
 }
+CORPUS_BUCKET_ORDER = ("scan_like", "form_like", "short_doc", "medium_doc", "long_doc")
 
 
 @dataclass(frozen=True)
@@ -631,8 +638,7 @@ def _sample_local_pdf_corpus(entries: list[LocalPdfCorpusEntry], sample_size: in
             "Sample size must be a positive integer",
             {"sample_size": sample_size},
         )
-    buckets = ("scan_like", "form_like", "short_doc", "medium_doc", "long_doc")
-    grouped: dict[str, list[LocalPdfCorpusEntry]] = {bucket: [] for bucket in buckets}
+    grouped: dict[str, list[LocalPdfCorpusEntry]] = {bucket: [] for bucket in CORPUS_BUCKET_ORDER}
     for entry in entries:
         grouped.setdefault(entry.bucket, []).append(entry)
     for bucket_entries in grouped.values():
@@ -641,7 +647,7 @@ def _sample_local_pdf_corpus(entries: list[LocalPdfCorpusEntry], sample_size: in
     sampled: list[LocalPdfCorpusEntry] = []
     while len(sampled) < sample_size:
         progressed = False
-        for bucket in buckets:
+        for bucket in CORPUS_BUCKET_ORDER:
             bucket_entries = grouped.get(bucket, [])
             if not bucket_entries:
                 continue
@@ -652,6 +658,29 @@ def _sample_local_pdf_corpus(entries: list[LocalPdfCorpusEntry], sample_size: in
         if not progressed:
             break
     return sampled
+
+
+def _corpus_sampling_manifest(
+    entries: list[LocalPdfCorpusEntry],
+    sampled_entries: list[LocalPdfCorpusEntry],
+    *,
+    sample_profile: str,
+    requested_sample_size: int,
+) -> dict[str, object]:
+    selected_digests = [entry.digest for entry in sampled_entries]
+    checksum_input = "\n".join(selected_digests).encode("utf-8")
+    return {
+        "sampling_algorithm": "bucket_round_robin_v1",
+        "bucket_order": list(CORPUS_BUCKET_ORDER),
+        "sample_profile": sample_profile,
+        "requested_sample_size": requested_sample_size,
+        "available_pdf_count": len(entries),
+        "available_bucket_counts": _count_values([entry.bucket for entry in entries]),
+        "selected_pdf_count": len(sampled_entries),
+        "selected_bucket_counts": _count_values([entry.bucket for entry in sampled_entries]),
+        "selected_digest_checksum": hashlib.sha256(checksum_input).hexdigest(),
+        "selected_digests": selected_digests,
+    }
 
 
 def _resolve_corpus_sample_size(sample_profile: str, sample_size: int | None) -> int:
@@ -717,6 +746,106 @@ def _run_cli_subprocess(args: list[str], data_dir: Path | None = None) -> subpro
         capture_output=True,
         text=True,
     )
+
+
+def _process_output_tail(process: subprocess.CompletedProcess[str] | None) -> str:
+    if process is None:
+        return ""
+    return "\n".join(
+        part.strip()
+        for part in (process.stdout, process.stderr)
+        if part and part.strip()
+    )[-1200:]
+
+
+def _json_payload_from_process(process: subprocess.CompletedProcess[str] | None) -> dict[str, object]:
+    if process is None or not process.stdout.strip():
+        return {}
+    try:
+        payload = json.loads(process.stdout)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _run_installed_readme_flow(script_path: Path, workspace: Path, data_dir: Path) -> dict[str, object]:
+    package_env = os.environ.copy()
+    package_env["PDF_TO_JSON_RAG_DATA_DIR"] = str(data_dir)
+    demo_pdf = workspace / "readme-demo.pdf"
+
+    steps: list[dict[str, object]] = []
+
+    def run_step(name: str, args: list[str]) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
+        process = subprocess.run(
+            [str(script_path), *args],
+            cwd=workspace,
+            env=package_env,
+            capture_output=True,
+            text=True,
+        )
+        payload = _json_payload_from_process(process)
+        steps.append(
+            {
+                "name": name,
+                "command": "pdf-to-json-rag " + " ".join(args),
+                "returncode": process.returncode,
+                "ok": bool(payload.get("ok")),
+                "output_tail": _process_output_tail(process) if process.returncode != 0 or not payload.get("ok") else "",
+            }
+        )
+        return process, payload
+
+    init_process, init_payload = run_step("init", ["init", "--json"])
+    doctor_process, doctor_payload = run_step("doctor", ["doctor", "--json"])
+    create_process, create_payload = run_step(
+        "create-demo-pdf",
+        ["create-demo-pdf", "--path", str(demo_pdf), "--json"],
+    )
+    smoke_process, smoke_payload = run_step(
+        "smoke-check",
+        [
+            "smoke-check",
+            "--pdf",
+            str(demo_pdf),
+            "--query",
+            "What does this file cover?",
+            "--json",
+        ],
+    )
+    runtime_process, runtime_payload = run_step("runtime-check", ["runtime-check", "--json"])
+
+    return {
+        "workspace": str(workspace),
+        "data_dir": str(data_dir),
+        "demo_pdf": str(demo_pdf),
+        "script_path": str(script_path),
+        "path_type": "installed_console_script",
+        "public_path": True,
+        "maintainer_benchmark_path": False,
+        "steps": steps,
+        "init_returncode": init_process.returncode,
+        "doctor_returncode": doctor_process.returncode,
+        "create_demo_returncode": create_process.returncode,
+        "smoke_returncode": smoke_process.returncode,
+        "runtime_returncode": runtime_process.returncode,
+        "init_ok": bool(init_payload.get("ok")),
+        "doctor_ok": bool(doctor_payload.get("ok")),
+        "doctor_ready_for_public_cli": bool(doctor_payload.get("result", {}).get("ready_for_public_cli")),
+        "create_demo_ok": bool(create_payload.get("ok")),
+        "smoke_ok": bool(smoke_payload.get("ok")),
+        "smoke_all_pass": bool(smoke_payload.get("result", {}).get("all_pass")),
+        "runtime_ok": bool(runtime_payload.get("ok")),
+        "runtime_decision": runtime_payload.get("result", {}).get("runtime_decision", {}),
+        "all_pass": (
+            bool(init_payload.get("ok"))
+            and bool(doctor_payload.get("ok"))
+            and bool(doctor_payload.get("result", {}).get("ready_for_public_cli"))
+            and bool(create_payload.get("ok"))
+            and bool(smoke_payload.get("ok"))
+            and bool(smoke_payload.get("result", {}).get("all_pass"))
+            and bool(runtime_payload.get("ok"))
+        ),
+    }
 
 
 def _run_public_surface_release_smoke() -> dict[str, object]:
@@ -1188,6 +1317,12 @@ def _run_corpus_sanity_check(
 ) -> dict[str, object]:
     corpus_entries = _load_local_pdf_corpus(corpus_dir)
     sampled_entries = _sample_local_pdf_corpus(corpus_entries, sample_size)
+    sample_manifest = _corpus_sampling_manifest(
+        corpus_entries,
+        sampled_entries,
+        sample_profile=sample_profile,
+        requested_sample_size=sample_size,
+    )
     with tempfile.TemporaryDirectory() as alias_dir_name:
         alias_dir = Path(alias_dir_name)
         alias_paths: list[Path] = []
@@ -1371,6 +1506,7 @@ def _run_corpus_sanity_check(
         "sample_profile": sample_profile,
         "requested_sample_size": sample_size,
         "sample_size": len(sampled_entries),
+        "sample_manifest": sample_manifest,
         "results": sampled_results,
         "summary": summary,
         "bucket_diagnostics": bucket_diagnostics,
@@ -1446,6 +1582,15 @@ def _run_package_check() -> dict[str, object]:
             "doctor_ok": False,
             "smoke_ok": False,
             "smoke_all_pass": False,
+            "runtime_returncode": None,
+            "runtime_ok": False,
+            "readme_flow": {
+                "all_pass": False,
+                "public_path": True,
+                "maintainer_benchmark_path": False,
+                "steps": [],
+                "reason": "project_root_not_available",
+            },
             "skipped": True,
             "reason": "project_root_not_available",
             "build_output_tail": "",
@@ -1456,7 +1601,6 @@ def _run_package_check() -> dict[str, object]:
         wheel_dir = workspace / "wheelhouse"
         venv_dir = workspace / "venv"
         data_dir = workspace / "data"
-        demo_pdf = workspace / "package-demo.pdf"
         wheel_dir.mkdir(parents=True, exist_ok=True)
 
         build_process = subprocess.run(
@@ -1482,10 +1626,12 @@ def _run_package_check() -> dict[str, object]:
         install_process = None
         venv_python = venv_dir / "bin" / "python"
         script_path = venv_dir / "bin" / "pdf-to-json-rag"
-        doctor_process = None
-        smoke_process = None
-        doctor_payload: dict[str, object] = {}
-        smoke_payload: dict[str, object] = {}
+        readme_flow: dict[str, object] = {
+            "all_pass": False,
+            "public_path": True,
+            "maintainer_benchmark_path": False,
+            "steps": [],
+        }
 
         if build_process.returncode == 0 and wheel_path is not None:
             venv_process = subprocess.run(
@@ -1517,50 +1663,7 @@ def _run_package_check() -> dict[str, object]:
                 )
 
             if install_process is not None and install_process.returncode == 0 and script_path.exists():
-                package_env = os.environ.copy()
-                package_env["PDF_TO_JSON_RAG_DATA_DIR"] = str(data_dir)
-                create_demo_process = subprocess.run(
-                    [str(script_path), "create-demo-pdf", "--path", str(demo_pdf), "--json"],
-                    cwd=workspace,
-                    env=package_env,
-                    capture_output=True,
-                    text=True,
-                )
-                if create_demo_process.returncode == 0:
-                    doctor_process = subprocess.run(
-                        [str(script_path), "doctor", "--json"],
-                        cwd=workspace,
-                        env=package_env,
-                        capture_output=True,
-                        text=True,
-                    )
-                    smoke_process = subprocess.run(
-                        [
-                            str(script_path),
-                            "smoke-check",
-                            "--pdf",
-                            str(demo_pdf),
-                            "--query",
-                            "What does this file cover?",
-                            "--json",
-                        ],
-                        cwd=workspace,
-                        env=package_env,
-                        capture_output=True,
-                        text=True,
-                    )
-                    if doctor_process.stdout.strip():
-                        doctor_payload = json.loads(doctor_process.stdout)
-                    if smoke_process.stdout.strip():
-                        smoke_payload = json.loads(smoke_process.stdout)
-                else:
-                    smoke_payload = {
-                        "ok": False,
-                        "error": {
-                            "code": "create_demo_failed",
-                            "message": create_demo_process.stderr.strip() or create_demo_process.stdout.strip(),
-                        },
-                    }
+                readme_flow = _run_installed_readme_flow(script_path, workspace, data_dir)
 
         all_pass = (
             build_process.returncode == 0
@@ -1570,13 +1673,7 @@ def _run_package_check() -> dict[str, object]:
             and install_process is not None
             and install_process.returncode == 0
             and script_path.exists()
-            and doctor_process is not None
-            and doctor_process.returncode == 0
-            and bool(doctor_payload.get("ok"))
-            and smoke_process is not None
-            and smoke_process.returncode == 0
-            and bool(smoke_payload.get("ok"))
-            and bool(smoke_payload.get("result", {}).get("all_pass"))
+            and bool(readme_flow.get("all_pass"))
         )
 
         return {
@@ -1588,26 +1685,17 @@ def _run_package_check() -> dict[str, object]:
             "build_returncode": build_process.returncode,
             "venv_returncode": venv_process.returncode if venv_process else None,
             "install_returncode": install_process.returncode if install_process else None,
-            "doctor_returncode": doctor_process.returncode if doctor_process else None,
-            "smoke_returncode": smoke_process.returncode if smoke_process else None,
-            "doctor_ok": bool(doctor_payload.get("ok")),
-            "smoke_ok": bool(smoke_payload.get("ok")),
-            "smoke_all_pass": bool(smoke_payload.get("result", {}).get("all_pass")),
+            "doctor_returncode": readme_flow.get("doctor_returncode"),
+            "smoke_returncode": readme_flow.get("smoke_returncode"),
+            "runtime_returncode": readme_flow.get("runtime_returncode"),
+            "doctor_ok": bool(readme_flow.get("doctor_ok")),
+            "smoke_ok": bool(readme_flow.get("smoke_ok")),
+            "smoke_all_pass": bool(readme_flow.get("smoke_all_pass")),
+            "runtime_ok": bool(readme_flow.get("runtime_ok")),
+            "readme_flow": readme_flow,
             "skipped": False,
-            "build_output_tail": "\n".join(
-                part.strip()
-                for part in (build_process.stdout, build_process.stderr)
-                if part and part.strip()
-            )[-1200:],
-            "install_output_tail": (
-                "\n".join(
-                    part.strip()
-                    for part in ((install_process.stdout if install_process else ""), (install_process.stderr if install_process else ""))
-                    if part and part.strip()
-                )[-1200:]
-                if install_process is not None
-                else ""
-            ),
+            "build_output_tail": _process_output_tail(build_process),
+            "install_output_tail": _process_output_tail(install_process),
         }
 
 
@@ -1778,6 +1866,120 @@ def _run_release_check(k: int) -> dict[str, object]:
         },
         "overall_pass": overall_pass,
         "recommendation": recommendation,
+    }
+
+
+def _gate_record(name: str, passed: bool | None, *, skipped: bool = False, reason: str | None = None) -> dict[str, object]:
+    if skipped:
+        status = "skip"
+    elif passed is True:
+        status = "pass"
+    else:
+        status = "fail"
+    return {
+        "name": name,
+        "status": status,
+        "passed": passed,
+        "skipped": skipped,
+        "reason": reason,
+    }
+
+
+def _release_check_compact_payload(payload: dict[str, object]) -> dict[str, object]:
+    doctor = payload.get("doctor", {})
+    maintainer = payload.get("maintainer_checks", {})
+    package_check = maintainer.get("package_check", {})
+    unittests = maintainer.get("unittests", {})
+    regressions = payload.get("internal_regressions", {})
+    local_corpus = payload.get("local_corpus_sanity", {})
+    local_corpus_result = local_corpus.get("result") if isinstance(local_corpus, dict) else None
+    corpus_gates = (
+        local_corpus_result.get("architecture_gates", {})
+        if isinstance(local_corpus_result, dict)
+        else {}
+    )
+    runtime = doctor.get("runtime", {}) if isinstance(doctor, dict) else {}
+    regression_results = regressions.get("results", []) if isinstance(regressions, dict) else []
+    shard_records = [
+        {
+            **_gate_record(str(item.get("shard")), bool(item.get("all_pass"))),
+            "pass_count": item.get("pass_count"),
+            "fail_count": item.get("fail_count"),
+            "failed_case_ids": item.get("failed_case_ids", []),
+        }
+        for item in regression_results
+    ]
+    return {
+        "overall": _gate_record("overall", bool(payload.get("overall_pass"))),
+        "recommendation": payload.get("recommendation", {}),
+        "runtime_decision": runtime.get("runtime_decision", {}),
+        "public_path": {
+            "all_pass": bool(payload.get("public_surface", {}).get("all_pass")),
+            "gates": [
+                _gate_record("doctor_public_cli", bool(doctor.get("ready_for_public_cli"))),
+                _gate_record(
+                    "public_smoke",
+                    bool(payload.get("public_surface", {}).get("smoke", {}).get("smoke_all_pass")),
+                ),
+            ],
+        },
+        "maintainer_path": {
+            "available": bool(maintainer.get("available")),
+            "all_pass": maintainer.get("all_pass"),
+            "gates": [
+                _gate_record(
+                    "package_check",
+                    bool(package_check.get("all_pass")) if package_check else None,
+                    skipped=bool(package_check.get("skipped")) if package_check else True,
+                    reason=package_check.get("reason") if isinstance(package_check, dict) else "package_check_missing",
+                ),
+                _gate_record(
+                    "unit_tests",
+                    bool(unittests.get("passed")) if unittests else None,
+                    skipped=bool(unittests.get("skipped")) if unittests else True,
+                    reason=unittests.get("reason") if isinstance(unittests, dict) else "unit_tests_missing",
+                ),
+                _gate_record(
+                    "internal_regressions",
+                    bool(regressions.get("all_pass")) if not regressions.get("skipped") else None,
+                    skipped=bool(regressions.get("skipped")),
+                    reason=(
+                        "benchmark assets not present in the active data root"
+                        if regressions.get("skipped")
+                        else None
+                    ),
+                ),
+            ],
+        },
+        "internal_regressions": {
+            "benchmark_assets_available": regressions.get("benchmark_assets_available"),
+            "selected_shard_count": len(regressions.get("selected_shards", [])),
+            "all_pass": regressions.get("all_pass"),
+            "shards": shard_records,
+        },
+        "local_corpus_sanity": {
+            "available": local_corpus.get("available") if isinstance(local_corpus, dict) else False,
+            "gate": _gate_record(
+                "local_corpus_architecture",
+                bool(corpus_gates.get("all_pass")) if corpus_gates else None,
+                skipped=not bool(local_corpus.get("available")) if isinstance(local_corpus, dict) else True,
+                reason=(
+                    None
+                    if corpus_gates
+                    else "repo-local pdf/ corpus is not available or was not sampled"
+                ),
+            ),
+            "sample_manifest": (
+                local_corpus_result.get("sample_manifest", {})
+                if isinstance(local_corpus_result, dict)
+                else {}
+            ),
+            "follow_up_count": (
+                len(local_corpus_result.get("follow_up_actions", []))
+                if isinstance(local_corpus_result, dict)
+                else None
+            ),
+        },
     }
 
 
@@ -1953,6 +2155,60 @@ def _render_help(topic: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def _runtime_promotion_snapshot_status() -> dict[str, object]:
+    snapshot_path = PATHS.data_eval / DEFAULT_RUNTIME_PROMOTION_SNAPSHOT_FILENAME
+    if not snapshot_path.exists():
+        return {
+            "available": False,
+            "path": str(snapshot_path),
+            "promotion_ready": False,
+            "candidate_mode": None,
+        }
+    try:
+        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {
+            "available": True,
+            "path": str(snapshot_path),
+            "promotion_ready": False,
+            "candidate_mode": None,
+            "reason": "snapshot_json_invalid",
+        }
+    gate = snapshot.get("promotion_gate", {})
+    return {
+        "available": True,
+        "path": str(snapshot_path),
+        "promotion_ready": bool(gate.get("promotable")),
+        "candidate_mode": snapshot.get("candidate_mode"),
+        "case_count": snapshot.get("case_count"),
+        "candidate_pass_count": snapshot.get("candidate_pass_count"),
+        "recommended_default_change": bool(snapshot.get("recommended_default_change")),
+    }
+
+
+def _runtime_decision_payload(embedding: dict[str, object]) -> dict[str, object]:
+    promotion = _runtime_promotion_snapshot_status()
+    recommended_backend = (
+        "sentence-transformers"
+        if promotion.get("promotion_ready") and promotion.get("candidate_mode") == "sentence-transformers"
+        else None
+    )
+    return {
+        "default_backend": "hash",
+        "effective_backend": embedding.get("effective_backend"),
+        "requested_backend": embedding.get("requested_backend"),
+        "recommended_opt_in_backend": recommended_backend,
+        "recommended_opt_in_source": "runtime_promotion_snapshot" if recommended_backend else None,
+        "promotion_snapshot": promotion,
+        "not_default_reason": (
+            "The deterministic hash backend remains the public default because it is offline-safe, reproducible, "
+            "and the sentence-transformer backend has only been promoted as an explicit opt-in path."
+        ),
+        "cross_encoder_default": "disabled",
+        "llm_synthesis_default": "disabled",
+    }
+
+
 def _runtime_check_payload() -> dict[str, object]:
     embedding = embedding_runtime_diagnostics()
     return {
@@ -1963,6 +2219,7 @@ def _runtime_check_payload() -> dict[str, object]:
             "project_root": str((_discover_project_root(PATHS.root) or _discover_project_root(Path.cwd()) or PATHS.root)),
         },
         "embedding": embedding,
+        "runtime_decision": _runtime_decision_payload(embedding),
         "llm_synthesis": {
             "env_var": "PDF_TO_JSON_RAG_LLM_COMMAND",
             "configured": bool(os.environ.get("PDF_TO_JSON_RAG_LLM_COMMAND")),
@@ -2277,6 +2534,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--sample-profile",
+        "--profile",
+        dest="sample_profile",
         choices=tuple(CORPUS_SAMPLE_PROFILES),
         default="balanced",
         help="Corpus sample profile for corpus-sanity-check: quick=4, balanced=12, stress=24.",
@@ -2381,6 +2640,11 @@ def main() -> None:
             print(f"Effective embedding model: {embedding.get('effective_model')}")
             if embedding.get("fallback_reason"):
                 print(f"Fallback reason: {embedding.get('fallback_reason')}")
+            decision = payload["runtime_decision"]
+            print(f"Default backend: {decision.get('default_backend')}")
+            if decision.get("recommended_opt_in_backend"):
+                print(f"Recommended opt-in backend: {decision.get('recommended_opt_in_backend')}")
+            print(f"Not default reason: {decision.get('not_default_reason')}")
             print(f"Sentence-transformers package: {_human_status(embedding.get('sentence_transformers_package_available'))}")
             print(f"Sentence-transformers model cached: {_human_status(embedding.get('sentence_transformers_model_cached'))}")
             print(f"Cross-encoder opt-in configured: {_human_status(payload['cross_encoder']['configured'])}")
@@ -2473,13 +2737,47 @@ def main() -> None:
             print(f"Install step: {_human_status(payload['install_returncode'] == 0)}")
             print(f"Packaged doctor: {_human_status(payload['doctor_ok'])}")
             print(f"Packaged smoke-check: {_human_status(payload['smoke_all_pass'])}")
+            print(f"Packaged runtime-check: {_human_status(payload['runtime_ok'])}")
+            print(f"Installed README flow: {_human_status(payload.get('readme_flow', {}).get('all_pass'))}")
+            return
+
+        if command == "readme-smoke-check":
+            PATHS.ensure_dirs()
+            package_payload = _run_package_check()
+            payload = {
+                "all_pass": bool(package_payload.get("all_pass")),
+                "install": {
+                    "wheel_path": package_payload.get("wheel_path"),
+                    "venv_path": package_payload.get("venv_path"),
+                    "script_path": package_payload.get("script_path"),
+                    "build_returncode": package_payload.get("build_returncode"),
+                    "venv_returncode": package_payload.get("venv_returncode"),
+                    "install_returncode": package_payload.get("install_returncode"),
+                    "build_output_tail": package_payload.get("build_output_tail"),
+                    "install_output_tail": package_payload.get("install_output_tail"),
+                },
+                "public_readme_flow": package_payload.get("readme_flow", {}),
+                "maintainer_benchmark_path": {
+                    "included": False,
+                    "reason": "readme-smoke-check validates only the public installed README flow; use release-check for maintainer benchmark regressions.",
+                },
+            }
+            if json_output:
+                _emit_json("readme-smoke-check", payload, output_path=output_path)
+                return
+            print(f"Installed README smoke: {_human_status(payload['all_pass'])}")
+            print(f"Installed CLI path: {payload['install']['script_path']}")
+            flow = payload.get("public_readme_flow", {})
+            for step in flow.get("steps", []):
+                print(f"- {_human_status(bool(step.get('ok')))} {step.get('name')}")
             return
 
         if command == "release-check":
             PATHS.ensure_dirs()
             payload = _run_release_check(args.k)
             if json_output:
-                _emit_json("release-check", payload, output_path=output_path)
+                result_payload = payload if args.verbose else _release_check_compact_payload(payload)
+                _emit_json("release-check", result_payload, output_path=output_path)
                 return
             print(f"Release check: {_human_status(payload['overall_pass'])}")
             recommendation = payload["recommendation"]
@@ -2578,6 +2876,11 @@ def main() -> None:
             print(f"Sample profile: {payload.get('sample_profile')}")
             print(f"Corpus PDFs available: {payload['corpus_pdf_count']}")
             print(f"Sampled PDFs: {payload['sample_size']}")
+            sample_manifest = payload.get("sample_manifest", {})
+            if sample_manifest:
+                print(f"Sample algorithm: {sample_manifest.get('sampling_algorithm')}")
+                print(f"Sample checksum: {sample_manifest.get('selected_digest_checksum')}")
+                print(f"Selected bucket counts: {sample_manifest.get('selected_bucket_counts')}")
             if payload.get("snapshot_path"):
                 print(f"Corpus snapshot: {payload['snapshot_path']}")
             summary = payload["summary"]

@@ -121,10 +121,13 @@ class CliPublicSurfaceTests(unittest.TestCase):
         payload = json.loads(process.stdout)
         self.assertTrue(payload["ok"])
         embedding = payload["result"]["embedding"]
+        decision = payload["result"]["runtime_decision"]
         self.assertEqual(payload["result"]["install_context"]["version"], "0.1.0")
         self.assertTrue(payload["result"]["install_context"]["module_path"].endswith("cli.py"))
         self.assertEqual(embedding["requested_backend"], "hash")
         self.assertEqual(embedding["effective_backend"], "hash-fallback")
+        self.assertEqual(decision["default_backend"], "hash")
+        self.assertIn("sentence-transformer", decision["not_default_reason"])
         self.assertEqual(payload["result"]["default_policy"]["llm_synthesis"], "opt_in")
 
     def test_runtime_check_reports_sentence_transformer_env_request(self) -> None:
@@ -195,6 +198,106 @@ class CliPublicSurfaceTests(unittest.TestCase):
         snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
         self.assertEqual(snapshot["candidate_mode"], "sentence-transformers")
         self.assertFalse(snapshot["recommended_default_change"])
+
+    def test_corpus_sampling_manifest_is_deterministic(self) -> None:
+        entries = [
+            cli_module.LocalPdfCorpusEntry(
+                digest="B",
+                pdf_path=self.workspace / "B.pdf",
+                urlkey="",
+                original="",
+                pages=1,
+                file_size=200,
+                creator_tool="",
+                producer="",
+                bucket="short_doc",
+            ),
+            cli_module.LocalPdfCorpusEntry(
+                digest="A",
+                pdf_path=self.workspace / "A.pdf",
+                urlkey="",
+                original="",
+                pages=1,
+                file_size=100,
+                creator_tool="",
+                producer="",
+                bucket="form_like",
+            ),
+            cli_module.LocalPdfCorpusEntry(
+                digest="C",
+                pdf_path=self.workspace / "C.pdf",
+                urlkey="",
+                original="",
+                pages=3,
+                file_size=300,
+                creator_tool="",
+                producer="",
+                bucket="medium_doc",
+            ),
+        ]
+        sampled = cli_module._sample_local_pdf_corpus(entries, 3)
+        manifest = cli_module._corpus_sampling_manifest(
+            entries,
+            sampled,
+            sample_profile="quick",
+            requested_sample_size=3,
+        )
+
+        self.assertEqual(manifest["sampling_algorithm"], "bucket_round_robin_v1")
+        self.assertEqual(manifest["selected_digests"], ["A", "B", "C"])
+        self.assertEqual(manifest["selected_bucket_counts"], {"form_like": 1, "medium_doc": 1, "short_doc": 1})
+        self.assertEqual(len(manifest["selected_digest_checksum"]), 64)
+
+    def test_release_check_compact_payload_lists_gate_statuses(self) -> None:
+        compact = cli_module._release_check_compact_payload(
+            {
+                "doctor": {
+                    "ready_for_public_cli": True,
+                    "runtime": {"runtime_decision": {"default_backend": "hash"}},
+                },
+                "public_surface": {
+                    "all_pass": True,
+                    "smoke": {"smoke_all_pass": True},
+                },
+                "maintainer_checks": {
+                    "available": True,
+                    "all_pass": True,
+                    "package_check": {"all_pass": True, "skipped": False},
+                    "unittests": {"passed": True, "skipped": False},
+                },
+                "internal_regressions": {
+                    "benchmark_assets_available": True,
+                    "selected_shards": ["query_planning_core"],
+                    "skipped": False,
+                    "all_pass": True,
+                    "results": [
+                        {
+                            "shard": "query_planning_core",
+                            "all_pass": True,
+                            "pass_count": 7,
+                            "fail_count": 0,
+                            "failed_case_ids": [],
+                        }
+                    ],
+                },
+                "local_corpus_sanity": {
+                    "available": True,
+                    "result": {
+                        "architecture_gates": {"all_pass": True},
+                        "sample_manifest": {"selected_digest_checksum": "abc"},
+                        "follow_up_actions": [],
+                    },
+                },
+                "overall_pass": True,
+                "recommendation": {"release_ready": True},
+            }
+        )
+
+        self.assertEqual(compact["overall"]["status"], "pass")
+        self.assertEqual(compact["runtime_decision"]["default_backend"], "hash")
+        self.assertEqual(compact["internal_regressions"]["selected_shard_count"], 1)
+        self.assertEqual(compact["internal_regressions"]["shards"][0]["status"], "pass")
+        self.assertEqual(compact["local_corpus_sanity"]["gate"]["status"], "pass")
 
     def test_create_demo_pdf_json(self) -> None:
         self._run("init", "--json")

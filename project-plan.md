@@ -52,7 +52,10 @@ The first working version stayed local-first and deliberately narrow:
 ## 5. Current Baseline
 
 Current public version: `0.1.0-beta`
-Current internal implementation level: `v1.38.0`
+Current package metadata version: `0.1.0`
+Current internal implementation level: `v1.43.0`
+
+`0.1.0-beta` is the public release label. The package version remains PEP440-compatible `0.1.0` until the beta checkpoint is cut as a formal package release.
 
 What the repo now has:
 
@@ -87,9 +90,10 @@ What the repo now has:
 - runtime-mode comparison for baseline, sentence-transformers, cross-encoder, and opt-in LLM synthesis paths
 - full-suite runtime comparison and green promotion gate for optional sentence-transformer embeddings
 - explicit runtime diagnostics and promotion summary commands
+- explicit runtime decision output that keeps `hash` as default and recommends sentence-transformers only as opt-in
 - explicit embedding backend selection with `hash`, `sentence-transformers`, and `auto`
 - saved promotion snapshots and backend payloads in build/workflow/smoke outputs
-- verified installed-entrypoint public path after local package install
+- verified installed-entrypoint public path and a repeatable `readme-smoke-check`
 - reranking of the neighbor-expanded context before answer synthesis
 - an explicit grounded-only synthesis prompt contract over selected context chunks, with opt-in local-command execution
 - an LLM-as-judge prompt contract for faithfulness scoring in evaluation reports, with opt-in local-command JSON judging
@@ -102,6 +106,8 @@ What the repo now has:
 - a layer-aware evaluation summary for `processing`, `retrieval`, and `answer_faithfulness`
 - layer-stability and architecture-gate summaries that turn those layers into explicit evaluation gates
 - corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
+- deterministic corpus sampling manifests for quick/balanced/stress unknown-PDF sanity checks
+- compact release-check summaries with full maintainer payloads behind `--verbose`
 
 Current validation snapshot:
 
@@ -286,14 +292,21 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
   - verified installed `pdf-to-json-rag` after `python -m pip install .`
   - confirmed public demo smoke path through the installed entrypoint
   - refreshed docs toward a stable checkpoint
+- `v1.39.0-v1.43.0`
+  - clarified public beta label vs package metadata version policy
+  - added an installed README smoke gate that replays install, init, doctor, create-demo-pdf, smoke-check, and runtime-check
+  - added deterministic corpus sample manifests with bucket counts and digest checksums
+  - exposed runtime decision fields for default backend, recommended opt-in backend, and not-default rationale
+  - made `release-check --json` compact by default while preserving the full payload behind `--verbose`
 
 
 ### 6.2. Next Steps
 
-1. Prepare a focused commit from the current tracked files and the promotion snapshot.
-2. Re-run a short installed-entrypoint sanity check after commit if needed.
-3. Push only after reviewing the final diff and commit message.
-4. Keep learned components opt-in until they beat the simpler baseline on clear failure patterns.
+1. Keep the public beta path stable: install, init, doctor, demo PDF, smoke-check, runtime-check.
+2. Use `readme-smoke-check --json` for installed-entrypoint sanity and `release-check --json --verbose` for full maintainer details.
+3. Keep `hash` as the default backend while treating sentence-transformers as the recommended opt-in backend.
+4. Expand corpus sanity only through deterministic sample profiles and compact manifests, not by tracking local PDFs or generated indexes.
+5. Keep learned components opt-in until they beat the simpler baseline on clear failure patterns.
 
 ## 7. Explicitly Deferred
 
