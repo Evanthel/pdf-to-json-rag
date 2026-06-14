@@ -299,6 +299,99 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(compact["internal_regressions"]["shards"][0]["status"], "pass")
         self.assertEqual(compact["local_corpus_sanity"]["gate"]["status"], "pass")
 
+    def test_public_beta_check_compact_payload_aggregates_release_gates(self) -> None:
+        payload = cli_module._public_beta_check_compact_payload(
+            {
+                "doctor": {
+                    "ready_for_public_cli": True,
+                    "runtime": {
+                        "runtime_decision": {
+                            "default_backend": "hash",
+                            "recommended_opt_in_backend": "sentence-transformers",
+                            "not_default_reason": "sentence-transformers is opt-in.",
+                        }
+                    },
+                },
+                "public_surface": {"all_pass": True, "smoke": {"smoke_all_pass": True}},
+                "maintainer_checks": {
+                    "available": True,
+                    "all_pass": True,
+                    "package_check": {
+                        "all_pass": True,
+                        "skipped": False,
+                        "readme_flow": {
+                            "all_pass": True,
+                            "steps": [
+                                {"name": "init", "ok": True, "returncode": 0},
+                                {"name": "runtime-check", "ok": True, "returncode": 0},
+                            ],
+                        },
+                    },
+                    "unittests": {"passed": True, "skipped": False},
+                },
+                "internal_regressions": {
+                    "benchmark_assets_available": True,
+                    "selected_shards": ["query_planning_core"],
+                    "skipped": False,
+                    "all_pass": True,
+                    "results": [],
+                },
+                "local_corpus_sanity": {
+                    "available": True,
+                    "result": {
+                        "architecture_gates": {"all_pass": True},
+                        "sample_manifest": {"selected_digest_checksum": "abc"},
+                        "follow_up_actions": [],
+                    },
+                },
+                "overall_pass": True,
+                "recommendation": {"release_ready": True},
+            }
+        )
+
+        gate_statuses = {item["name"]: item["status"] for item in payload["gates"]}
+        self.assertTrue(payload["all_pass"])
+        self.assertEqual(gate_statuses["installed_readme_flow"], "pass")
+        self.assertEqual(gate_statuses["runtime_default_policy"], "pass")
+        self.assertEqual(payload["runtime_decision"]["default_backend"], "hash")
+        self.assertEqual(payload["scope"]["sentence_transformers"], "recommended_opt_in_only")
+
+    def test_answer_contract_health_and_quality_profile_are_readable(self) -> None:
+        trace = {
+            "answer_mode": "document_overview",
+            "retrieval_contract": {"retrieval_path": "document_understanding"},
+            "document_synthesis": {"support_scope": "selected_docs", "support_doc_ids": ["demo"]},
+            "answer_contract": {"primary_doc_ids": ["demo"]},
+            "claim_alignment": {"status": "supported"},
+            "support_trace": [{"doc_id": "demo"}],
+        }
+        health = cli_module._answer_contract_health(trace)
+        profile = cli_module._workflow_quality_profile(
+            {
+                "document": {
+                    "document_type": "guidance_note",
+                    "document_purpose": "procedural_guidance",
+                    "inventory_summary": "Demo guide",
+                    "structure_confidence": 0.8,
+                    "layout_confidence": 0.75,
+                    "semantic_confidence": 0.9,
+                    "semantic_confidence_label": "high",
+                },
+                "index": {"chunk_count": 1},
+                "answer": {
+                    "answer": "Demo guide covers safety.",
+                    "answer_trace": trace,
+                    "contract_health": health,
+                },
+            }
+        )
+
+        self.assertTrue(health["all_pass"])
+        self.assertEqual(health["retrieval_path"], "document_understanding")
+        self.assertEqual(profile["processing_quality"]["status"], "pass")
+        self.assertEqual(profile["semantic_confidence"]["classification_status"], "well_supported")
+        self.assertEqual(profile["retrieval_readiness"]["support_doc_ids"], ["demo"])
+
     def test_create_demo_pdf_json(self) -> None:
         self._run("init", "--json")
         demo_path = self.workspace / "generated-demo.pdf"

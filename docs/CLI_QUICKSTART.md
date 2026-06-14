@@ -128,9 +128,10 @@ pdf-to-json-rag package-check --json
 pdf-to-json-rag release-check --json
 pdf-to-json-rag release-check --json --verbose
 pdf-to-json-rag readme-smoke-check --json
+pdf-to-json-rag public-beta-check --json
 ```
 
-Use these from a source checkout when you want to validate wheel packaging, public smoke behavior, and the current release gates. `release-check --json` is compact by default; add `--verbose` for the full maintainer payload. `readme-smoke-check` validates only the installed public README flow and does not run benchmark regressions. End users only need `doctor`, `smoke-check`, and `run-workflow`.
+Use these from a source checkout when you want to validate wheel packaging, public smoke behavior, and the current release gates. `release-check --json` is compact by default; add `--verbose` for the full maintainer payload. `readme-smoke-check` validates only the installed public README flow and does not run benchmark regressions. `public-beta-check` aggregates the installed README flow, runtime decision, corpus quick gate, and compact release summary. End users only need `doctor`, `smoke-check`, and `run-workflow`.
 
 For unfamiliar local PDFs that you do not want to add to the benchmark, use:
 
@@ -145,6 +146,8 @@ pdf-to-json-rag corpus-sanity-check --profile quick --json
 ```
 
 That command now returns compact overview, type, purpose, audience, confidence, rationale, and limits answers for each PDF, plus corpus-level rates, a deterministic `sample_manifest`, and a corpus architecture gate over `processing`, `semantics`, and `trust`.
+
+`run-workflow --json` and `smoke-check --json` include `quality_profile` and answer `contract_health` blocks so unfamiliar PDFs can be read as processing quality, semantic confidence, retrieval readiness, and answer trust instead of only a final answer string.
 
 If you changed code under `src/` and have not reinstalled the package yet, run maintainer checks from the source checkout like this:
 

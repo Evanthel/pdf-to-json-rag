@@ -76,6 +76,7 @@ COMMAND_ALIASES = {
     "runtime": "runtime-check",
     "promotion-report": "runtime-promotion-report",
     "readme-smoke": "readme-smoke-check",
+    "beta-check": "public-beta-check",
 }
 
 COMMAND_HELP: dict[str, dict[str, object]] = {
@@ -154,6 +155,10 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
     "readme-smoke-check": {
         "summary": "Maintainer check: install the package into a temporary environment and replay the public README smoke workflow.",
         "example": "pdf-to-json-rag readme-smoke-check --json",
+    },
+    "public-beta-check": {
+        "summary": "Maintainer check: aggregate public README smoke, runtime decision, corpus quick gate, and compact release summary.",
+        "example": "pdf-to-json-rag public-beta-check --json",
     },
     "demo-profile": {
         "summary": "Show a public-safe demo profile with stable example commands and queries.",
@@ -424,17 +429,55 @@ def _compact_answer_trace(answer_trace: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _answer_contract_health(answer_trace: dict[str, object], *, evidence_count: int = 0) -> dict[str, object]:
+    retrieval_contract = answer_trace.get("retrieval_contract", {})
+    document_synthesis = answer_trace.get("document_synthesis", {})
+    answer_contract = answer_trace.get("answer_contract", {})
+    support_trace = answer_trace.get("support_trace", [])
+    claim_alignment = answer_trace.get("claim_alignment", {})
+    answer_mode = str(answer_trace.get("answer_mode") or "")
+    support_doc_ids = document_synthesis.get("support_doc_ids", []) if isinstance(document_synthesis, dict) else []
+    selected_doc_ids = answer_contract.get("primary_doc_ids", []) if isinstance(answer_contract, dict) else []
+    support_scope = document_synthesis.get("support_scope") if isinstance(document_synthesis, dict) else None
+    retrieval_path = retrieval_contract.get("retrieval_path") if isinstance(retrieval_contract, dict) else None
+    has_document_support = bool(support_trace) or bool(support_doc_ids)
+    grounded_mode = answer_mode == "grounded_evidence"
+    support_available = bool(evidence_count) if grounded_mode else has_document_support
+    checks = [
+        {"name": "retrieval_contract_present", "passed": bool(retrieval_contract)},
+        {"name": "retrieval_path_present", "passed": bool(retrieval_path)},
+        {"name": "answer_contract_present", "passed": bool(answer_contract)},
+        {"name": "document_synthesis_present", "passed": bool(document_synthesis)},
+        {"name": "support_scope_present", "passed": bool(support_scope)},
+        {"name": "support_available_for_mode", "passed": support_available},
+        {"name": "claim_alignment_present", "passed": bool(claim_alignment)},
+    ]
+    return {
+        "all_pass": all(item["passed"] for item in checks),
+        "checks": checks,
+        "retrieval_path": retrieval_path,
+        "support_scope": support_scope,
+        "selected_doc_ids": list(selected_doc_ids) if isinstance(selected_doc_ids, list) else [],
+        "support_doc_ids": list(support_doc_ids) if isinstance(support_doc_ids, list) else [],
+        "support_trace_count": len(support_trace) if isinstance(support_trace, list) else 0,
+        "evidence_count": evidence_count,
+    }
+
+
 def _grounded_answer_payload(result, *, verbose: bool = False) -> dict[str, object]:
+    answer_trace = result.answer_trace if verbose else _compact_answer_trace(result.answer_trace)
+    evidence_payload = [_evidence_payload(item) for item in result.evidence] if verbose else []
     return {
         "query": result.query,
         "query_intent": result.query_intent,
         "answer": result.answer,
-        "answer_trace": result.answer_trace if verbose else _compact_answer_trace(result.answer_trace),
+        "answer_trace": answer_trace,
+        "contract_health": _answer_contract_health(answer_trace, evidence_count=len(result.evidence)),
         **(
             {
                 "top_k_hits": [_chunk_payload(chunk) for chunk in result.top_k_hits],
                 "expanded_hits": [_chunk_payload(chunk) for chunk in result.expanded_hits],
-                "evidence": [_evidence_payload(item) for item in result.evidence],
+                "evidence": evidence_payload,
             }
             if verbose
             else {}
@@ -476,6 +519,92 @@ def _emit_error_json(command: str | None, error: CliError, output_path: Path | N
         },
         output_path=output_path,
     )
+
+
+def _quality_status(score: float | int | None, *, warn_at: float = 0.55, pass_at: float = 0.7) -> str:
+    if score is None:
+        return "unknown"
+    numeric_score = float(score)
+    if numeric_score >= pass_at:
+        return "pass"
+    if numeric_score >= warn_at:
+        return "warn"
+    return "fail"
+
+
+def _workflow_quality_profile(payload: dict[str, object]) -> dict[str, object]:
+    document = payload.get("document", {}) if isinstance(payload.get("document"), dict) else {}
+    index = payload.get("index", {}) if isinstance(payload.get("index"), dict) else {}
+    answer = payload.get("answer", {}) if isinstance(payload.get("answer"), dict) else {}
+    answer_trace = answer.get("answer_trace", {}) if isinstance(answer.get("answer_trace"), dict) else {}
+    contract_health = answer.get("contract_health", {}) if isinstance(answer.get("contract_health"), dict) else {}
+    structure_confidence = document.get("structure_confidence")
+    layout_confidence = document.get("layout_confidence")
+    semantic_confidence = document.get("semantic_confidence")
+    processing_checks = [
+        {"name": "chunks_created", "passed": bool(index.get("chunk_count", 0) > 0)},
+        {"name": "structure_confidence_present", "passed": structure_confidence is not None},
+        {"name": "layout_confidence_present", "passed": layout_confidence is not None},
+    ]
+    semantic_checks = [
+        {"name": "semantic_confidence_present", "passed": semantic_confidence is not None},
+        {"name": "document_type_present", "passed": bool(document.get("document_type"))},
+        {"name": "document_purpose_present", "passed": bool(document.get("document_purpose"))},
+        {"name": "inventory_summary_present", "passed": bool(document.get("inventory_summary"))},
+    ]
+    retrieval_checks = [
+        {"name": "contract_health_available", "passed": bool(contract_health)},
+        {"name": "retrieval_contract_present", "passed": bool(answer_trace.get("retrieval_contract"))},
+        {"name": "support_scope_present", "passed": bool(contract_health.get("support_scope"))},
+        {"name": "support_available", "passed": bool(contract_health.get("support_trace_count") or contract_health.get("evidence_count"))},
+    ]
+    answer_checks = [
+        {"name": "answer_present", "passed": bool(answer.get("answer"))},
+        {"name": "answer_contract_present", "passed": bool(answer_trace.get("answer_contract"))},
+        {"name": "claim_alignment_present", "passed": bool(answer_trace.get("claim_alignment"))},
+    ]
+    semantic_classification = (
+        "well_supported"
+        if isinstance(semantic_confidence, (int, float)) and semantic_confidence >= 0.85
+        else "provisional"
+        if isinstance(semantic_confidence, (int, float)) and semantic_confidence >= 0.55
+        else "unknown"
+    )
+    return {
+        "processing_quality": {
+            "status": "pass" if all(item["passed"] for item in processing_checks) else "fail",
+            "checks": processing_checks,
+            "structure_confidence": structure_confidence,
+            "layout_confidence": layout_confidence,
+            "structure_status": _quality_status(structure_confidence),
+            "layout_status": _quality_status(layout_confidence),
+        },
+        "semantic_confidence": {
+            "status": "pass" if all(item["passed"] for item in semantic_checks) else "fail",
+            "checks": semantic_checks,
+            "score": semantic_confidence,
+            "label": document.get("semantic_confidence_label"),
+            "classification_status": semantic_classification,
+            "trust_policy": (
+                "stable_semantic_classification"
+                if semantic_classification == "well_supported"
+                else "confidence_aware_provisional_classification"
+            ),
+        },
+        "retrieval_readiness": {
+            "status": "pass" if all(item["passed"] for item in retrieval_checks) else "warn",
+            "checks": retrieval_checks,
+            "retrieval_path": contract_health.get("retrieval_path"),
+            "support_scope": contract_health.get("support_scope"),
+            "support_doc_ids": contract_health.get("support_doc_ids", []),
+            "selected_doc_ids": contract_health.get("selected_doc_ids", []),
+        },
+        "answer_trust": {
+            "status": "pass" if all(item["passed"] for item in answer_checks) else "warn",
+            "checks": answer_checks,
+            "contract_health": contract_health,
+        },
+    }
 
 
 def _wants_json(argv: list[str]) -> bool:
@@ -1983,6 +2112,61 @@ def _release_check_compact_payload(payload: dict[str, object]) -> dict[str, obje
     }
 
 
+def _public_beta_check_compact_payload(release_payload: dict[str, object]) -> dict[str, object]:
+    release_summary = _release_check_compact_payload(release_payload)
+    package_check = (
+        release_payload.get("maintainer_checks", {}).get("package_check", {})
+        if isinstance(release_payload.get("maintainer_checks"), dict)
+        else {}
+    )
+    readme_flow = package_check.get("readme_flow", {}) if isinstance(package_check, dict) else {}
+    runtime_decision = release_summary.get("runtime_decision", {})
+    corpus_summary = release_summary.get("local_corpus_sanity", {})
+    gates = [
+        _gate_record(
+            "installed_readme_flow",
+            bool(readme_flow.get("all_pass")) if readme_flow else None,
+            skipped=not bool(readme_flow),
+            reason=None if readme_flow else "installed README flow was not available",
+        ),
+        _gate_record(
+            "runtime_default_policy",
+            runtime_decision.get("default_backend") == "hash",
+            reason=runtime_decision.get("not_default_reason"),
+        ),
+        corpus_summary.get("gate", _gate_record("local_corpus_architecture", None, skipped=True)),
+        release_summary.get("overall", _gate_record("release_summary", None, skipped=True)),
+    ]
+    return {
+        "all_pass": all(gate.get("status") == "pass" for gate in gates),
+        "gates": gates,
+        "public_readme_flow": {
+            "all_pass": bool(readme_flow.get("all_pass")),
+            "steps": [
+                {
+                    "name": step.get("name"),
+                    "status": "pass" if step.get("ok") else "fail",
+                    "returncode": step.get("returncode"),
+                }
+                for step in readme_flow.get("steps", [])
+            ],
+        },
+        "runtime_decision": runtime_decision,
+        "corpus_quick": corpus_summary,
+        "release_summary": release_summary,
+        "scope": {
+            "default_backend": "hash",
+            "sentence_transformers": "recommended_opt_in_only",
+            "cross_encoder": "experimental_opt_in_only",
+            "llm_synthesis": "opt_in_only",
+        },
+    }
+
+
+def _run_public_beta_check(k: int) -> dict[str, object]:
+    return _public_beta_check_compact_payload(_run_release_check(k))
+
+
 def _resolve_document_paths(doc_id: str) -> tuple[Path, Path]:
     native_path = PATHS.data_documents / f"{doc_id}.native.json"
     document_path = PATHS.data_documents / f"{doc_id}.document.json"
@@ -2059,6 +2243,14 @@ def _smoke_checks(payload: dict[str, object]) -> list[dict[str, object]]:
         {
             "name": "evidence_or_document_answer",
             "passed": bool(answer.get("evidence") or answer.get("answer_trace", {}).get("answer_mode") != "grounded_evidence"),
+        },
+        {
+            "name": "answer_contract_health_present",
+            "passed": bool(answer.get("contract_health")),
+        },
+        {
+            "name": "quality_profile_present",
+            "passed": bool(payload.get("quality_profile")),
         },
     ]
     return checks
@@ -2772,6 +2964,22 @@ def main() -> None:
                 print(f"- {_human_status(bool(step.get('ok')))} {step.get('name')}")
             return
 
+        if command == "public-beta-check":
+            PATHS.ensure_dirs()
+            payload = _run_public_beta_check(args.k)
+            if json_output:
+                _emit_json("public-beta-check", payload, output_path=output_path)
+                return
+            print(f"Public beta check: {_human_status(payload['all_pass'])}")
+            for gate in payload.get("gates", []):
+                print(f"- {gate.get('status', 'unknown').upper()} {gate.get('name')}")
+            runtime_decision = payload.get("runtime_decision", {})
+            if runtime_decision:
+                print(f"Default backend: {runtime_decision.get('default_backend')}")
+                if runtime_decision.get("recommended_opt_in_backend"):
+                    print(f"Recommended opt-in backend: {runtime_decision.get('recommended_opt_in_backend')}")
+            return
+
         if command == "release-check":
             PATHS.ensure_dirs()
             payload = _run_release_check(args.k)
@@ -3168,6 +3376,7 @@ def main() -> None:
                 },
                 "answer": _grounded_answer_payload(answer, verbose=args.verbose),
             }
+            payload["quality_profile"] = _workflow_quality_profile(payload)
             if command == "smoke-check":
                 checks = _smoke_checks(payload)
                 smoke_payload = {

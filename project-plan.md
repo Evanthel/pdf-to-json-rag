@@ -53,7 +53,7 @@ The first working version stayed local-first and deliberately narrow:
 
 Current public version: `0.1.0-beta`
 Current package metadata version: `0.1.0`
-Current internal implementation level: `v1.43.0`
+Current internal implementation level: `v1.48.0`
 
 `0.1.0-beta` is the public release label. The package version remains PEP440-compatible `0.1.0` until the beta checkpoint is cut as a formal package release.
 
@@ -94,6 +94,7 @@ What the repo now has:
 - explicit embedding backend selection with `hash`, `sentence-transformers`, and `auto`
 - saved promotion snapshots and backend payloads in build/workflow/smoke outputs
 - verified installed-entrypoint public path and a repeatable `readme-smoke-check`
+- aggregated public beta validation through `public-beta-check`
 - reranking of the neighbor-expanded context before answer synthesis
 - an explicit grounded-only synthesis prompt contract over selected context chunks, with opt-in local-command execution
 - an LLM-as-judge prompt contract for faithfulness scoring in evaluation reports, with opt-in local-command JSON judging
@@ -103,6 +104,7 @@ What the repo now has:
 - prompt/eval contract validation for sampled faithfulness gates
 - optional low-confidence semantic multipass behind `PDF_TO_JSON_RAG_SEMANTIC_MULTIPASS=1`
 - a shared `document_synthesis` handoff for selection strategy, support scope, and answer chunks
+- answer `contract_health` and workflow `quality_profile` blocks for unknown-PDF processing quality, semantic confidence, retrieval readiness, and answer trust
 - a layer-aware evaluation summary for `processing`, `retrieval`, and `answer_faithfulness`
 - layer-stability and architecture-gate summaries that turn those layers into explicit evaluation gates
 - corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
@@ -298,12 +300,17 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
   - added deterministic corpus sample manifests with bucket counts and digest checksums
   - exposed runtime decision fields for default backend, recommended opt-in backend, and not-default rationale
   - made `release-check --json` compact by default while preserving the full payload behind `--verbose`
+- `v1.44.0-v1.48.0`
+  - added `public-beta-check` as the single pre-tag aggregator over installed README smoke, runtime decision, corpus quick gate, and compact release summary
+  - added answer `contract_health` for retrieval path, support scope, selected docs, support docs, and claim-alignment presence
+  - added workflow `quality_profile` so random-PDF runs expose processing quality, semantic confidence, retrieval readiness, and answer-trust status
+  - extended smoke checks to assert the presence of contract health and quality profile blocks
 
 
 ### 6.2. Next Steps
 
 1. Keep the public beta path stable: install, init, doctor, demo PDF, smoke-check, runtime-check.
-2. Use `readme-smoke-check --json` for installed-entrypoint sanity and `release-check --json --verbose` for full maintainer details.
+2. Use `public-beta-check --json` before tagging; use `release-check --json --verbose` only when full maintainer detail is needed.
 3. Keep `hash` as the default backend while treating sentence-transformers as the recommended opt-in backend.
 4. Expand corpus sanity only through deterministic sample profiles and compact manifests, not by tracking local PDFs or generated indexes.
 5. Keep learned components opt-in until they beat the simpler baseline on clear failure patterns.

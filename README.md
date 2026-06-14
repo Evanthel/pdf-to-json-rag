@@ -26,7 +26,7 @@ Internal development iterations in this repo use `v1.x` labels. Public releases 
 
 Current package metadata version: `0.1.0`
 
-Current internal milestone: `v1.43.0`
+Current internal milestone: `v1.48.0`
 
 The public release label is `0.1.0-beta`; package metadata remains PEP440-compatible `0.1.0` until the first non-beta public cut.
 
@@ -70,6 +70,7 @@ The current baseline includes:
 - explicit embedding backend policy via `PDF_TO_JSON_RAG_EMBEDDING_BACKEND=hash|sentence-transformers|auto`
 - promotion snapshots saved after green full-suite runtime comparisons
 - installed-entrypoint verification for the public README flow through `readme-smoke-check`
+- aggregated public beta validation through `public-beta-check`
 - reranking of the neighbor-expanded context before answer synthesis, with `initial_retrieval_rank` and `expanded_context_rank` signals
 - an explicit grounded-only synthesis prompt contract with opt-in local-command LLM execution
 - strict local JSON/fence parsing for opt-in LLM outputs and judge diagnostics
@@ -79,6 +80,7 @@ The current baseline includes:
 - prompt/eval contract validation for sampled faithfulness gates
 - optional low-confidence semantic multipass behind an env flag, with no default-path change
 - a shared `document_synthesis` handoff so document selection, support scope, and answer chunks stay aligned
+- compact answer `contract_health` and workflow `quality_profile` blocks for unknown-PDF processing, retrieval readiness, and answer trust
 - a layer-aware evaluation report that separates processing, retrieval, and answer-faithfulness signals
 - layer-stability and architecture-gate summaries on top of the layer-aware evaluation report
 - corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
@@ -214,6 +216,7 @@ pdf-to-json-rag package-check --json
 pdf-to-json-rag release-check --json
 pdf-to-json-rag release-check --json --verbose
 pdf-to-json-rag readme-smoke-check --json
+pdf-to-json-rag public-beta-check --json
 ```
 
 `release-check --json` returns a compact pass/fail/skip summary. Add `--verbose` when you need the full maintainer payload with doctor details, package tails, shard results, and corpus diagnostics.
@@ -231,6 +234,8 @@ pdf-to-json-rag runtime-check --json
 ```
 
 Maintainers can run the same installed README flow in one command with `pdf-to-json-rag readme-smoke-check --json`. It validates the public installed path only; use `release-check` for benchmark regressions.
+
+For one aggregated pre-tag gate, use `pdf-to-json-rag public-beta-check --json`. It combines the installed README flow, runtime default decision, corpus quick gate, and compact release summary while keeping `hash` as the default backend.
 
 Local sanity check for unfamiliar PDFs:
 
@@ -252,7 +257,7 @@ It also returns a deterministic `sample_manifest` with the bucket round-robin al
 
 When you want to inspect the new processing layer on one extracted document, `inspect-document --json` now includes `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, `extraction_summary.layout_signal_counts`, and per-section `section_role` / `source_block_roles`.
 
-Document-level answer traces now also include compact `retrieval_contract` and `document_synthesis` blocks so you can see both the retrieval path and how the answer path narrowed support to selected documents and chunks.
+Document-level answer traces now also include compact `retrieval_contract`, `document_synthesis`, and `contract_health` blocks so you can see both the retrieval path and how the answer path narrowed support to selected documents and chunks. `run-workflow` and `smoke-check` also return a `quality_profile` with processing quality, semantic confidence, retrieval readiness, and answer-trust status.
 
 When you are validating new local code in a source checkout before reinstalling the package, prefer:
 

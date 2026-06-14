@@ -79,6 +79,7 @@ Maintainer validation commands:
 - `package-check`
 - `release-check`
 - `readme-smoke-check`
+- `public-beta-check`
 - `layout-sanity-check`
 - `corpus-sanity-check`
 - `compare-runtime-modes`
@@ -107,6 +108,7 @@ Helpful aliases:
 - `corpus-check` -> `corpus-sanity-check`
 - `compare-modes` -> `compare-runtime-modes`
 - `readme-smoke` -> `readme-smoke-check`
+- `beta-check` -> `public-beta-check`
 
 Focused help:
 
@@ -130,6 +132,7 @@ pdf-to-json-rag inspect-document --doc-id your-doc-id --json --output inspect.js
 pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
 pdf-to-json-rag package-check --json
 pdf-to-json-rag readme-smoke-check --json
+pdf-to-json-rag public-beta-check --json
 pdf-to-json-rag plan-query --query "Which file is most relevant for drought triggers?" --json
 pdf-to-json-rag answer-query --query "What does this file cover?" --json
 pdf-to-json-rag release-check --json
@@ -146,7 +149,7 @@ pdf-to-json-rag answer-query --query "What does this file cover?" --format json
 
 `inspect-document --json` now also exposes processing-layer details such as `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, `extraction_summary.layout_signal_counts`, and per-section `section_role` / `source_block_roles`.
 
-`answer-query --json`, `run-workflow --json`, and `smoke-check --json` now include compact `retrieval_contract`, `document_synthesis`, and `claim_alignment` blocks inside `answer_trace` so both the retrieval path and the answer-time support scope are explicit.
+`answer-query --json`, `run-workflow --json`, and `smoke-check --json` now include compact `retrieval_contract`, `document_synthesis`, `claim_alignment`, and answer `contract_health` blocks so both the retrieval path and the answer-time support scope are explicit. `run-workflow --json` and `smoke-check --json` also return `quality_profile` with processing quality, semantic confidence, retrieval readiness, and answer-trust status.
 
 ```bash
 pdf-to-json-rag corpus-sanity-check --profile quick --json
@@ -167,3 +170,5 @@ pdf-to-json-rag corpus-sanity-check --profile quick --json
 `release-check --json` returns a compact release summary by default, including public, maintainer, internal-regression, runtime, and local-corpus gates as pass/fail/skip records. Use `release-check --json --verbose` for the full payload.
 
 `readme-smoke-check --json` builds and installs the package into a temporary environment, then replays the public README flow: `init`, `doctor`, `create-demo-pdf`, `smoke-check`, and `runtime-check`. It intentionally excludes maintainer benchmark regressions.
+
+`public-beta-check --json` aggregates the installed README flow, runtime default decision, local corpus quick gate, and compact release summary into one pre-tag gate. It reports `hash` as the default backend and keeps sentence-transformers, cross-encoder, and LLM synthesis as opt-in scopes.

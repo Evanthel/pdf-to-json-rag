@@ -8,7 +8,7 @@ Internal development iterations in this file use `v1.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v1.43.0`
+Current implementation level: `v1.48.0`
 Current public version: `0.1.0-beta`
 Current package metadata version: `0.1.0`
 
@@ -48,7 +48,7 @@ Repo-local regression shards currently passing in saved runs or current mileston
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v1.43.0`:
+Broad benchmark note after `v1.48.0`:
 
 - the targeted maintainer shard set run in this milestone is green
 - the opt-in local-command LLM synthesis and LLM-as-judge paths are covered in unit tests while remaining disabled by default
@@ -62,6 +62,9 @@ Broad benchmark note after `v1.43.0`:
 - `readme-smoke-check` now replays the installed public README flow in one maintainer command without running benchmark regressions
 - `corpus-sanity-check` now returns a deterministic sample manifest with bucket counts, selected digests, and a sample checksum
 - `release-check --json` now returns a compact public/maintainer/shard/corpus gate summary by default; use `--verbose` for the full legacy payload
+- `public-beta-check --json` aggregates installed README smoke, runtime default decision, corpus quick gate, and compact release summary into one pre-tag check
+- workflow payloads now expose `quality_profile` for processing quality, semantic confidence, retrieval readiness, and answer trust
+- answer payloads now expose `contract_health` so retrieval path, support scope, selected docs, support docs, and claim-alignment presence are easy to gate
 - current broad benchmark scope:
   - `Cases`: `77`
   - `Indexed sample documents`: `25`
@@ -532,6 +535,13 @@ Representative validation that has already been completed:
 - Added `runtime_decision` output to `runtime-check`, including `default_backend`, `recommended_opt_in_backend`, and the reason sentence-transformers is not the default.
 - Made `release-check --json` compact by default with explicit pass/fail/skip records for public, maintainer, shard, runtime, and corpus gates; the full payload remains available with `--verbose`.
 - Re-ran final package and source release gates after installed-entrypoint verification.
+
+### v1.44.0-v1.48.0
+
+- Added `public-beta-check` as a single pre-tag gate over installed README smoke, runtime decision, corpus quick, and compact release summary.
+- Added answer `contract_health` to make retrieval/synthesis support contracts directly gateable in public JSON.
+- Added workflow `quality_profile` so unknown PDFs report processing, semantic, retrieval, and answer-trust status.
+- Extended smoke checks and public-surface tests around these contract fields.
 
 ### v0.1.1-v0.1.2
 
