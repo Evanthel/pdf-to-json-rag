@@ -82,6 +82,7 @@ Maintainer validation commands:
 - `public-beta-check`
 - `layout-sanity-check`
 - `corpus-sanity-check`
+- `corpus-profile-compare`
 - `compare-runtime-modes`
 
 Benchmark/debug commands:
@@ -106,6 +107,7 @@ Helpful aliases:
 - `self-check` -> `doctor`
 - `layout-check` -> `layout-sanity-check`
 - `corpus-check` -> `corpus-sanity-check`
+- `corpus-compare` -> `corpus-profile-compare`
 - `compare-modes` -> `compare-runtime-modes`
 - `readme-smoke` -> `readme-smoke-check`
 - `beta-check` -> `public-beta-check`
@@ -133,6 +135,7 @@ pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
 pdf-to-json-rag package-check --json
 pdf-to-json-rag readme-smoke-check --json
 pdf-to-json-rag public-beta-check --json
+pdf-to-json-rag corpus-profile-compare --baseline-profile quick --candidate-profile balanced --json
 pdf-to-json-rag plan-query --query "Which file is most relevant for drought triggers?" --json
 pdf-to-json-rag answer-query --query "What does this file cover?" --json
 pdf-to-json-rag release-check --json
@@ -147,9 +150,9 @@ pdf-to-json-rag answer-query --query "What does this file cover?" --format json
 
 `layout-sanity-check` returns compact overview, type, purpose, audience, and confidence answers for each unfamiliar PDF in addition to structure/layout confidence, semantic confidence, and smoke-style checks.
 
-`inspect-document --json` now also exposes processing-layer details such as `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, `extraction_summary.layout_signal_counts`, and per-section `section_role` / `source_block_roles`.
+`inspect-document --json` now also exposes compact `processing_diagnostics` plus processing-layer details such as `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, `extraction_summary.layout_signal_counts`, and per-section `section_role` / `source_block_roles`. Processing taxonomy codes include `native_text_low`, `ocr_required`, `weak_sections`, `table_or_form_heavy`, `layout_uncertain`, and `low_text_coverage`.
 
-`answer-query --json`, `run-workflow --json`, and `smoke-check --json` now include compact `retrieval_contract`, `document_synthesis`, `claim_alignment`, and answer `contract_health` blocks so both the retrieval path and the answer-time support scope are explicit. `run-workflow --json` and `smoke-check --json` also return `quality_profile` with processing quality, semantic confidence, retrieval readiness, and answer-trust status.
+`answer-query --json`, `run-workflow --json`, and `smoke-check --json` include compact `retrieval_contract`, `document_synthesis`, `claim_alignment`, `contract_health`, `retrieval_contract_status`, `support_coverage`, and `answer_source_mix` blocks so both the retrieval path and answer support sources are explicit. `run-workflow --json` and `smoke-check --json` are compact by default and return `processing_diagnostics` plus `quality_profile_summary`; add `--verbose` for the full workflow `quality_profile`, artifacts, and debug payload. Weak or unsupported claims move answer trust to `review`; document-level metadata claims can be supported by `support_trace`.
 
 ```bash
 pdf-to-json-rag corpus-sanity-check --profile quick --json
@@ -157,13 +160,15 @@ pdf-to-json-rag corpus-sanity-check --profile quick --json
 
 `corpus-sanity-check` samples the repo-local `pdf/` corpus through `pdf/lcwa_gov_pdf_metadata.csv`, runs isolated workflow checks on the sampled PDFs, and returns aggregate rates, deterministic `sample_manifest` bucket/checksum data, bucket-level diagnostics, follow-up actions with concrete failure examples, a saved snapshot path, a corpus contract gate, and a corpus architecture gate over `processing`, `semantics`, and `trust`. Use `--profile quick|balanced|stress` or the equivalent `--sample-profile` to control cost; `--sample-size` still overrides the profile when needed.
 
+`corpus-profile-compare --json` compares saved `corpus-sanity-check` profile snapshots such as quick vs balanced without reprocessing PDFs. It supports aliases such as `quick-latest`, reports metric deltas, sample checksum changes, regression metrics, and a compact `corpus_diff_summary` with pass/fail/skip checks.
+
 `evaluate-mvp --json` now also returns `layer_summary`, `layer_stability`, `architecture_gates`, and sampled faithfulness `contract_validation` blocks so you can separate `processing`, `retrieval`, and `answer_faithfulness` health from the broader benchmark summary and still get an explicit gate decision.
 
 `compare-runtime-modes --json` writes `data/eval/runtime_mode_comparison.json` and compares the same cases across `baseline`, `sentence-transformers`, `cross-encoder`, and `llm-synthesis`. Add `--all-cases` to run the full evaluation suite. Optional models remain offline-safe: if a model or `PDF_TO_JSON_RAG_LLM_COMMAND` is not locally available, the report shows the effective fallback/runtime state instead of treating it as a hidden success.
 
-`runtime-check --json` reports install context, the requested embedding backend, effective backend/model, local sentence-transformer availability, fallback reason, runtime decision, cross-encoder opt-in state, and LLM synthesis opt-in state.
+`runtime-check --json` reports install context, the requested embedding backend, effective backend/model, local sentence-transformer availability, fallback reason, runtime decision, cross-encoder opt-in state, LLM synthesis opt-in state, and a unified `backend_policy` that keeps `hash` as default.
 
-`runtime-promotion-report --json` summarizes the latest saved `runtime_mode_comparison.json` without rerunning the benchmark. When the full-suite sentence-transformer gate is green, it also writes `data/eval/runtime_promotion_snapshot.json`. The comparison includes `promotion_gates.sentence-transformers`, which blocks promotion unless the sentence-transformer backend is active and does not regress pass count, recall, MRR, or warning count relative to baseline.
+`runtime-promotion-report --json` summarizes the latest saved `runtime_mode_comparison.json` without rerunning the benchmark. When the full-suite sentence-transformer gate is green, it also writes `data/eval/runtime_promotion_snapshot.json`. The output includes `default_decision`, which keeps sentence-transformers recommended opt-in only and keeps cross-encoder/LLM paths out of the default.
 
 `build-index --json`, `run-workflow --json`, and `smoke-check --json` include an `index.embedding` block with requested backend, effective backend/model, fallback reason, and runtime-check diagnostics.
 
@@ -171,4 +176,4 @@ pdf-to-json-rag corpus-sanity-check --profile quick --json
 
 `readme-smoke-check --json` builds and installs the package into a temporary environment, then replays the public README flow: `init`, `doctor`, `create-demo-pdf`, `smoke-check`, and `runtime-check`. It intentionally excludes maintainer benchmark regressions.
 
-`public-beta-check --json` aggregates the installed README flow, runtime default decision, local corpus quick gate, and compact release summary into one pre-tag gate. It reports `hash` as the default backend and keeps sentence-transformers, cross-encoder, and LLM synthesis as opt-in scopes.
+`public-beta-check --json` aggregates the installed README flow, public-smoke quality summary, runtime default decision, local corpus quick gate, and compact release summary into one pre-tag gate. It reports `hash` as the default backend and keeps sentence-transformers, cross-encoder, and LLM synthesis as opt-in scopes.

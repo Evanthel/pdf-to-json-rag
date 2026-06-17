@@ -26,7 +26,7 @@ Internal development iterations in this repo use `v1.x` labels. Public releases 
 
 Current package metadata version: `0.1.0`
 
-Current internal milestone: `v1.48.0`
+Current internal milestone: `v1.99.0`
 
 The public release label is `0.1.0-beta`; package metadata remains PEP440-compatible `0.1.0` until the first non-beta public cut.
 
@@ -76,17 +76,25 @@ The current baseline includes:
 - strict local JSON/fence parsing for opt-in LLM outputs and judge diagnostics
 - an LLM-as-judge faithfulness prompt contract with opt-in local-command JSON judging
 - answer-claim/evidence alignment status in answer traces and faithfulness audit records
+- document-level claim alignment now uses support-trace fragments as evidence for metadata claims
 - provider abstraction over the current env-command prompt runtime
 - prompt/eval contract validation for sampled faithfulness gates
 - optional low-confidence semantic multipass behind an env flag, with no default-path change
 - a shared `document_synthesis` handoff so document selection, support scope, and answer chunks stay aligned
-- compact answer `contract_health` and workflow `quality_profile` blocks for unknown-PDF processing, retrieval readiness, and answer trust
+- compact answer `contract_health` and workflow `quality_profile` blocks for unknown-PDF processing drilldown, retrieval readiness reasons, and answer trust
+- explicit quality-profile thresholds and public-smoke quality summary in `public-beta-check`
+- `quality_profile.overall_status` and `recommended_next_action` for random-PDF UX
+- compact `processing_diagnostics` with failure taxonomy for extraction/layout/chunking issues
+- retrieval/synthesis contract status with support coverage and answer source mix
 - a layer-aware evaluation report that separates processing, retrieval, and answer-faithfulness signals
 - layer-stability and architecture-gate summaries on top of the layer-aware evaluation report
 - corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
 - bucket-level corpus diagnostics and follow-up actions for unknown-document sanity checks
 - corpus sample profiles, deterministic sample manifests, saved corpus snapshots, and a contract gate for bucket diagnostics
-- compact default JSON output with richer debug state behind `--verbose`
+- saved corpus snapshot comparison through `corpus-profile-compare`
+- compact corpus snapshots and saved snapshot comparison without reprocessing PDFs
+- compact default workflow JSON output with richer debug state behind `--verbose`
+- explicit backend policy: `hash` default, sentence-transformers recommended opt-in, cross-encoder experimental, LLM synthesis opt-in only
 - compact `release-check --json` summaries, with full release payloads behind `--verbose`
 - deterministic local embeddings by default, with optional `sentence-transformers` or `auto` backend selection
 
@@ -217,6 +225,7 @@ pdf-to-json-rag release-check --json
 pdf-to-json-rag release-check --json --verbose
 pdf-to-json-rag readme-smoke-check --json
 pdf-to-json-rag public-beta-check --json
+pdf-to-json-rag corpus-profile-compare --baseline-profile quick --candidate-profile balanced --json
 ```
 
 `release-check --json` returns a compact pass/fail/skip summary. Add `--verbose` when you need the full maintainer payload with doctor details, package tails, shard results, and corpus diagnostics.
@@ -235,7 +244,7 @@ pdf-to-json-rag runtime-check --json
 
 Maintainers can run the same installed README flow in one command with `pdf-to-json-rag readme-smoke-check --json`. It validates the public installed path only; use `release-check` for benchmark regressions.
 
-For one aggregated pre-tag gate, use `pdf-to-json-rag public-beta-check --json`. It combines the installed README flow, runtime default decision, corpus quick gate, and compact release summary while keeping `hash` as the default backend.
+For one aggregated pre-tag gate, use `pdf-to-json-rag public-beta-check --json`. It combines the installed README flow, public-smoke quality summary, runtime default decision, corpus quick gate, and compact release summary while keeping `hash` as the default backend.
 
 Local sanity check for unfamiliar PDFs:
 
@@ -253,11 +262,11 @@ pdf-to-json-rag corpus-sanity-check --profile quick --json
 
 That local-only corpus path now reports both `technical_all_pass` and `semantic_all_pass`, plus rates for specific document typing, specific purpose inference, low-confidence classifications, trust-limited results, and a compact corpus architecture gate over `processing`, `semantics`, and `trust`.
 
-It also returns a deterministic `sample_manifest` with the bucket round-robin algorithm, selected bucket counts, selected digests, and a checksum for the sampled set.
+It also returns a deterministic `sample_manifest` with the bucket round-robin algorithm, selected bucket counts, selected digests, and a checksum for the sampled set. Saved compact profile snapshots can be compared later with `corpus-profile-compare` without reprocessing PDFs.
 
-When you want to inspect the new processing layer on one extracted document, `inspect-document --json` now includes `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, `extraction_summary.layout_signal_counts`, and per-section `section_role` / `source_block_roles`.
+When you want to inspect the new processing layer on one extracted document, `inspect-document --json` now includes compact `processing_diagnostics`, `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, `extraction_summary.layout_signal_counts`, and per-section `section_role` / `source_block_roles`. Processing diagnostics use taxonomy codes such as `native_text_low`, `ocr_required`, `weak_sections`, `table_or_form_heavy`, `layout_uncertain`, and `low_text_coverage`.
 
-Document-level answer traces now also include compact `retrieval_contract`, `document_synthesis`, and `contract_health` blocks so you can see both the retrieval path and how the answer path narrowed support to selected documents and chunks. `run-workflow` and `smoke-check` also return a `quality_profile` with processing quality, semantic confidence, retrieval readiness, and answer-trust status.
+Document-level answer traces now include compact `retrieval_contract`, `document_synthesis`, `contract_health`, `retrieval_contract_status`, `support_coverage`, and `answer_source_mix` blocks. Default `run-workflow --json` and `smoke-check --json` return compact public payloads with `quality_profile_summary`; use `--verbose` for the full debug payload. Weak or unsupported claims move answer trust to `review`; document-level metadata claims can be supported by `support_trace`.
 
 When you are validating new local code in a source checkout before reinstalling the package, prefer:
 

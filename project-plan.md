@@ -53,7 +53,7 @@ The first working version stayed local-first and deliberately narrow:
 
 Current public version: `0.1.0-beta`
 Current package metadata version: `0.1.0`
-Current internal implementation level: `v1.48.0`
+Current internal implementation level: `v1.99.0`
 
 `0.1.0-beta` is the public release label. The package version remains PEP440-compatible `0.1.0` until the beta checkpoint is cut as a formal package release.
 
@@ -104,11 +104,19 @@ What the repo now has:
 - prompt/eval contract validation for sampled faithfulness gates
 - optional low-confidence semantic multipass behind `PDF_TO_JSON_RAG_SEMANTIC_MULTIPASS=1`
 - a shared `document_synthesis` handoff for selection strategy, support scope, and answer chunks
-- answer `contract_health` and workflow `quality_profile` blocks for unknown-PDF processing quality, semantic confidence, retrieval readiness, and answer trust
+- answer `contract_health` and workflow `quality_profile` blocks for unknown-PDF processing drilldown, semantic confidence, retrieval readiness reasons, and answer trust
+- document-level claim alignment using support-trace fragments for metadata claims
+- explicit quality-profile thresholds and public-smoke quality summary in `public-beta-check`
+- `quality_profile.overall_status` and `recommended_next_action` as the user-facing random-PDF contract
+- compact processing failure taxonomy in `processing_diagnostics`
+- retrieval/synthesis contract status, support coverage, and answer source mix
 - a layer-aware evaluation summary for `processing`, `retrieval`, and `answer_faithfulness`
 - layer-stability and architecture-gate summaries that turn those layers into explicit evaluation gates
 - corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
 - deterministic corpus sampling manifests for quick/balanced/stress unknown-PDF sanity checks
+- compact corpus snapshots and saved profile comparison without reprocessing PDFs
+- compact public workflow payloads by default, with full debug payloads behind `--verbose`
+- explicit backend policy that keeps `hash` as default and keeps cross-encoder/LLM paths opt-in
 - compact release-check summaries with full maintainer payloads behind `--verbose`
 
 Current validation snapshot:
@@ -305,6 +313,45 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
   - added answer `contract_health` for retrieval path, support scope, selected docs, support docs, and claim-alignment presence
   - added workflow `quality_profile` so random-PDF runs expose processing quality, semantic confidence, retrieval readiness, and answer-trust status
   - extended smoke checks to assert the presence of contract health and quality profile blocks
+- `v1.49.0-v1.53.0`
+  - expanded workflow `quality_profile` with processing drilldown over extraction summary, OCR/native path, sections, chunks, and table/form signals
+  - added retrieval readiness reasons so warn/fail states point to missing support scope, docs, or support payloads
+  - tightened answer trust so weak or unsupported claims produce `review` instead of `pass`
+  - added `corpus-profile-compare` for saved quick/balanced/stress snapshot comparison without reprocessing PDFs
+- `v1.54.0-v1.58.0`
+  - aligned document-level claim scoring with `support_trace` so metadata claims can be supported by document semantics
+  - added explicit quality-profile thresholds for processing, semantics, retrieval readiness, and answer trust
+  - surfaced public-smoke quality summary inside `public-beta-check`
+  - verified the public demo path now reaches `answer_trust=pass` when support-trace metadata backs the answer
+- `v1.59.0-v1.63.0`
+  - promoted `quality_profile` into the central UX contract with `overall_status`, `statuses`, `reasons`, and `recommended_next_action`
+  - normalized follow-up actions for pass, processing failure, semantic failure, retrieval review, and claim-alignment review
+  - added tests for pass and low-signal quality profiles so random-PDF results do not require reading the full payload
+- `v1.64.0-v1.68.0`
+  - added compact `processing_diagnostics` to `inspect-document`, `run-workflow`, and `smoke-check`
+  - added processing taxonomy: `native_text_low`, `ocr_required`, `weak_sections`, `table_or_form_heavy`, `layout_uncertain`, `low_text_coverage`
+  - separated `technical_processed` from `structurally_reliable`
+  - added scan-like, form-like, and table-like taxonomy tests
+- `v1.69.0-v1.73.0`
+  - added `retrieval_contract_status`, `support_coverage`, and `answer_source_mix`
+  - connected retrieval contract consistency into `quality_profile.retrieval_readiness`
+  - added mismatch tests for candidate/selected/support/chunk document contracts
+- `v1.74.0-v1.78.0`
+  - added compact corpus sanity snapshots next to ignored full snapshots
+  - added `quick-latest` / `balanced-latest` style snapshot aliases
+  - added `corpus_diff_summary` for pass/fail/skip corpus comparison checks
+- `v1.79.0-v1.83.0`
+  - made `smoke-check --json` and `run-workflow --json` compact by default
+  - kept full workflow diagnostics behind `--verbose`
+  - added explicit `--compact` payload flag
+- `v1.84.0-v1.88.0`
+  - added a unified runtime `backend_policy`
+  - clarified `runtime-promotion-report.default_decision`
+  - kept cross-encoder experimental and LLM synthesis opt-in only
+- `v1.89.0-v1.93.0`
+  - consolidated docs around the public beta path and moved sprint detail into this plan/log
+- `v1.94.0-v1.99.0`
+  - beta-freeze validation scope: tests, package/runtime/release checks, compact workflow smoke, and corpus snapshot comparison
 
 
 ### 6.2. Next Steps
@@ -312,7 +359,7 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
 1. Keep the public beta path stable: install, init, doctor, demo PDF, smoke-check, runtime-check.
 2. Use `public-beta-check --json` before tagging; use `release-check --json --verbose` only when full maintainer detail is needed.
 3. Keep `hash` as the default backend while treating sentence-transformers as the recommended opt-in backend.
-4. Expand corpus sanity only through deterministic sample profiles and compact manifests, not by tracking local PDFs or generated indexes.
+4. Expand corpus sanity only through deterministic sample profiles, compact manifests, and saved snapshot comparisons, not by tracking local PDFs or generated indexes.
 5. Keep learned components opt-in until they beat the simpler baseline on clear failure patterns.
 
 ## 7. Explicitly Deferred

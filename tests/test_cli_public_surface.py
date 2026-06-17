@@ -128,6 +128,12 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(embedding["effective_backend"], "hash-fallback")
         self.assertEqual(decision["default_backend"], "hash")
         self.assertIn("sentence-transformer", decision["not_default_reason"])
+        self.assertEqual(decision["backend_policy"]["default_backend"]["name"], "hash")
+        self.assertEqual(
+            decision["backend_policy"]["experimental_backends"][0]["status"],
+            "experimental_opt_in",
+        )
+        self.assertFalse(decision["backend_policy"]["llm_synthesis"]["default_enabled"])
         self.assertEqual(payload["result"]["default_policy"]["llm_synthesis"], "opt_in")
 
     def test_runtime_check_reports_sentence_transformer_env_request(self) -> None:
@@ -198,6 +204,12 @@ class CliPublicSurfaceTests(unittest.TestCase):
         snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
         self.assertEqual(snapshot["candidate_mode"], "sentence-transformers")
         self.assertFalse(snapshot["recommended_default_change"])
+        self.assertEqual(payload["result"]["default_decision"]["default_backend"], "hash")
+        self.assertEqual(
+            payload["result"]["default_decision"]["recommended_opt_in_backend"],
+            "sentence-transformers",
+        )
+        self.assertEqual(payload["result"]["default_decision"]["cross_encoder"], "experimental_opt_in_only")
 
     def test_corpus_sampling_manifest_is_deterministic(self) -> None:
         entries = [
@@ -312,7 +324,18 @@ class CliPublicSurfaceTests(unittest.TestCase):
                         }
                     },
                 },
-                "public_surface": {"all_pass": True, "smoke": {"smoke_all_pass": True}},
+                "public_surface": {
+                    "all_pass": True,
+                    "smoke": {
+                        "smoke_all_pass": True,
+                        "quality_profile_summary": {
+                            "available": True,
+                            "overall_status": "pass",
+                            "statuses": {"answer_trust": "pass"},
+                            "reasons": [],
+                        },
+                    },
+                },
                 "maintainer_checks": {
                     "available": True,
                     "all_pass": True,
@@ -355,6 +378,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(gate_statuses["runtime_default_policy"], "pass")
         self.assertEqual(payload["runtime_decision"]["default_backend"], "hash")
         self.assertEqual(payload["scope"]["sentence_transformers"], "recommended_opt_in_only")
+        self.assertEqual(payload["public_smoke_quality"]["overall_status"], "pass")
 
     def test_answer_contract_health_and_quality_profile_are_readable(self) -> None:
         trace = {
@@ -376,6 +400,13 @@ class CliPublicSurfaceTests(unittest.TestCase):
                     "layout_confidence": 0.75,
                     "semantic_confidence": 0.9,
                     "semantic_confidence_label": "high",
+                    "section_count": 1,
+                    "extraction_summary": {
+                        "native_blocks": 2,
+                        "pages_requiring_ocr": 0,
+                        "pages_processed_with_ocr": 0,
+                        "ocr_used": False,
+                    },
                 },
                 "index": {"chunk_count": 1},
                 "answer": {
@@ -388,9 +419,296 @@ class CliPublicSurfaceTests(unittest.TestCase):
 
         self.assertTrue(health["all_pass"])
         self.assertEqual(health["retrieval_path"], "document_understanding")
+        self.assertEqual(health["retrieval_contract_status"]["status"], "pass")
+        self.assertEqual(health["support_coverage"]["claim_count"], 0)
+        self.assertTrue(health["answer_source_mix"]["document_semantics"]["present"])
         self.assertEqual(profile["processing_quality"]["status"], "pass")
+        self.assertEqual(profile["overall_status"], "pass")
+        self.assertEqual(profile["recommended_next_action"], "none")
         self.assertEqual(profile["semantic_confidence"]["classification_status"], "well_supported")
         self.assertEqual(profile["retrieval_readiness"]["support_doc_ids"], ["demo"])
+        self.assertEqual(profile["retrieval_readiness"]["retrieval_contract_status"]["status"], "pass")
+        self.assertTrue(profile["retrieval_readiness"]["answer_source_mix"]["support_trace"]["present"])
+        self.assertEqual(profile["answer_trust"]["status"], "pass")
+        self.assertEqual(profile["processing_quality"]["drilldown"]["text_extraction_coverage"], None)
+        summary = cli_module._quality_profile_summary(profile)
+        self.assertEqual(summary["overall_status"], "pass")
+        self.assertEqual(summary["recommended_next_action"], "none")
+
+    def test_retrieval_contract_status_warns_on_support_mismatch(self) -> None:
+        trace = {
+            "answer_mode": "document_overview",
+            "candidate_doc_ids": ["alpha"],
+            "retrieval_contract": {"retrieval_path": "document_understanding"},
+            "document_selection": {"selected_doc_ids": ["alpha"], "candidate_doc_ids": ["alpha"]},
+            "document_synthesis": {
+                "support_scope": "selected_docs",
+                "support_doc_ids": ["beta"],
+                "answer_chunk_doc_ids": ["gamma"],
+            },
+            "answer_contract": {"primary_doc_ids": ["alpha"]},
+            "claim_alignment": {
+                "claim_count": 1,
+                "supported_claim_count": 0,
+                "weak_claim_count": 1,
+                "unsupported_claim_count": 0,
+                "supported_claim_ratio": 0.0,
+                "alignment_status": "pass",
+                "claims": [
+                    {
+                        "claim": "Alpha covers safety.",
+                        "status": "weak",
+                        "score": 0.5,
+                        "chunk_id": None,
+                        "support_preview": "document type: guidance note",
+                    }
+                ],
+            },
+            "support_trace": [{"doc_id": "beta", "support_fragments": ["document type: guidance note"]}],
+        }
+
+        status = cli_module._retrieval_contract_status(trace)
+        coverage = cli_module._support_coverage(trace)
+        mix = cli_module._answer_source_mix(trace)
+
+        self.assertEqual(status["status"], "warn")
+        self.assertIn("support_docs_match_selection", status["reasons"])
+        self.assertIn("answer_chunks_match_support_docs", status["reasons"])
+        self.assertEqual(coverage["weak_claim_count"], 1)
+        self.assertEqual(coverage["document_semantics_claim_count"], 1)
+        self.assertTrue(mix["document_semantics"]["present"])
+
+    def test_answer_trust_reviews_weak_or_unsupported_claims(self) -> None:
+        trace = {
+            "answer_mode": "document_overview",
+            "retrieval_contract": {"retrieval_path": "document_understanding"},
+            "document_synthesis": {"support_scope": "selected_docs", "support_doc_ids": ["demo"]},
+            "answer_contract": {"primary_doc_ids": ["demo"]},
+            "claim_alignment": {
+                "claim_count": 2,
+                "supported_claim_count": 1,
+                "weak_claim_count": 1,
+                "unsupported_claim_count": 0,
+                "supported_claim_ratio": 0.5,
+                "alignment_status": "needs_review",
+            },
+            "support_trace": [{"doc_id": "demo"}],
+        }
+        health = cli_module._answer_contract_health(trace)
+        profile = cli_module._workflow_quality_profile(
+            {
+                "document": {
+                    "document_type": "guidance_note",
+                    "document_purpose": "procedural_guidance",
+                    "inventory_summary": "Demo guide",
+                    "structure_confidence": 0.8,
+                    "layout_confidence": 0.75,
+                    "semantic_confidence": 0.9,
+                    "semantic_confidence_label": "high",
+                    "section_count": 1,
+                    "extraction_summary": {"native_blocks": 2},
+                },
+                "index": {"chunk_count": 1},
+                "answer": {
+                    "answer": "Demo guide covers safety.",
+                    "answer_trace": trace,
+                    "contract_health": health,
+                },
+            }
+        )
+
+        self.assertEqual(profile["answer_trust"]["status"], "review")
+        self.assertEqual(profile["overall_status"], "review")
+        self.assertEqual(profile["recommended_next_action"], "review_claim_alignment")
+        self.assertIn("weak_claims_present", profile["answer_trust"]["reasons"])
+
+    def test_quality_profile_recommends_processing_follow_up_on_low_signal_payload(self) -> None:
+        profile = cli_module._workflow_quality_profile(
+            {
+                "document": {
+                    "document_type": "",
+                    "document_purpose": "",
+                    "inventory_summary": "",
+                    "structure_confidence": None,
+                    "layout_confidence": None,
+                    "semantic_confidence": None,
+                    "extraction_summary": {},
+                },
+                "index": {"chunk_count": 0},
+                "answer": {
+                    "answer": "",
+                    "answer_trace": {},
+                    "contract_health": {},
+                },
+            }
+        )
+
+        self.assertEqual(profile["overall_status"], "fail")
+        self.assertEqual(profile["processing_quality"]["status"], "fail")
+        self.assertEqual(profile["recommended_next_action"], "inspect_document_or_try_ocr")
+        self.assertIn("chunks_created", profile["processing_quality"]["reasons"])
+
+    def test_processing_diagnostics_classifies_scan_form_and_table_payloads(self) -> None:
+        scan = cli_module._processing_diagnostics(
+            {
+                "page_count": 2,
+                "section_count": 1,
+                "structure_confidence": 0.72,
+                "layout_confidence": 0.7,
+                "extraction_summary": {
+                    "native_blocks": 0,
+                    "ocr_used": True,
+                    "pages_requiring_ocr": 2,
+                    "pages_processed_with_ocr": 2,
+                },
+            },
+            {"chunk_count": 1},
+        )
+        form = cli_module._processing_diagnostics(
+            {
+                "page_count": 1,
+                "section_count": 2,
+                "structure_confidence": 0.8,
+                "layout_confidence": 0.76,
+                "extraction_summary": {
+                    "native_blocks": 8,
+                    "block_role_counts": {"form_field": 3, "key_value": 2},
+                },
+            },
+            {"chunk_count": 2},
+        )
+        table = cli_module._processing_diagnostics(
+            {
+                "page_count": 1,
+                "section_count": 1,
+                "structure_confidence": 0.78,
+                "layout_confidence": 0.62,
+                "extraction_summary": {
+                    "native_blocks": 6,
+                    "block_role_counts": {"table_like": 3},
+                    "layout_signal_counts": {"table_like": 2},
+                },
+            },
+            {"chunk_count": 2},
+        )
+
+        self.assertIn("native_text_low", scan["taxonomy"])
+        self.assertIn("ocr_required", scan["taxonomy"])
+        self.assertIn("low_text_coverage", scan["taxonomy"])
+        self.assertTrue(scan["technical_processed"])
+        self.assertFalse(scan["structurally_reliable"])
+        self.assertEqual(scan["status"], "review")
+        self.assertEqual(form["taxonomy"], ["table_or_form_heavy"])
+        self.assertEqual(form["status"], "warn")
+        self.assertTrue(form["structurally_reliable"])
+        self.assertIn("table_or_form_heavy", table["taxonomy"])
+        self.assertEqual(table["status"], "warn")
+
+    def test_corpus_profile_compare_reports_snapshot_deltas(self) -> None:
+        baseline_path = self.workspace / "quick.json"
+        candidate_path = self.workspace / "balanced.json"
+        baseline_path.write_text(
+            json.dumps(
+                {
+                    "sample_profile": "quick",
+                    "sample_size": 4,
+                    "sample_manifest": {"selected_digest_checksum": "aaa"},
+                    "summary": {
+                        "technical_pass_rate": 1.0,
+                        "semantic_pass_rate": 0.75,
+                        "avg_structure_confidence": 0.7,
+                        "avg_layout_confidence": 0.7,
+                        "avg_semantic_confidence": 0.8,
+                        "specific_document_rate": 0.75,
+                        "specific_purpose_rate": 0.75,
+                        "low_confidence_rate": 0.25,
+                        "trust_limited_rate": 0.0,
+                    },
+                    "architecture_gates": {"all_pass": True},
+                    "follow_up_actions": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        candidate_path.write_text(
+            json.dumps(
+                {
+                    "sample_profile": "balanced",
+                    "sample_size": 12,
+                    "sample_manifest": {"selected_digest_checksum": "bbb"},
+                    "summary": {
+                        "technical_pass_rate": 1.0,
+                        "semantic_pass_rate": 1.0,
+                        "avg_structure_confidence": 0.72,
+                        "avg_layout_confidence": 0.71,
+                        "avg_semantic_confidence": 0.85,
+                        "specific_document_rate": 1.0,
+                        "specific_purpose_rate": 1.0,
+                        "low_confidence_rate": 0.0,
+                        "trust_limited_rate": 0.0,
+                    },
+                    "architecture_gates": {"all_pass": True},
+                    "follow_up_actions": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        payload = cli_module._corpus_profile_compare_payload(
+            baseline_path=baseline_path,
+            candidate_path=candidate_path,
+        )
+
+        self.assertTrue(payload["available"])
+        self.assertTrue(payload["all_pass"])
+        self.assertTrue(payload["sample_changed"])
+        self.assertEqual(payload["deltas"]["semantic_pass_rate"], 0.25)
+        self.assertEqual(payload["regressions"], [])
+        self.assertTrue(payload["corpus_diff_summary"]["all_pass"])
+        checksum_check = {
+            item["name"]: item["status"]
+            for item in payload["corpus_diff_summary"]["checks"]
+        }
+        self.assertEqual(checksum_check["sample_checksum"], "skip")
+
+    def test_corpus_snapshot_aliases_and_compact_write_do_not_require_reprocessing(self) -> None:
+        payload = {
+            "sample_profile": "quick",
+            "sample_size": 2,
+            "sample_manifest": {"selected_digest_checksum": "abc"},
+            "summary": {
+                "technical_pass_rate": 1.0,
+                "semantic_pass_rate": 1.0,
+                "avg_structure_confidence": 0.8,
+                "avg_layout_confidence": 0.8,
+                "avg_semantic_confidence": 0.9,
+                "specific_document_rate": 1.0,
+                "specific_purpose_rate": 1.0,
+                "low_confidence_rate": 0.0,
+                "trust_limited_rate": 0.0,
+            },
+            "bucket_diagnostics": {"short_doc": {"sample_count": 2}},
+            "architecture_gates": {"all_pass": True},
+            "corpus_contract": {"all_pass": True},
+            "follow_up_actions": [],
+            "results": [{"large": "ignored in compact snapshot"}],
+        }
+        original_data_eval = cli_module.PATHS.data_eval
+        object.__setattr__(cli_module.PATHS, "data_eval", self.workspace)
+        try:
+            snapshot_path = cli_module._write_corpus_sanity_snapshot(payload)
+            latest_path = cli_module._corpus_snapshot_path_for_profile("latest")
+            quick_latest_path = cli_module._corpus_snapshot_path_for_profile("quick-latest")
+            compact_path = self.workspace / "corpus_sanity_quick_compact_snapshot.json"
+        finally:
+            object.__setattr__(cli_module.PATHS, "data_eval", original_data_eval)
+
+        self.assertEqual(snapshot_path, self.workspace / "corpus_sanity_snapshot.json")
+        self.assertEqual(latest_path, self.workspace / "corpus_sanity_snapshot.json")
+        self.assertEqual(quick_latest_path, self.workspace / "corpus_sanity_quick_snapshot.json")
+        compact = json.loads(compact_path.read_text(encoding="utf-8"))
+        self.assertNotIn("results", compact)
+        self.assertEqual(compact["sample_manifest"]["selected_digest_checksum"], "abc")
 
     def test_create_demo_pdf_json(self) -> None:
         self._run("init", "--json")
@@ -474,9 +792,13 @@ class CliPublicSurfaceTests(unittest.TestCase):
         result = payload["result"]
         self.assertTrue(result["all_pass"])
         self.assertTrue(result["document"]["inventory_summary"])
+        self.assertIn("processing_diagnostics", result)
+        self.assertTrue(result["processing_diagnostics"]["technical_processed"])
         self.assertEqual(result["index"]["embedding"]["requested_backend"], "hash")
         self.assertEqual(result["index"]["embedding"]["effective_backend"], "hash-fallback")
         self.assertTrue(result["answer"]["answer"])
+        self.assertIn("quality_profile_summary", result)
+        self.assertNotIn("quality_profile", result)
         written = json.loads(output_path.read_text(encoding="utf-8"))
         self.assertEqual(written["command"], "smoke-check")
         self.assertTrue(written["result"]["all_pass"])
@@ -515,6 +837,9 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIn("text_source_counts", inspect_payload["result"]["extraction_summary"])
         self.assertIn("layout_signal_counts", inspect_payload["result"]["extraction_summary"])
         self.assertIn("table_probe", inspect_payload["result"]["extraction_summary"])
+        self.assertIn("processing_diagnostics", inspect_payload["result"])
+        self.assertFalse(inspect_payload["result"]["processing_diagnostics"]["technical_processed"])
+        self.assertIn("low_text_coverage", inspect_payload["result"]["processing_diagnostics"]["taxonomy"])
         self.assertIn("section_role", inspect_payload["result"]["sections"][0])
         self.assertIn("layout_signals", inspect_payload["result"]["sections"][0])
         self.assertIn("text_source_profile", inspect_payload["result"]["sections"][0])
@@ -535,6 +860,10 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIsNotNone(smoke_payload["result"]["document"]["structure_confidence"])
         self.assertIsNotNone(smoke_payload["result"]["document"]["layout_confidence"])
         self.assertIsNotNone(smoke_payload["result"]["document"]["semantic_confidence"])
+        self.assertEqual(
+            smoke_payload["result"]["quality_profile_summary"]["statuses"]["answer_trust"],
+            "pass",
+        )
 
         index_dir = self.data_dir / "index" / "workflow_smoke"
         answer = self._run(
@@ -597,6 +926,8 @@ class CliPublicSurfaceTests(unittest.TestCase):
             answer_payload["result"]["answer_trace"]["document_selection"],
         )
         support_trace = answer_payload["result"]["answer_trace"]["support_trace"]
+        alignment = answer_payload["result"]["answer_trace"]["claim_alignment"]
+        self.assertEqual(alignment["unsupported_claim_count"], 0)
         self.assertGreaterEqual(len(support_trace), 1)
         self.assertTrue(support_trace[0]["section_summaries"])
         self.assertTrue(support_trace[0]["section_paths"])

@@ -8,7 +8,7 @@ Internal development iterations in this file use `v1.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v1.48.0`
+Current implementation level: `v1.99.0`
 Current public version: `0.1.0-beta`
 Current package metadata version: `0.1.0`
 
@@ -48,7 +48,7 @@ Repo-local regression shards currently passing in saved runs or current mileston
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v1.48.0`:
+Broad benchmark note after `v1.99.0`:
 
 - the targeted maintainer shard set run in this milestone is green
 - the opt-in local-command LLM synthesis and LLM-as-judge paths are covered in unit tests while remaining disabled by default
@@ -65,6 +65,16 @@ Broad benchmark note after `v1.48.0`:
 - `public-beta-check --json` aggregates installed README smoke, runtime default decision, corpus quick gate, and compact release summary into one pre-tag check
 - workflow payloads now expose `quality_profile` for processing quality, semantic confidence, retrieval readiness, and answer trust
 - answer payloads now expose `contract_health` so retrieval path, support scope, selected docs, support docs, and claim-alignment presence are easy to gate
+- `quality_profile` now includes processing drilldown, retrieval readiness reasons, and stricter answer trust review status for weak or unsupported claims
+- `corpus-profile-compare` compares saved corpus profile snapshots without reprocessing PDFs
+- document-level claim alignment now includes support-trace fragments, so metadata claims can be supported by document semantics instead of only chunk text
+- `quality_profile` now carries explicit thresholds, and `public-beta-check` includes the public smoke quality summary
+- `quality_profile` now exposes `overall_status`, normalized `statuses`, aggregate `reasons`, and `recommended_next_action`
+- `processing_diagnostics` now exposes processing taxonomy, `technical_processed`, and `structurally_reliable`
+- answer payloads now expose `retrieval_contract_status`, `support_coverage`, and `answer_source_mix`
+- corpus sanity writes compact snapshots and compares them without reprocessing PDFs
+- workflow JSON is compact by default; full workflow diagnostics require `--verbose`
+- runtime policy is explicit: `hash` default, sentence-transformers recommended opt-in, cross-encoder experimental, and LLM synthesis opt-in only
 - current broad benchmark scope:
   - `Cases`: `77`
   - `Indexed sample documents`: `25`
@@ -542,6 +552,67 @@ Representative validation that has already been completed:
 - Added answer `contract_health` to make retrieval/synthesis support contracts directly gateable in public JSON.
 - Added workflow `quality_profile` so unknown PDFs report processing, semantic, retrieval, and answer-trust status.
 - Extended smoke checks and public-surface tests around these contract fields.
+
+### v1.49.0-v1.53.0
+
+- Expanded workflow `quality_profile` with processing drilldown from extraction summary, OCR/native path, section/chunk counts, and table/form signals.
+- Added retrieval readiness reasons so diagnostics say why a path is `warn` or `fail`.
+- Tightened answer trust: weak or unsupported claims now produce `review`, not `pass`.
+- Added `corpus-profile-compare` to compare saved quick/balanced/stress corpus snapshots without reprocessing PDFs.
+
+### v1.54.0-v1.58.0
+
+- Aligned document-level claim scoring with `support_trace`, so metadata claims such as audience/type/purpose can be supported by document semantics.
+- Added explicit `quality_profile` thresholds for processing, semantic confidence, retrieval readiness, and answer trust.
+- Surfaced public smoke quality summary inside `public-beta-check`.
+- Verified the public demo smoke path now reports `answer_trust=pass` when support-trace metadata backs the answer.
+
+### v1.59.0-v1.63.0
+
+- Promoted `quality_profile` into the main random-PDF UX contract with `overall_status`, `statuses`, `reasons`, and `recommended_next_action`.
+- Added normalized follow-up actions for processing failures, semantic failures, retrieval-contract review, and claim-alignment review.
+- Added public-surface tests for both pass and low-signal quality profiles.
+
+### v1.64.0-v1.68.0
+
+- Added compact `processing_diagnostics` to `inspect-document`, `run-workflow`, and `smoke-check`.
+- Added processing taxonomy for `native_text_low`, `ocr_required`, `weak_sections`, `table_or_form_heavy`, `layout_uncertain`, and `low_text_coverage`.
+- Split processing state into `technical_processed` and `structurally_reliable`.
+- Added scan-like, form-like, and table-like taxonomy tests.
+
+### v1.69.0-v1.73.0
+
+- Added `retrieval_contract_status`, `support_coverage`, and `answer_source_mix` to answer payloads.
+- Connected retrieval contract consistency to `quality_profile.retrieval_readiness`.
+- Added tests for support-document and answer-chunk mismatch diagnostics.
+
+### v1.74.0-v1.78.0
+
+- Added compact corpus sanity snapshots next to ignored full snapshots.
+- Added `quick-latest`, `balanced-latest`, `stress-latest`, and `latest` snapshot aliases.
+- Added `corpus_diff_summary` with pass/fail/skip checks for snapshot comparison.
+
+### v1.79.0-v1.83.0
+
+- Made workflow JSON compact by default for `smoke-check` and `run-workflow`.
+- Kept full workflow debug payloads behind `--verbose`.
+- Added an explicit `--compact` flag for public workflow payloads.
+
+### v1.84.0-v1.88.0
+
+- Added unified `backend_policy` to `runtime-check`.
+- Added `default_decision` to `runtime-promotion-report`.
+- Kept sentence-transformers opt-in, cross-encoder experimental, and LLM synthesis off by default.
+
+### v1.89.0-v1.93.0
+
+- Consolidated public docs around compact workflow output, backend policy, corpus snapshots, and beta validation.
+- Kept detailed sprint history in `DEVELOPMENT_LOG.md` and `project-plan.md`.
+
+### v1.94.0-v1.99.0
+
+- Beta freeze scope: no learned reranker/default LLM changes.
+- Final validation focuses on tests, package/runtime/release checks, compact workflow smoke, and corpus snapshot comparison.
 
 ### v0.1.1-v0.1.2
 

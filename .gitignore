@@ -54,6 +54,7 @@ data/index/*
 data/eval/mvp_eval_report.json
 data/eval/regression_report.json
 data/eval/corpus_sanity_snapshot.json
+data/eval/corpus_sanity_*_snapshot.json
 data/eval/runtime_mode_comparison.json
 # Keep data/eval/runtime_promotion_snapshot.json tracked as the compact promotion checkpoint.
 

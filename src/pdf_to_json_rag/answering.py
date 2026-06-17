@@ -3442,6 +3442,7 @@ def _finalize_answer_result(
     mode_answer: str | None,
     mode_trace: dict[str, object] | None,
 ) -> tuple[str, dict[str, object]]:
+    trace_source = mode_trace or None
     if _should_abstain(query, evidence) and not mode_answer:
         answer = NO_GROUNDED_ANSWER
         answer, synthesis_runtime = _grounded_synthesis_runtime(
@@ -3474,6 +3475,7 @@ def _finalize_answer_result(
         return answer, answer_trace
 
     structured_answer, structured_trace = _format_structured_answer(query_intent, evidence)
+    trace_source = mode_trace or structured_trace
     answer = mode_answer or structured_answer or _compress_sentences(evidence)
     answer, synthesis_runtime = _grounded_synthesis_runtime(
         query=query,
@@ -3486,12 +3488,18 @@ def _finalize_answer_result(
         evidence=evidence,
         runtime="local_command" if synthesis_runtime.get("invoked") else "not_invoked",
     )
+    support_context_fragments: list[object] = list(document_synthesis.answer_chunks)
+    if trace_source and trace_source.get("support_trace"):
+        for item in trace_source.get("support_trace", []):
+            if not isinstance(item, dict):
+                continue
+            support_context_fragments.extend(str(fragment) for fragment in item.get("support_fragments", [])[:12])
+            support_context_fragments.extend(str(sentence) for sentence in item.get("support_sentences", [])[:6])
     claim_alignment = align_answer_claims(
         answer=answer,
         evidence_fragments=evidence,
-        context_fragments=document_synthesis.answer_chunks,
+        context_fragments=support_context_fragments,
     )
-    trace_source = mode_trace or structured_trace
     answer_trace = _base_answer_trace(
         query=query,
         query_intent=query_intent,

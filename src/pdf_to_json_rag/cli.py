@@ -77,6 +77,7 @@ COMMAND_ALIASES = {
     "promotion-report": "runtime-promotion-report",
     "readme-smoke": "readme-smoke-check",
     "beta-check": "public-beta-check",
+    "corpus-compare": "corpus-profile-compare",
 }
 
 COMMAND_HELP: dict[str, dict[str, object]] = {
@@ -183,6 +184,10 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
     "corpus-sanity-check": {
         "summary": "Maintainer check: sample the local pdf/ corpus and run compact semantic sanity workflows on unfamiliar PDFs.",
         "example": "pdf-to-json-rag corpus-sanity-check --profile quick --json",
+    },
+    "corpus-profile-compare": {
+        "summary": "Compare saved local corpus sanity snapshots without reprocessing PDFs.",
+        "example": "pdf-to-json-rag corpus-profile-compare --baseline-profile quick --candidate-profile balanced --json",
     },
     "help": {
         "summary": "Show command summaries or detailed help for one command.",
@@ -429,6 +434,165 @@ def _compact_answer_trace(answer_trace: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if item]
+
+
+def _support_trace_doc_ids(support_trace: object) -> list[str]:
+    if not isinstance(support_trace, list):
+        return []
+    doc_ids: list[str] = []
+    for item in support_trace:
+        if isinstance(item, dict) and item.get("doc_id") and item.get("doc_id") != "__comparison__":
+            doc_ids.append(str(item["doc_id"]))
+    return list(dict.fromkeys(doc_ids))
+
+
+def _retrieval_contract_status(answer_trace: dict[str, object], *, evidence_count: int = 0) -> dict[str, object]:
+    retrieval_contract = answer_trace.get("retrieval_contract", {})
+    document_selection = answer_trace.get("document_selection", {})
+    document_synthesis = answer_trace.get("document_synthesis", {})
+    answer_contract = answer_trace.get("answer_contract", {})
+    support_trace = answer_trace.get("support_trace", [])
+    answer_mode = str(answer_trace.get("answer_mode") or "")
+    grounded_mode = answer_mode == "grounded_evidence"
+
+    candidate_doc_ids = _string_list(answer_trace.get("candidate_doc_ids"))
+    if isinstance(document_selection, dict):
+        candidate_doc_ids.extend(_string_list(document_selection.get("candidate_doc_ids")))
+    candidate_doc_ids = list(dict.fromkeys(candidate_doc_ids))
+
+    selected_doc_ids: list[str] = []
+    if isinstance(document_selection, dict):
+        selected_doc_ids.extend(_string_list(document_selection.get("selected_doc_ids")))
+    if isinstance(answer_contract, dict):
+        selected_doc_ids.extend(_string_list(answer_contract.get("primary_doc_ids")))
+    selected_doc_ids = list(dict.fromkeys(selected_doc_ids))
+
+    support_doc_ids: list[str] = []
+    answer_chunk_doc_ids: list[str] = []
+    if isinstance(document_synthesis, dict):
+        support_doc_ids.extend(_string_list(document_synthesis.get("support_doc_ids")))
+        answer_chunk_doc_ids.extend(_string_list(document_synthesis.get("answer_chunk_doc_ids")))
+    support_doc_ids.extend(_support_trace_doc_ids(support_trace))
+    support_doc_ids = list(dict.fromkeys(support_doc_ids))
+    answer_chunk_doc_ids = list(dict.fromkeys(answer_chunk_doc_ids))
+
+    support_scope = document_synthesis.get("support_scope") if isinstance(document_synthesis, dict) else None
+    retrieval_path = retrieval_contract.get("retrieval_path") if isinstance(retrieval_contract, dict) else None
+    support_available = bool(evidence_count) if grounded_mode else bool(support_doc_ids)
+    allowed_support_docs = set(selected_doc_ids or candidate_doc_ids)
+    support_subset_ok = not support_doc_ids or not allowed_support_docs or set(support_doc_ids).issubset(allowed_support_docs)
+    chunk_subset_ok = not answer_chunk_doc_ids or not support_doc_ids or set(answer_chunk_doc_ids).issubset(set(support_doc_ids))
+    selected_from_candidates_ok = (
+        not selected_doc_ids
+        or not candidate_doc_ids
+        or set(selected_doc_ids).issubset(set(candidate_doc_ids))
+    )
+    checks = [
+        {"name": "retrieval_contract_present", "passed": bool(retrieval_contract)},
+        {"name": "retrieval_path_present", "passed": bool(retrieval_path)},
+        {"name": "candidate_docs_present", "passed": bool(candidate_doc_ids or selected_doc_ids) or grounded_mode},
+        {"name": "selected_docs_present", "passed": bool(selected_doc_ids) or grounded_mode},
+        {"name": "support_scope_present", "passed": bool(support_scope) or grounded_mode},
+        {"name": "support_available", "passed": support_available},
+        {"name": "selected_docs_from_candidates", "passed": selected_from_candidates_ok},
+        {"name": "support_docs_match_selection", "passed": support_subset_ok},
+        {"name": "answer_chunks_match_support_docs", "passed": chunk_subset_ok},
+    ]
+    failed = _failed_check_reasons(checks)
+    if not retrieval_contract:
+        status = "fail"
+    elif failed:
+        status = "warn"
+    else:
+        status = "pass"
+    return {
+        "status": status,
+        "checks": checks,
+        "reasons": failed,
+        "retrieval_path": retrieval_path,
+        "support_scope": support_scope,
+        "candidate_doc_ids": candidate_doc_ids,
+        "selected_doc_ids": selected_doc_ids,
+        "support_doc_ids": support_doc_ids,
+        "answer_chunk_doc_ids": answer_chunk_doc_ids,
+    }
+
+
+def _support_coverage(answer_trace: dict[str, object], *, evidence_count: int = 0) -> dict[str, object]:
+    claim_alignment = answer_trace.get("claim_alignment", {})
+    claims = claim_alignment.get("claims", []) if isinstance(claim_alignment, dict) else []
+    support_trace_doc_ids = _support_trace_doc_ids(answer_trace.get("support_trace", []))
+    supported = weak = unsupported = chunk_evidence = document_semantics = 0
+    if isinstance(claims, list):
+        for claim in claims:
+            if not isinstance(claim, dict):
+                continue
+            status = str(claim.get("status") or "")
+            has_chunk = bool(claim.get("chunk_id"))
+            if status in {"exact", "fragment"}:
+                supported += 1
+                if has_chunk:
+                    chunk_evidence += 1
+                elif support_trace_doc_ids:
+                    document_semantics += 1
+            elif status == "weak":
+                weak += 1
+                if has_chunk:
+                    chunk_evidence += 1
+                elif support_trace_doc_ids:
+                    document_semantics += 1
+            elif status == "unsupported":
+                unsupported += 1
+    claim_count = len(claims) if isinstance(claims, list) else int(claim_alignment.get("claim_count", 0) or 0) if isinstance(claim_alignment, dict) else 0
+    if not claim_count and isinstance(claim_alignment, dict):
+        supported = int(claim_alignment.get("supported_claim_count", 0) or 0)
+        weak = int(claim_alignment.get("weak_claim_count", 0) or 0)
+        unsupported = int(claim_alignment.get("unsupported_claim_count", 0) or 0)
+        claim_count = int(claim_alignment.get("claim_count", 0) or 0)
+    return {
+        "claim_count": claim_count,
+        "supported_claim_count": supported,
+        "weak_claim_count": weak,
+        "unsupported_claim_count": unsupported,
+        "chunk_evidence_claim_count": chunk_evidence,
+        "document_semantics_claim_count": document_semantics,
+        "support_trace_doc_ids": support_trace_doc_ids,
+        "evidence_count": evidence_count,
+    }
+
+
+def _answer_source_mix(answer_trace: dict[str, object], *, evidence_count: int = 0) -> dict[str, object]:
+    support_trace = answer_trace.get("support_trace", [])
+    synthesis_runtime = answer_trace.get("synthesis_runtime", {})
+    support_trace_count = len(support_trace) if isinstance(support_trace, list) else 0
+    support_trace_doc_ids = _support_trace_doc_ids(support_trace)
+    llm_invoked = bool(synthesis_runtime.get("invoked")) if isinstance(synthesis_runtime, dict) else False
+    evidence_chunk_ids = _string_list(answer_trace.get("evidence_chunk_ids"))
+    return {
+        "chunk_evidence": {
+            "present": bool(evidence_count or evidence_chunk_ids),
+            "evidence_count": evidence_count,
+            "evidence_chunk_count": len(evidence_chunk_ids),
+        },
+        "document_semantics": {
+            "present": bool(support_trace_doc_ids),
+            "doc_ids": support_trace_doc_ids,
+        },
+        "support_trace": {
+            "present": bool(support_trace_count),
+            "item_count": support_trace_count,
+        },
+        "llm_runtime": {
+            "present": llm_invoked,
+            "runtime": synthesis_runtime.get("runtime") if isinstance(synthesis_runtime, dict) else None,
+        },
+    }
+
+
 def _answer_contract_health(answer_trace: dict[str, object], *, evidence_count: int = 0) -> dict[str, object]:
     retrieval_contract = answer_trace.get("retrieval_contract", {})
     document_synthesis = answer_trace.get("document_synthesis", {})
@@ -452,6 +616,9 @@ def _answer_contract_health(answer_trace: dict[str, object], *, evidence_count: 
         {"name": "support_available_for_mode", "passed": support_available},
         {"name": "claim_alignment_present", "passed": bool(claim_alignment)},
     ]
+    retrieval_status = _retrieval_contract_status(answer_trace, evidence_count=evidence_count)
+    support_coverage = _support_coverage(answer_trace, evidence_count=evidence_count)
+    source_mix = _answer_source_mix(answer_trace, evidence_count=evidence_count)
     return {
         "all_pass": all(item["passed"] for item in checks),
         "checks": checks,
@@ -461,18 +628,25 @@ def _answer_contract_health(answer_trace: dict[str, object], *, evidence_count: 
         "support_doc_ids": list(support_doc_ids) if isinstance(support_doc_ids, list) else [],
         "support_trace_count": len(support_trace) if isinstance(support_trace, list) else 0,
         "evidence_count": evidence_count,
+        "retrieval_contract_status": retrieval_status,
+        "support_coverage": support_coverage,
+        "answer_source_mix": source_mix,
     }
 
 
 def _grounded_answer_payload(result, *, verbose: bool = False) -> dict[str, object]:
     answer_trace = result.answer_trace if verbose else _compact_answer_trace(result.answer_trace)
     evidence_payload = [_evidence_payload(item) for item in result.evidence] if verbose else []
+    contract_health = _answer_contract_health(answer_trace, evidence_count=len(result.evidence))
     return {
         "query": result.query,
         "query_intent": result.query_intent,
         "answer": result.answer,
         "answer_trace": answer_trace,
-        "contract_health": _answer_contract_health(answer_trace, evidence_count=len(result.evidence)),
+        "contract_health": contract_health,
+        "retrieval_contract_status": contract_health["retrieval_contract_status"],
+        "support_coverage": contract_health["support_coverage"],
+        "answer_source_mix": contract_health["answer_source_mix"],
         **(
             {
                 "top_k_hits": [_chunk_payload(chunk) for chunk in result.top_k_hits],
@@ -532,19 +706,241 @@ def _quality_status(score: float | int | None, *, warn_at: float = 0.55, pass_at
     return "fail"
 
 
+QUALITY_PROFILE_THRESHOLDS: dict[str, object] = {
+    "processing_quality": {
+        "required": ["chunks_created", "structure_confidence_present", "layout_confidence_present"],
+        "warn_at": 0.55,
+        "pass_at": 0.7,
+    },
+    "semantic_confidence": {
+        "provisional_at": 0.55,
+        "well_supported_at": 0.85,
+    },
+    "retrieval_readiness": {
+        "required": [
+            "contract_health_available",
+            "retrieval_contract_present",
+            "support_scope_present",
+            "support_available",
+            "selected_or_support_docs_present",
+        ],
+    },
+    "answer_trust": {
+        "pass_requires": ["answer_present", "answer_contract_present", "claim_alignment_present", "no_weak_claims", "no_unsupported_claims"],
+        "review_when": ["weak_claims_present", "unsupported_claims_present", "claim_support_incomplete"],
+    },
+}
+
+
+def _failed_check_reasons(checks: list[dict[str, object]]) -> list[str]:
+    return [str(item.get("name")) for item in checks if not bool(item.get("passed"))]
+
+
+def _processing_drilldown(document: dict[str, object], index: dict[str, object]) -> dict[str, object]:
+    extraction_summary = document.get("extraction_summary", {}) if isinstance(document.get("extraction_summary"), dict) else {}
+    page_count = document.get("page_count")
+    pages_requiring_ocr = extraction_summary.get("pages_requiring_ocr")
+    pages_processed_with_ocr = extraction_summary.get("pages_processed_with_ocr")
+    section_count = document.get("section_count")
+    native_blocks = extraction_summary.get("native_blocks")
+    block_role_counts = extraction_summary.get("block_role_counts", {})
+    text_source_counts = extraction_summary.get("text_source_counts", {})
+    layout_signal_counts = extraction_summary.get("layout_signal_counts", {})
+    ocr_used = bool(extraction_summary.get("ocr_used") or pages_processed_with_ocr)
+    table_or_form_signal_count = 0
+    if isinstance(block_role_counts, dict):
+        table_or_form_signal_count += int(block_role_counts.get("table_like", 0) or 0)
+        table_or_form_signal_count += int(block_role_counts.get("form_field", 0) or 0)
+        table_or_form_signal_count += int(block_role_counts.get("key_value", 0) or 0)
+    if isinstance(layout_signal_counts, dict):
+        table_or_form_signal_count += int(layout_signal_counts.get("table_like", 0) or 0)
+        table_or_form_signal_count += int(layout_signal_counts.get("form_like", 0) or 0)
+    text_extraction_coverage = None
+    if isinstance(page_count, int) and page_count > 0 and isinstance(pages_requiring_ocr, int):
+        text_extraction_coverage = round((page_count - pages_requiring_ocr) / page_count, 3)
+    return {
+        "page_count": page_count,
+        "chunk_count": index.get("chunk_count"),
+        "section_count": section_count,
+        "native_block_count": native_blocks,
+        "ocr_used": ocr_used,
+        "pages_requiring_ocr": pages_requiring_ocr,
+        "pages_processed_with_ocr": pages_processed_with_ocr,
+        "text_extraction_coverage": text_extraction_coverage,
+        "text_source_counts": text_source_counts if isinstance(text_source_counts, dict) else {},
+        "block_role_counts": block_role_counts if isinstance(block_role_counts, dict) else {},
+        "layout_signal_counts": layout_signal_counts if isinstance(layout_signal_counts, dict) else {},
+        "table_or_form_signal_count": table_or_form_signal_count,
+    }
+
+
+def _processing_diagnostics(document: dict[str, object], index: dict[str, object]) -> dict[str, object]:
+    drilldown = _processing_drilldown(document, index)
+    chunk_count = int(drilldown.get("chunk_count") or 0)
+    section_count = int(drilldown.get("section_count") or 0)
+    native_block_count = drilldown.get("native_block_count")
+    pages_requiring_ocr = int(drilldown.get("pages_requiring_ocr") or 0)
+    pages_processed_with_ocr = int(drilldown.get("pages_processed_with_ocr") or 0)
+    table_or_form_signal_count = int(drilldown.get("table_or_form_signal_count") or 0)
+    text_extraction_coverage = drilldown.get("text_extraction_coverage")
+    structure_confidence = document.get("structure_confidence")
+    layout_confidence = document.get("layout_confidence")
+    taxonomy: list[str] = []
+    if native_block_count is None or int(native_block_count or 0) <= 0:
+        taxonomy.append("native_text_low")
+    if bool(drilldown.get("ocr_used")) or pages_requiring_ocr > 0 or pages_processed_with_ocr > 0:
+        taxonomy.append("ocr_required")
+    if section_count <= 0 or (isinstance(structure_confidence, (int, float)) and float(structure_confidence) < 0.55):
+        taxonomy.append("weak_sections")
+    if table_or_form_signal_count >= 3:
+        taxonomy.append("table_or_form_heavy")
+    if layout_confidence is None or (isinstance(layout_confidence, (int, float)) and float(layout_confidence) < 0.55):
+        taxonomy.append("layout_uncertain")
+    if (
+        chunk_count <= 0
+        or (
+            isinstance(text_extraction_coverage, (int, float))
+            and float(text_extraction_coverage) < 0.8
+        )
+    ):
+        taxonomy.append("low_text_coverage")
+    technical_processed = chunk_count > 0 and (
+        native_block_count is not None
+        or bool(drilldown.get("ocr_used"))
+        or pages_processed_with_ocr > 0
+    )
+    structurally_reliable = technical_processed and not any(
+        item in taxonomy for item in {"weak_sections", "layout_uncertain", "low_text_coverage"}
+    )
+    if not technical_processed:
+        status = "fail"
+        recommended_next_action = "inspect_document_or_try_ocr"
+    elif not structurally_reliable:
+        status = "review"
+        recommended_next_action = "inspect_document_structure"
+    elif any(item in taxonomy for item in {"ocr_required", "table_or_form_heavy"}):
+        status = "warn"
+        recommended_next_action = "review_processing_diagnostics"
+    else:
+        status = "pass"
+        recommended_next_action = "none"
+    return {
+        "status": status,
+        "taxonomy": taxonomy,
+        "technical_processed": technical_processed,
+        "structurally_reliable": structurally_reliable,
+        "recommended_next_action": recommended_next_action,
+        "summary": {
+            "chunk_count": chunk_count,
+            "section_count": section_count,
+            "native_block_count": native_block_count,
+            "ocr_used": bool(drilldown.get("ocr_used")),
+            "pages_requiring_ocr": pages_requiring_ocr,
+            "text_extraction_coverage": text_extraction_coverage,
+            "structure_confidence": structure_confidence,
+            "layout_confidence": layout_confidence,
+            "table_or_form_signal_count": table_or_form_signal_count,
+        },
+    }
+
+
+def _claim_alignment_status(claim_alignment: dict[str, object]) -> dict[str, object]:
+    unsupported_count = int(claim_alignment.get("unsupported_claim_count", 0) or 0)
+    weak_count = int(claim_alignment.get("weak_claim_count", 0) or 0)
+    claim_count = int(claim_alignment.get("claim_count", 0) or 0)
+    supported_ratio = float(claim_alignment.get("supported_claim_ratio", 0.0) or 0.0)
+    alignment_status = str(claim_alignment.get("alignment_status") or "")
+    if not claim_alignment:
+        status = "warn"
+        reasons = ["claim_alignment_missing"]
+    elif unsupported_count > 0:
+        status = "review"
+        reasons = ["unsupported_claims_present"]
+    elif weak_count > 0:
+        status = "review"
+        reasons = ["weak_claims_present"]
+    elif claim_count and supported_ratio >= 1.0:
+        status = "pass"
+        reasons = []
+    else:
+        status = "review"
+        reasons = ["claim_support_incomplete"]
+    return {
+        "status": status,
+        "reasons": reasons,
+        "alignment_status": alignment_status,
+        "claim_count": claim_count,
+        "supported_claim_ratio": supported_ratio,
+        "weak_claim_count": weak_count,
+        "unsupported_claim_count": unsupported_count,
+    }
+
+
+def _quality_overall_status(statuses: dict[str, object]) -> str:
+    if any(status == "fail" for status in statuses.values()):
+        return "fail"
+    if any(status == "review" for status in statuses.values()):
+        return "review"
+    if any(status == "warn" for status in statuses.values()):
+        return "warn"
+    if any(status == "skip" for status in statuses.values()):
+        return "skip"
+    if statuses and all(status == "pass" for status in statuses.values()):
+        return "pass"
+    return "unknown"
+
+
+def _quality_recommended_next_action(statuses: dict[str, object], reasons: list[str]) -> str:
+    reason_set = set(reasons)
+    if statuses.get("processing_quality") == "fail":
+        if "text_or_ocr_path_known" in reason_set:
+            return "inspect_document_or_try_ocr"
+        return "inspect_document"
+    if statuses.get("processing_quality") in {"review", "warn"}:
+        return "inspect_processing_diagnostics"
+    if statuses.get("semantic_confidence") == "fail":
+        return "inspect_document_semantics"
+    if statuses.get("retrieval_readiness") in {"warn", "fail"}:
+        return "review_retrieval_contract"
+    if statuses.get("answer_trust") == "review":
+        return "review_claim_alignment"
+    if statuses and all(status == "pass" for status in statuses.values()):
+        return "none"
+    return "review_quality_profile"
+
+
 def _workflow_quality_profile(payload: dict[str, object]) -> dict[str, object]:
     document = payload.get("document", {}) if isinstance(payload.get("document"), dict) else {}
     index = payload.get("index", {}) if isinstance(payload.get("index"), dict) else {}
     answer = payload.get("answer", {}) if isinstance(payload.get("answer"), dict) else {}
     answer_trace = answer.get("answer_trace", {}) if isinstance(answer.get("answer_trace"), dict) else {}
     contract_health = answer.get("contract_health", {}) if isinstance(answer.get("contract_health"), dict) else {}
+    retrieval_contract_status = answer.get("retrieval_contract_status", {})
+    if not isinstance(retrieval_contract_status, dict):
+        retrieval_contract_status = {}
+    if not retrieval_contract_status and isinstance(contract_health.get("retrieval_contract_status"), dict):
+        retrieval_contract_status = contract_health["retrieval_contract_status"]
+    support_coverage = answer.get("support_coverage", {})
+    if not isinstance(support_coverage, dict):
+        support_coverage = {}
+    if not support_coverage and isinstance(contract_health.get("support_coverage"), dict):
+        support_coverage = contract_health["support_coverage"]
+    answer_source_mix = answer.get("answer_source_mix", {})
+    if not isinstance(answer_source_mix, dict):
+        answer_source_mix = {}
+    if not answer_source_mix and isinstance(contract_health.get("answer_source_mix"), dict):
+        answer_source_mix = contract_health["answer_source_mix"]
     structure_confidence = document.get("structure_confidence")
     layout_confidence = document.get("layout_confidence")
     semantic_confidence = document.get("semantic_confidence")
+    processing_drilldown = _processing_drilldown(document, index)
+    processing_diagnostics = _processing_diagnostics(document, index)
     processing_checks = [
         {"name": "chunks_created", "passed": bool(index.get("chunk_count", 0) > 0)},
         {"name": "structure_confidence_present", "passed": structure_confidence is not None},
         {"name": "layout_confidence_present", "passed": layout_confidence is not None},
+        {"name": "text_or_ocr_path_known", "passed": bool(processing_drilldown.get("native_block_count") is not None or processing_drilldown.get("ocr_used"))},
+        {"name": "sections_or_chunks_present", "passed": bool(processing_drilldown.get("section_count") or index.get("chunk_count", 0))},
     ]
     semantic_checks = [
         {"name": "semantic_confidence_present", "passed": semantic_confidence is not None},
@@ -557,11 +953,22 @@ def _workflow_quality_profile(payload: dict[str, object]) -> dict[str, object]:
         {"name": "retrieval_contract_present", "passed": bool(answer_trace.get("retrieval_contract"))},
         {"name": "support_scope_present", "passed": bool(contract_health.get("support_scope"))},
         {"name": "support_available", "passed": bool(contract_health.get("support_trace_count") or contract_health.get("evidence_count"))},
+        {"name": "selected_or_support_docs_present", "passed": bool(contract_health.get("selected_doc_ids") or contract_health.get("support_doc_ids"))},
+        {"name": "retrieval_contract_status_pass", "passed": retrieval_contract_status.get("status") == "pass"},
     ]
+    claim_status = _claim_alignment_status(answer_trace.get("claim_alignment", {}) if isinstance(answer_trace.get("claim_alignment"), dict) else {})
     answer_checks = [
         {"name": "answer_present", "passed": bool(answer.get("answer"))},
         {"name": "answer_contract_present", "passed": bool(answer_trace.get("answer_contract"))},
         {"name": "claim_alignment_present", "passed": bool(answer_trace.get("claim_alignment"))},
+        {"name": "no_unsupported_claims", "passed": claim_status["unsupported_claim_count"] == 0},
+        {"name": "no_weak_claims", "passed": claim_status["weak_claim_count"] == 0},
+    ]
+    answer_trust_reasons = [
+        *([] if answer.get("answer") else ["answer_missing"]),
+        *([] if answer_trace.get("answer_contract") else ["answer_contract_missing"]),
+        *([] if answer_trace.get("claim_alignment") else ["claim_alignment_missing"]),
+        *claim_status["reasons"],
     ]
     semantic_classification = (
         "well_supported"
@@ -570,17 +977,22 @@ def _workflow_quality_profile(payload: dict[str, object]) -> dict[str, object]:
         if isinstance(semantic_confidence, (int, float)) and semantic_confidence >= 0.55
         else "unknown"
     )
-    return {
+    sections = {
         "processing_quality": {
-            "status": "pass" if all(item["passed"] for item in processing_checks) else "fail",
+            "status": "pass" if all(item["passed"] for item in processing_checks) and processing_diagnostics["status"] == "pass" else processing_diagnostics["status"],
+            "thresholds": QUALITY_PROFILE_THRESHOLDS["processing_quality"],
             "checks": processing_checks,
+            "reasons": sorted(set([*_failed_check_reasons(processing_checks), *processing_diagnostics["taxonomy"]])),
             "structure_confidence": structure_confidence,
             "layout_confidence": layout_confidence,
             "structure_status": _quality_status(structure_confidence),
             "layout_status": _quality_status(layout_confidence),
+            "drilldown": processing_drilldown,
+            "diagnostics": processing_diagnostics,
         },
         "semantic_confidence": {
             "status": "pass" if all(item["passed"] for item in semantic_checks) else "fail",
+            "thresholds": QUALITY_PROFILE_THRESHOLDS["semantic_confidence"],
             "checks": semantic_checks,
             "score": semantic_confidence,
             "label": document.get("semantic_confidence_label"),
@@ -593,17 +1005,116 @@ def _workflow_quality_profile(payload: dict[str, object]) -> dict[str, object]:
         },
         "retrieval_readiness": {
             "status": "pass" if all(item["passed"] for item in retrieval_checks) else "warn",
+            "thresholds": QUALITY_PROFILE_THRESHOLDS["retrieval_readiness"],
             "checks": retrieval_checks,
+            "reasons": sorted(
+                set([*_failed_check_reasons(retrieval_checks), *retrieval_contract_status.get("reasons", [])])
+            ),
             "retrieval_path": contract_health.get("retrieval_path"),
             "support_scope": contract_health.get("support_scope"),
             "support_doc_ids": contract_health.get("support_doc_ids", []),
             "selected_doc_ids": contract_health.get("selected_doc_ids", []),
+            "retrieval_contract_status": retrieval_contract_status,
+            "support_coverage": support_coverage,
+            "answer_source_mix": answer_source_mix,
         },
         "answer_trust": {
-            "status": "pass" if all(item["passed"] for item in answer_checks) else "warn",
+            "status": "pass" if all(item["passed"] for item in answer_checks) else claim_status["status"],
+            "thresholds": QUALITY_PROFILE_THRESHOLDS["answer_trust"],
             "checks": answer_checks,
+            "reasons": sorted(set(answer_trust_reasons)),
+            "claim_alignment_status": claim_status,
             "contract_health": contract_health,
         },
+    }
+    statuses = {
+        key: value.get("status")
+        for key, value in sections.items()
+        if isinstance(value, dict) and value.get("status")
+    }
+    reasons: list[str] = []
+    for value in sections.values():
+        if isinstance(value, dict) and isinstance(value.get("reasons"), list):
+            reasons.extend(str(reason) for reason in value["reasons"])
+    return {
+        "overall_status": _quality_overall_status(statuses),
+        "recommended_next_action": _quality_recommended_next_action(statuses, reasons),
+        "statuses": statuses,
+        "reasons": sorted(set(reasons)),
+        **sections,
+    }
+
+
+def _quality_profile_summary(quality_profile: dict[str, object] | None) -> dict[str, object]:
+    if not isinstance(quality_profile, dict):
+        return {
+            "available": False,
+            "overall_status": "unknown",
+            "statuses": {},
+            "reasons": ["quality_profile_missing"],
+        }
+    statuses = dict(quality_profile.get("statuses", {})) if isinstance(quality_profile.get("statuses"), dict) else {
+        key: value.get("status")
+        for key, value in quality_profile.items()
+        if isinstance(value, dict) and value.get("status")
+    }
+    reasons: list[str] = []
+    if isinstance(quality_profile.get("reasons"), list):
+        reasons.extend(str(reason) for reason in quality_profile.get("reasons", []))
+    else:
+        for value in quality_profile.values():
+            if isinstance(value, dict) and isinstance(value.get("reasons"), list):
+                reasons.extend(str(reason) for reason in value.get("reasons", []))
+    overall_status = str(quality_profile.get("overall_status") or _quality_overall_status(statuses))
+    return {
+        "available": True,
+        "overall_status": overall_status,
+        "statuses": statuses,
+        "reasons": sorted(set(reasons)),
+        "recommended_next_action": quality_profile.get("recommended_next_action")
+        or _quality_recommended_next_action(statuses, reasons),
+    }
+
+
+def _compact_workflow_payload(payload: dict[str, object]) -> dict[str, object]:
+    document = payload.get("document", {}) if isinstance(payload.get("document"), dict) else {}
+    index = payload.get("index", {}) if isinstance(payload.get("index"), dict) else {}
+    compact_document_keys = [
+        "doc_id",
+        "label",
+        "title",
+        "document_family",
+        "document_type",
+        "document_purpose",
+        "audience",
+        "inventory_summary",
+        "coverage_terms",
+        "structure_confidence",
+        "layout_confidence",
+        "semantic_confidence",
+        "semantic_confidence_label",
+        "page_count",
+        "section_count",
+    ]
+    return {
+        "pdf": payload.get("pdf"),
+        "doc_id": payload.get("doc_id"),
+        "document": {
+            key: document.get(key)
+            for key in compact_document_keys
+            if key in document
+        },
+        "plan": payload.get("plan", {}),
+        "index": {
+            "doc_ids": index.get("doc_ids", []),
+            "chunk_count": index.get("chunk_count"),
+            "embedding": index.get("embedding", {}),
+        },
+        "answer": payload.get("answer", {}),
+        "processing_diagnostics": payload.get("processing_diagnostics", {}),
+        "quality_profile_summary": _quality_profile_summary(
+            payload.get("quality_profile") if isinstance(payload.get("quality_profile"), dict) else None
+        ),
     }
 
 
@@ -1006,6 +1517,8 @@ def _run_public_surface_release_smoke() -> dict[str, object]:
             "smoke_ok": bool(smoke_payload.get("ok")),
             "smoke_all_pass": bool(smoke_payload.get("result", {}).get("all_pass")),
             "smoke_checks": smoke_payload.get("result", {}).get("checks", []),
+            "quality_profile_summary": smoke_payload.get("result", {}).get("quality_profile_summary")
+            or _quality_profile_summary(smoke_payload.get("result", {}).get("quality_profile")),
         }
 
 
@@ -1433,7 +1946,235 @@ def _write_corpus_sanity_snapshot(payload: dict[str, object]) -> Path:
     PATHS.data_eval.mkdir(parents=True, exist_ok=True)
     snapshot_path = PATHS.data_eval / "corpus_sanity_snapshot.json"
     snapshot_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    compact_payload = _compact_corpus_sanity_snapshot(payload)
+    compact_path = PATHS.data_eval / "corpus_sanity_compact_snapshot.json"
+    compact_path.write_text(json.dumps(compact_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    profile = str(payload.get("sample_profile") or "").strip().lower()
+    if profile and re.fullmatch(r"[a-z0-9_-]+", profile):
+        profile_path = PATHS.data_eval / f"corpus_sanity_{profile}_snapshot.json"
+        profile_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        profile_compact_path = PATHS.data_eval / f"corpus_sanity_{profile}_compact_snapshot.json"
+        profile_compact_path.write_text(json.dumps(compact_payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return snapshot_path
+
+
+def _compact_corpus_sanity_snapshot(payload: dict[str, object]) -> dict[str, object]:
+    return {
+        "sample_profile": payload.get("sample_profile"),
+        "sample_size": payload.get("sample_size"),
+        "summary": payload.get("summary", {}),
+        "sample_manifest": payload.get("sample_manifest", {}),
+        "bucket_diagnostics": payload.get("bucket_diagnostics", {}),
+        "architecture_gates": payload.get("architecture_gates", {}),
+        "corpus_contract": payload.get("corpus_contract", {}),
+        "follow_up_actions": payload.get("follow_up_actions", []),
+    }
+
+
+def _corpus_snapshot_path_for_profile(profile: str) -> Path:
+    safe_profile = profile.strip().lower()
+    if safe_profile in {"latest", "default-latest", "default"}:
+        return PATHS.data_eval / "corpus_sanity_snapshot.json"
+    if safe_profile.endswith("-latest"):
+        safe_profile = safe_profile.removesuffix("-latest")
+    if not re.fullmatch(r"[a-z0-9_-]+", safe_profile):
+        raise CliError(
+            "invalid_profile",
+            f"Invalid corpus profile name: {profile}",
+            {"profile": profile},
+        )
+    return PATHS.data_eval / f"corpus_sanity_{safe_profile}_snapshot.json"
+
+
+def _load_corpus_snapshot(path: Path) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise CliError(
+            "invalid_corpus_snapshot",
+            f"Corpus snapshot is not valid JSON: {path}",
+            {"path": str(path), "error": str(exc)},
+        ) from exc
+    return payload if isinstance(payload, dict) else None
+
+
+def _corpus_snapshot_metric_summary(snapshot: dict[str, object]) -> dict[str, object]:
+    summary = snapshot.get("summary", {}) if isinstance(snapshot.get("summary"), dict) else {}
+    architecture_gates = snapshot.get("architecture_gates", {}) if isinstance(snapshot.get("architecture_gates"), dict) else {}
+    manifest = snapshot.get("sample_manifest", {}) if isinstance(snapshot.get("sample_manifest"), dict) else {}
+    return {
+        "sample_profile": snapshot.get("sample_profile"),
+        "sample_size": snapshot.get("sample_size"),
+        "sample_checksum": manifest.get("selected_digest_checksum"),
+        "technical_pass_rate": summary.get("technical_pass_rate"),
+        "semantic_pass_rate": summary.get("semantic_pass_rate"),
+        "avg_structure_confidence": summary.get("avg_structure_confidence"),
+        "avg_layout_confidence": summary.get("avg_layout_confidence"),
+        "avg_semantic_confidence": summary.get("avg_semantic_confidence"),
+        "specific_document_rate": summary.get("specific_document_rate"),
+        "specific_purpose_rate": summary.get("specific_purpose_rate"),
+        "low_confidence_rate": summary.get("low_confidence_rate"),
+        "trust_limited_rate": summary.get("trust_limited_rate"),
+        "architecture_gate_pass": architecture_gates.get("all_pass"),
+        "follow_up_count": len(snapshot.get("follow_up_actions", [])) if isinstance(snapshot.get("follow_up_actions"), list) else None,
+    }
+
+
+def _numeric_delta(candidate: object, baseline: object) -> float | None:
+    if isinstance(candidate, (int, float)) and isinstance(baseline, (int, float)):
+        return round(float(candidate) - float(baseline), 4)
+    return None
+
+
+def _corpus_diff_summary(
+    baseline_snapshot: dict[str, object],
+    candidate_snapshot: dict[str, object],
+    deltas: dict[str, float | None],
+    regressions: list[str],
+) -> dict[str, object]:
+    baseline_buckets = baseline_snapshot.get("bucket_diagnostics", {})
+    candidate_buckets = candidate_snapshot.get("bucket_diagnostics", {})
+    baseline_bucket_names = set(baseline_buckets) if isinstance(baseline_buckets, dict) else set()
+    candidate_bucket_names = set(candidate_buckets) if isinstance(candidate_buckets, dict) else set()
+    sample_changed = (
+        _corpus_snapshot_metric_summary(baseline_snapshot).get("sample_checksum")
+        != _corpus_snapshot_metric_summary(candidate_snapshot).get("sample_checksum")
+    )
+    checks = [
+        {
+            "name": "snapshots_loaded",
+            "status": "pass",
+            "reason": "both saved corpus snapshots were loaded",
+        },
+        {
+            "name": "sample_checksum",
+            "status": "skip" if sample_changed else "pass",
+            "reason": "sample set changed; metric deltas may include corpus composition effects"
+            if sample_changed
+            else "sample checksum is unchanged",
+        },
+        {
+            "name": "technical_pass_rate",
+            "status": "fail" if "technical_pass_rate" in regressions else "pass",
+            "reason": f"delta={deltas.get('technical_pass_rate')}",
+        },
+        {
+            "name": "semantic_pass_rate",
+            "status": "fail" if "semantic_pass_rate" in regressions else "pass",
+            "reason": f"delta={deltas.get('semantic_pass_rate')}",
+        },
+        {
+            "name": "trust_limited_rate",
+            "status": "fail" if "trust_limited_rate" in regressions else "pass",
+            "reason": f"delta={deltas.get('trust_limited_rate')}",
+        },
+        {
+            "name": "follow_up_count",
+            "status": "fail" if "follow_up_count" in regressions else "pass",
+            "reason": f"delta={deltas.get('follow_up_count')}",
+        },
+        {
+            "name": "bucket_set",
+            "status": "skip" if baseline_bucket_names != candidate_bucket_names else "pass",
+            "reason": "bucket set changed"
+            if baseline_bucket_names != candidate_bucket_names
+            else "bucket set is unchanged",
+        },
+    ]
+    return {
+        "all_pass": not any(item["status"] == "fail" for item in checks),
+        "checks": checks,
+        "bucket_changes": {
+            "baseline_buckets": sorted(baseline_bucket_names),
+            "candidate_buckets": sorted(candidate_bucket_names),
+            "added": sorted(candidate_bucket_names - baseline_bucket_names),
+            "removed": sorted(baseline_bucket_names - candidate_bucket_names),
+        },
+        "regression_metrics": regressions,
+    }
+
+
+def _corpus_profile_compare_payload(
+    *,
+    baseline_profile: str = "quick",
+    candidate_profile: str = "balanced",
+    baseline_path: Path | None = None,
+    candidate_path: Path | None = None,
+) -> dict[str, object]:
+    baseline_snapshot_path = baseline_path or _corpus_snapshot_path_for_profile(baseline_profile)
+    candidate_snapshot_path = candidate_path or _corpus_snapshot_path_for_profile(candidate_profile)
+    baseline_snapshot = _load_corpus_snapshot(baseline_snapshot_path)
+    candidate_snapshot = _load_corpus_snapshot(candidate_snapshot_path)
+    missing = [
+        str(path)
+        for path, snapshot in (
+            (baseline_snapshot_path, baseline_snapshot),
+            (candidate_snapshot_path, candidate_snapshot),
+        )
+        if snapshot is None
+    ]
+    if missing:
+        return {
+            "available": False,
+            "all_pass": False,
+            "missing_snapshots": missing,
+            "baseline_path": str(baseline_snapshot_path),
+            "candidate_path": str(candidate_snapshot_path),
+            "recommendation": "Run corpus-sanity-check for both profiles before comparing saved snapshots.",
+        }
+    baseline_summary = _corpus_snapshot_metric_summary(baseline_snapshot or {})
+    candidate_summary = _corpus_snapshot_metric_summary(candidate_snapshot or {})
+    metric_names = [
+        "technical_pass_rate",
+        "semantic_pass_rate",
+        "avg_structure_confidence",
+        "avg_layout_confidence",
+        "avg_semantic_confidence",
+        "specific_document_rate",
+        "specific_purpose_rate",
+        "low_confidence_rate",
+        "trust_limited_rate",
+        "follow_up_count",
+    ]
+    deltas = {
+        name: _numeric_delta(candidate_summary.get(name), baseline_summary.get(name))
+        for name in metric_names
+    }
+    regressions = [
+        name
+        for name, delta in deltas.items()
+        if delta is not None
+        and (
+            (name in {"low_confidence_rate", "trust_limited_rate", "follow_up_count"} and delta > 0)
+            or (name not in {"low_confidence_rate", "trust_limited_rate", "follow_up_count"} and delta < 0)
+        )
+    ]
+    checksum_changed = baseline_summary.get("sample_checksum") != candidate_summary.get("sample_checksum")
+    diff_summary = _corpus_diff_summary(
+        baseline_snapshot or {},
+        candidate_snapshot or {},
+        deltas,
+        regressions,
+    )
+    return {
+        "available": True,
+        "all_pass": not regressions and bool(candidate_summary.get("architecture_gate_pass")),
+        "baseline_path": str(baseline_snapshot_path),
+        "candidate_path": str(candidate_snapshot_path),
+        "baseline": baseline_summary,
+        "candidate": candidate_summary,
+        "deltas": deltas,
+        "regressions": regressions,
+        "sample_changed": checksum_changed,
+        "corpus_diff_summary": diff_summary,
+        "recommendation": (
+            "Candidate corpus profile is stable against baseline snapshot."
+            if not regressions
+            else "Inspect regression metrics before treating the candidate corpus profile as stable."
+        ),
+    }
 
 
 def _run_corpus_sanity_check(
@@ -2114,6 +2855,11 @@ def _release_check_compact_payload(payload: dict[str, object]) -> dict[str, obje
 
 def _public_beta_check_compact_payload(release_payload: dict[str, object]) -> dict[str, object]:
     release_summary = _release_check_compact_payload(release_payload)
+    public_smoke = (
+        release_payload.get("public_surface", {}).get("smoke", {})
+        if isinstance(release_payload.get("public_surface"), dict)
+        else {}
+    )
     package_check = (
         release_payload.get("maintainer_checks", {}).get("package_check", {})
         if isinstance(release_payload.get("maintainer_checks"), dict)
@@ -2151,6 +2897,7 @@ def _public_beta_check_compact_payload(release_payload: dict[str, object]) -> di
                 for step in readme_flow.get("steps", [])
             ],
         },
+        "public_smoke_quality": public_smoke.get("quality_profile_summary", {}),
         "runtime_decision": runtime_decision,
         "corpus_quick": corpus_summary,
         "release_summary": release_summary,
@@ -2385,6 +3132,10 @@ def _runtime_decision_payload(embedding: dict[str, object]) -> dict[str, object]
         if promotion.get("promotion_ready") and promotion.get("candidate_mode") == "sentence-transformers"
         else None
     )
+    not_default_reason = (
+        "The deterministic hash backend remains the public default because it is offline-safe, reproducible, "
+        "and the sentence-transformer backend has only been promoted as an explicit opt-in path."
+    )
     return {
         "default_backend": "hash",
         "effective_backend": embedding.get("effective_backend"),
@@ -2392,12 +3143,35 @@ def _runtime_decision_payload(embedding: dict[str, object]) -> dict[str, object]
         "recommended_opt_in_backend": recommended_backend,
         "recommended_opt_in_source": "runtime_promotion_snapshot" if recommended_backend else None,
         "promotion_snapshot": promotion,
-        "not_default_reason": (
-            "The deterministic hash backend remains the public default because it is offline-safe, reproducible, "
-            "and the sentence-transformer backend has only been promoted as an explicit opt-in path."
-        ),
+        "not_default_reason": not_default_reason,
         "cross_encoder_default": "disabled",
         "llm_synthesis_default": "disabled",
+        "backend_policy": {
+            "default_backend": {
+                "name": "hash",
+                "status": "default",
+                "reason": "offline-safe deterministic baseline",
+            },
+            "recommended_opt_in_backend": {
+                "name": recommended_backend,
+                "status": "recommended_opt_in" if recommended_backend else "not_available",
+                "reason": "promotion snapshot is green" if recommended_backend else "no green promotion snapshot found",
+            },
+            "experimental_backends": [
+                {
+                    "name": "cross-encoder",
+                    "status": "experimental_opt_in",
+                    "default_enabled": False,
+                    "reason": "reranking comparison/fallback only; not part of default path",
+                }
+            ],
+            "llm_synthesis": {
+                "status": "opt_in_only",
+                "default_enabled": False,
+                "reason": "answer synthesis stays extractive unless a local command is explicitly configured",
+            },
+            "why_not_default": not_default_reason,
+        },
     }
 
 
@@ -2533,6 +3307,18 @@ def _runtime_promotion_report_payload(report_path: Path | None = None) -> dict[s
         "promotion_gate": gate,
         "promotion_ready": promotion_ready,
         "promotion_snapshot_path": str(snapshot_path) if snapshot_path else None,
+        "default_decision": {
+            "default_backend": "hash",
+            "recommended_opt_in_backend": "sentence-transformers" if promotion_ready else None,
+            "cross_encoder": "experimental_opt_in_only",
+            "llm_synthesis": "opt_in_only",
+            "why_not_default": (
+                "A green promotion gate recommends sentence-transformers as opt-in only; "
+                "the default remains the deterministic hash backend until a separate default-change decision."
+                if promotion_ready
+                else "No green full-suite promotion gate is available, so hash remains the only public default."
+            ),
+        },
         "recommendation": recommendation,
     }
 
@@ -2733,6 +3519,24 @@ def main() -> None:
         help="Corpus sample profile for corpus-sanity-check: quick=4, balanced=12, stress=24.",
     )
     parser.add_argument(
+        "--baseline-profile",
+        default="quick",
+        help="Saved corpus profile to use as the baseline for corpus-profile-compare.",
+    )
+    parser.add_argument(
+        "--candidate-profile",
+        default="balanced",
+        help="Saved corpus profile to compare against the baseline for corpus-profile-compare.",
+    )
+    parser.add_argument(
+        "--baseline-snapshot",
+        help="Optional explicit baseline snapshot path for corpus-profile-compare.",
+    )
+    parser.add_argument(
+        "--candidate-snapshot",
+        help="Optional explicit candidate snapshot path for corpus-profile-compare.",
+    )
+    parser.add_argument(
         "--index-dir",
         help="Optional custom index directory.",
     )
@@ -2780,6 +3584,11 @@ def main() -> None:
         action="store_true",
         help="Include fuller debug payloads for planner and answer JSON output.",
     )
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="Use the compact public JSON payload where available. This is the default for workflow commands.",
+    )
     try:
         args = parser.parse_args(argv)
         command = _canonical_command(args.command)
@@ -2789,6 +3598,12 @@ def main() -> None:
                 "conflicting_output_format",
                 "--json cannot be combined with --format text",
                 {"format": args.format},
+            )
+        if args.compact and args.verbose:
+            raise CliError(
+                "conflicting_payload_detail",
+                "--compact cannot be combined with --verbose",
+                {"compact": args.compact, "verbose": args.verbose},
             )
         json_output = args.json or args.format == "json"
         if output_path and not json_output:
@@ -3156,6 +3971,30 @@ def main() -> None:
                                 )
             return
 
+        if command == "corpus-profile-compare":
+            PATHS.ensure_dirs()
+            payload = _corpus_profile_compare_payload(
+                baseline_profile=args.baseline_profile,
+                candidate_profile=args.candidate_profile,
+                baseline_path=Path(args.baseline_snapshot).expanduser().resolve() if args.baseline_snapshot else None,
+                candidate_path=Path(args.candidate_snapshot).expanduser().resolve() if args.candidate_snapshot else None,
+            )
+            if json_output:
+                _emit_json("corpus-profile-compare", payload, output_path=output_path)
+                return
+            print(f"Corpus profile comparison available: {_human_status(payload.get('available'))}")
+            print(f"Corpus profile comparison: {_human_status(payload.get('all_pass'))}")
+            if payload.get("missing_snapshots"):
+                print("Missing snapshots:")
+                for path in payload.get("missing_snapshots", []):
+                    print(f"- {path}")
+            else:
+                print(f"Baseline: {payload.get('baseline', {}).get('sample_profile')} ({payload.get('baseline_path')})")
+                print(f"Candidate: {payload.get('candidate', {}).get('sample_profile')} ({payload.get('candidate_path')})")
+                print(f"Regressions: {', '.join(payload.get('regressions', [])) or 'none'}")
+            print(payload.get("recommendation"))
+            return
+
         if command == "init":
             PATHS.ensure_dirs()
             if json_output:
@@ -3362,6 +4201,9 @@ def main() -> None:
                     "semantic_confidence_label": document.semantic_confidence_label,
                     "semantic_rationale": list(document.semantic_rationale),
                     "semantic_warnings": list(document.semantic_warnings),
+                    "page_count": document.page_count,
+                    "section_count": len(document.sections),
+                    "extraction_summary": dict(document.extraction_summary or {}),
                 },
                 "plan": {
                     **_plan_payload(plan, verbose=args.verbose),
@@ -3376,6 +4218,7 @@ def main() -> None:
                 },
                 "answer": _grounded_answer_payload(answer, verbose=args.verbose),
             }
+            payload["processing_diagnostics"] = _processing_diagnostics(payload["document"], payload["index"])
             payload["quality_profile"] = _workflow_quality_profile(payload)
             if command == "smoke-check":
                 checks = _smoke_checks(payload)
@@ -3385,7 +4228,12 @@ def main() -> None:
                     "all_pass": all(item["passed"] for item in checks),
                 }
                 if json_output:
-                    _emit_json("smoke-check", smoke_payload, output_path=output_path)
+                    result_payload = smoke_payload if args.verbose else {
+                        **_compact_workflow_payload(smoke_payload),
+                        "checks": checks,
+                        "all_pass": all(item["passed"] for item in checks),
+                    }
+                    _emit_json("smoke-check", result_payload, output_path=output_path)
                     return
                 print(f"Smoke check for: {pdf_path.name}")
                 for item in checks:
@@ -3397,7 +4245,8 @@ def main() -> None:
                     print(f"embedding_fallback_reason: {embedding_payload['fallback_reason']}")
                 return
             if json_output:
-                _emit_json("run-workflow", payload, output_path=output_path)
+                result_payload = payload if args.verbose else _compact_workflow_payload(payload)
+                _emit_json("run-workflow", result_payload, output_path=output_path)
                 return
             print(f"Workflow complete for: {pdf_path.name}")
             print(f"doc_id: {document.doc_id}")
@@ -3452,6 +4301,8 @@ def main() -> None:
                 section_payloads = [_section_payload(section) for section in document_record.sections[:12]]
             except CliError:
                 section_payloads = []
+            full_section_count = len(getattr(document_record, "sections", []) or []) if document_record else 0
+            chunk_count = len(getattr(document_record, "chunks", []) or []) if document_record else 0
             payload = {
                 **_document_payload(entry),
                 "structure_confidence": getattr(document_record, "structure_confidence", None),
@@ -3461,9 +4312,12 @@ def main() -> None:
                 "semantic_rationale": list(getattr(document_record, "semantic_rationale", []) or []),
                 "semantic_warnings": list(getattr(document_record, "semantic_warnings", []) or []),
                 "extraction_summary": dict(getattr(document_record, "extraction_summary", {}) or {}),
-                "section_count": len(section_payloads),
+                "page_count": getattr(document_record, "page_count", None),
+                "section_count": full_section_count,
+                "chunk_count": chunk_count,
                 "sections": section_payloads,
             }
+            payload["processing_diagnostics"] = _processing_diagnostics(payload, {"chunk_count": chunk_count})
             if json_output:
                 _emit_json("inspect-document", payload, output_path=output_path)
                 return
