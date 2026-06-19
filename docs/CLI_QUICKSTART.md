@@ -67,6 +67,7 @@ pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
 
 ```bash
 pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
+pdf-to-json-rag assess-pdf --pdf /tmp/pdf-to-json-rag-demo.pdf --json
 ```
 
 ## Full workflow in one command
@@ -132,7 +133,7 @@ pdf-to-json-rag public-beta-check --json
 pdf-to-json-rag corpus-profile-compare --baseline-profile quick --candidate-profile balanced --json
 ```
 
-Use these from a source checkout when you want to validate wheel packaging, public smoke behavior, and the current release gates. `release-check --json` is compact by default; add `--verbose` for the full maintainer payload. `smoke-check --json` and `run-workflow --json` are also compact by default; add `--verbose` for full workflow diagnostics. `readme-smoke-check` validates only the installed public README flow and does not run benchmark regressions. `public-beta-check` aggregates the installed README flow, public-smoke quality summary, runtime decision, corpus quick gate, and compact release summary. `corpus-profile-compare` compares saved compact corpus snapshots without reprocessing PDFs. End users only need `doctor`, `smoke-check`, and `run-workflow`.
+Use these from a source checkout when you want to validate wheel packaging, public smoke behavior, and the current release gates. `release-check --json` is compact by default; add `--verbose` for the full maintainer payload. `smoke-check --json`, `run-workflow --json`, and `assess-pdf --json` are compact by default; add `--verbose` for full workflow diagnostics. `readme-smoke-check` validates only the installed public README flow and does not run benchmark regressions. `public-beta-check` aggregates the installed README flow, public-smoke quality summary, runtime decision, corpus quick gate, and compact release summary. `corpus-profile-compare` compares saved compact corpus snapshots without reprocessing PDFs. End users usually need only `doctor`, `assess-pdf`, `smoke-check`, and `run-workflow`.
 
 For unfamiliar local PDFs that you do not want to add to the benchmark, use:
 
@@ -148,7 +149,7 @@ pdf-to-json-rag corpus-sanity-check --profile quick --json
 
 That command now returns compact overview, type, purpose, audience, confidence, rationale, and limits answers for each PDF, plus corpus-level rates, a deterministic `sample_manifest`, and a corpus architecture gate over `processing`, `semantics`, and `trust`.
 
-`run-workflow --json` and `smoke-check --json` include `processing_diagnostics`, `quality_profile_summary`, and answer contract blocks so unfamiliar PDFs can be read as one `overall_status`, a `recommended_next_action`, processing taxonomy, retrieval readiness, answer trust, support coverage, and source mix instead of only a final answer string. Add `--verbose` when you need the full `quality_profile` thresholds and debug payload. Weak or unsupported claims set answer trust to `review`; document-level metadata claims can be supported by `support_trace`.
+`assess-pdf --json` is the shortest public acceptance check for unfamiliar PDFs. It returns `overall_status`, `processing_status`, `semantic_status`, `retrieval_status`, `answer_trust`, `recommended_next_action`, an `acceptance_profile`, and short diagnostic messages. `run-workflow --json` and `smoke-check --json` include `processing_diagnostics`, `quality_profile_summary`, and answer contract blocks. Add `--verbose` when you need the full `quality_profile` thresholds and debug payload. Weak or unsupported claims set answer trust to `review`; document-level metadata claims can be supported by `support_trace`.
 
 If you changed code under `src/` and have not reinstalled the package yet, run maintainer checks from the source checkout like this:
 

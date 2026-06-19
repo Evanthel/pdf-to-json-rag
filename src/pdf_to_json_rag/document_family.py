@@ -32,12 +32,38 @@ def classify_document_family(
         "registration_update",
     } or ss in {"financial_grid", "administrative_form"}:
         return "administrative_financial_form"
-    if dt in {"court_opinion", "government_bulletin", "inspection_report", "agency_report"} or dp in {
+    if dt in {
+        "court_opinion",
+        "government_bulletin",
+        "inspection_report",
+        "agency_report",
+        "environmental_site_record",
+        "statistical_table",
+        "web_job_listing",
+        "institutional_correspondence",
+    } or dp in {
         "legal_record",
         "public_notice",
         "institutional_reporting",
         "administrative_submission",
-    } or ev in {"legal_record", "government_notice"} or ss in {"legal_opinion", "government_notice"}:
+        "statistical_reference",
+        "employment_listing",
+        "institutional_communication",
+    } or ev in {
+        "legal_record",
+        "government_notice",
+        "statistical_table",
+        "web_listing",
+        "environmental_record",
+        "institutional_correspondence",
+    } or ss in {
+        "legal_opinion",
+        "government_notice",
+        "data_table",
+        "web_page_printout",
+        "structured_site_record",
+        "letterhead",
+    }:
         return "government_public_record"
     if ev == "structured_form" or ss in {"questionnaire_grid", "checklist_grid"}:
         return "structured_form"

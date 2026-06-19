@@ -2,7 +2,7 @@
 
 _This plan was brainstormed with [DeepLearning.AI / Skill Builder](https://skillbuilder.deeplearning.ai/) and ChatGPT 5.4, then narrowed into a local-first MVP._
 
-Internal development iterations in this plan use `v1.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
+Internal development iterations in this plan use `vN.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
 
 ## 1. Document Processing: PDF to Structured JSON
 
@@ -53,7 +53,7 @@ The first working version stayed local-first and deliberately narrow:
 
 Current public version: `0.1.0-beta`
 Current package metadata version: `0.1.0`
-Current internal implementation level: `v1.99.0`
+Current internal implementation level: `v3.9.0`
 
 `0.1.0-beta` is the public release label. The package version remains PEP440-compatible `0.1.0` until the beta checkpoint is cut as a formal package release.
 
@@ -82,7 +82,9 @@ What the repo now has:
 - bucket-level corpus diagnostics and follow-up actions for unknown-document sanity checks
 - corpus sample profiles, saved corpus snapshots, failure examples, and a contract gate for corpus diagnostics
 - stronger unknown-document typing for registration forms, court opinions, government bulletins, and inspection-style records
+- stronger public-record semantics for statistical tables, web job listings, environmental site records, and institutional correspondence from local unknown-PDF corpus buckets
 - corpus-level semantic pass metrics that separate technical success from semantic understanding
+- `unknown_document_semantics_core` as a maintainer shard for unfamiliar-document type, purpose, audience, and confidence behavior
 - a dedicated `processing_layer_core` shard for block typing, section-role recovery, and chunk provenance
 - a dedicated `processing_strategy_core` shard for strategy-aware chunking on structure-heavy inputs
 - an explicit retrieval contract for `single_document_qa`, `document_understanding`, and `cross_document_discovery`
@@ -110,18 +112,26 @@ What the repo now has:
 - `quality_profile.overall_status` and `recommended_next_action` as the user-facing random-PDF contract
 - compact processing failure taxonomy in `processing_diagnostics`
 - retrieval/synthesis contract status, support coverage, and answer source mix
+- compact `assess-pdf` acceptance summaries for unfamiliar PDFs
 - a layer-aware evaluation summary for `processing`, `retrieval`, and `answer_faithfulness`
 - layer-stability and architecture-gate summaries that turn those layers into explicit evaluation gates
 - corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
 - deterministic corpus sampling manifests for quick/balanced/stress unknown-PDF sanity checks
 - compact corpus snapshots and saved profile comparison without reprocessing PDFs
+- compact release `product_gate` summary over public path, benchmark, and corpus pass/review state
 - compact public workflow payloads by default, with full debug payloads behind `--verbose`
+- frozen public compact JSON contracts for `run-workflow`, `smoke-check`, and `assess-pdf`
 - explicit backend policy that keeps `hash` as default and keeps cross-encoder/LLM paths opt-in
 - compact release-check summaries with full maintainer payloads behind `--verbose`
 
 Current validation snapshot:
 
 - public CLI tests rerun in the current milestone: green
+- public compact workflow contract tests rerun in the current milestone: green
+- unknown-document semantics shard rerun in the current milestone: green, `9/9`
+- balanced local corpus sanity rerun in the current milestone: green, `12/12` technical and semantic pass, no follow-up actions
+- quick local corpus sanity rerun in the current milestone: green, `4/4` technical and semantic pass, no follow-up actions
+- quick-latest vs balanced-latest corpus profile compare rerun in the current milestone: review due lower average structure confidence on the larger sample
 - processing-layer maintainer shards rerun in the current milestone: green
 - retrieval-contract maintainer shard rerun in the current milestone: green
 - retrieval-synthesis maintainer shard rerun in the current milestone: green
@@ -352,15 +362,35 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
   - consolidated docs around the public beta path and moved sprint detail into this plan/log
 - `v1.94.0-v1.99.0`
   - beta-freeze validation scope: tests, package/runtime/release checks, compact workflow smoke, and corpus snapshot comparison
+- `v2.0.0-v2.4.0`
+  - added public `assess-pdf --pdf ... --json` as a compact real-world PDF acceptance layer
+  - added acceptance profiles for scanned, form-heavy, table-heavy, short, medium, and long PDFs
+  - exposed one-line status fields for processing, semantics, retrieval, answer trust, and next action
+  - kept the full workflow payload behind `--verbose`
+- `v2.5.0-v2.9.0`
+  - reviewed balanced local-corpus failures by bucket instead of by one-off PDF path
+  - added reusable unknown-document semantics for statistical tables, web job listings, environmental site records, and institutional correspondence
+  - added `unknown_document_semantics_core` and wired it into `release-check`
+  - improved balanced corpus sanity from semantic follow-up actions to a green `12/12` technical and semantic pass
+- `v3.0.0-v3.4.0`
+  - froze compact JSON result keys for `run-workflow`, `smoke-check`, and `assess-pdf`
+  - added contract tests that fail if public fields are removed from compact workflow wrappers
+  - documented schema-like compact contracts in the CLI reference
+  - verified full workflow debug payloads remain behind `--verbose`
+- `v3.5.0-v3.9.0`
+  - refreshed local quick and balanced corpus snapshots without tracking generated reports
+  - verified `corpus-profile-compare --baseline-profile quick-latest --candidate-profile balanced-latest`
+  - added compact release `product_gate` output for `public_path`, `benchmark`, and `corpus`
+  - added compact corpus failure examples to release summaries when corpus status is review
 
 
 ### 6.2. Next Steps
 
-1. Keep the public beta path stable: install, init, doctor, demo PDF, smoke-check, runtime-check.
-2. Use `public-beta-check --json` before tagging; use `release-check --json --verbose` only when full maintainer detail is needed.
-3. Keep `hash` as the default backend while treating sentence-transformers as the recommended opt-in backend.
-4. Expand corpus sanity only through deterministic sample profiles, compact manifests, and saved snapshot comparisons, not by tracking local PDFs or generated indexes.
-5. Keep learned components opt-in until they beat the simpler baseline on clear failure patterns.
+1. Keep `hash` as the default backend while treating sentence-transformers as the recommended opt-in backend.
+2. Use corpus review signals to decide whether optional model experiments are worth running.
+3. Only test cross-encoder or LLM synthesis against concrete failure buckets, not as default behavior.
+4. Keep public compact contracts stable while optional model reports evolve.
+5. Change defaults only after an opt-in model beats the simpler baseline on measured corpus or benchmark failures.
 
 ## 7. Explicitly Deferred
 

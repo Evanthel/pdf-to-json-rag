@@ -73,6 +73,7 @@ User-facing commands:
 - `answer-query`
 - `run-workflow`
 - `smoke-check`
+- `assess-pdf`
 
 Maintainer validation commands:
 
@@ -130,6 +131,7 @@ Examples:
 ```bash
 pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 pdf-to-json-rag run-workflow --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
+pdf-to-json-rag assess-pdf --pdf /tmp/pdf-to-json-rag-demo.pdf --json
 pdf-to-json-rag inspect-document --doc-id your-doc-id --json --output inspect.json
 pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
 pdf-to-json-rag package-check --json
@@ -152,7 +154,19 @@ pdf-to-json-rag answer-query --query "What does this file cover?" --format json
 
 `inspect-document --json` now also exposes compact `processing_diagnostics` plus processing-layer details such as `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, `extraction_summary.layout_signal_counts`, and per-section `section_role` / `source_block_roles`. Processing taxonomy codes include `native_text_low`, `ocr_required`, `weak_sections`, `table_or_form_heavy`, `layout_uncertain`, and `low_text_coverage`.
 
+`assess-pdf --json` is the compact public acceptance layer for unfamiliar PDFs. It returns `overall_status`, `processing_status`, `semantic_status`, `retrieval_status`, `answer_trust`, `recommended_next_action`, `acceptance_profile`, and short diagnostic `messages`. Use `--verbose` to include the full workflow payload behind the assessment.
+
 `answer-query --json`, `run-workflow --json`, and `smoke-check --json` include compact `retrieval_contract`, `document_synthesis`, `claim_alignment`, `contract_health`, `retrieval_contract_status`, `support_coverage`, and `answer_source_mix` blocks so both the retrieval path and answer support sources are explicit. `run-workflow --json` and `smoke-check --json` are compact by default and return `processing_diagnostics` plus `quality_profile_summary`; add `--verbose` for the full workflow `quality_profile`, artifacts, and debug payload. Weak or unsupported claims move answer trust to `review`; document-level metadata claims can be supported by `support_trace`.
+
+Public compact contract freeze:
+
+- `run-workflow --json` result keys: `pdf`, `doc_id`, `document`, `plan`, `index`, `answer`, `processing_diagnostics`, `quality_profile_summary`.
+- `smoke-check --json` result keys: all `run-workflow` compact keys plus `checks` and `all_pass`.
+- `assess-pdf --json` result keys: `pdf`, `doc_id`, `overall_status`, `processing_status`, `semantic_status`, `retrieval_status`, `answer_trust`, `recommended_next_action`, `acceptance_profile`, `messages`.
+- `document` compact keys: `doc_id`, `label`, `title`, `document_family`, `document_type`, `document_purpose`, `audience`, `inventory_summary`, `coverage_terms`, `structure_confidence`, `layout_confidence`, `semantic_confidence`, `semantic_confidence_label`, `page_count`, `section_count`.
+- `index` compact keys: `doc_ids`, `chunk_count`, `embedding`.
+- `answer` compact keys: `query`, `query_intent`, `answer`, `answer_trace`, `contract_health`, `retrieval_contract_status`, `support_coverage`, `answer_source_mix`.
+- Debug-only workflow fields such as `artifacts`, full `quality_profile`, `top_k_hits`, `expanded_hits`, and `evidence` require `--verbose`.
 
 ```bash
 pdf-to-json-rag corpus-sanity-check --profile quick --json
@@ -160,7 +174,7 @@ pdf-to-json-rag corpus-sanity-check --profile quick --json
 
 `corpus-sanity-check` samples the repo-local `pdf/` corpus through `pdf/lcwa_gov_pdf_metadata.csv`, runs isolated workflow checks on the sampled PDFs, and returns aggregate rates, deterministic `sample_manifest` bucket/checksum data, bucket-level diagnostics, follow-up actions with concrete failure examples, a saved snapshot path, a corpus contract gate, and a corpus architecture gate over `processing`, `semantics`, and `trust`. Use `--profile quick|balanced|stress` or the equivalent `--sample-profile` to control cost; `--sample-size` still overrides the profile when needed.
 
-`corpus-profile-compare --json` compares saved `corpus-sanity-check` profile snapshots such as quick vs balanced without reprocessing PDFs. It supports aliases such as `quick-latest`, reports metric deltas, sample checksum changes, regression metrics, and a compact `corpus_diff_summary` with pass/fail/skip checks.
+`corpus-profile-compare --json` compares saved `corpus-sanity-check` profile snapshots such as quick vs balanced without reprocessing PDFs. It supports aliases such as `quick-latest`, reports metric deltas, sample checksum changes, regression metrics, and a compact `corpus_diff_summary` with pass/fail/skip checks. Treat regressions on changed samples as a corpus review signal, not as proof that one PDF should be special-cased.
 
 `evaluate-mvp --json` now also returns `layer_summary`, `layer_stability`, `architecture_gates`, and sampled faithfulness `contract_validation` blocks so you can separate `processing`, `retrieval`, and `answer_faithfulness` health from the broader benchmark summary and still get an explicit gate decision.
 
@@ -172,7 +186,7 @@ pdf-to-json-rag corpus-sanity-check --profile quick --json
 
 `build-index --json`, `run-workflow --json`, and `smoke-check --json` include an `index.embedding` block with requested backend, effective backend/model, fallback reason, and runtime-check diagnostics.
 
-`release-check --json` returns a compact release summary by default, including public, maintainer, internal-regression, runtime, and local-corpus gates as pass/fail/skip records. Use `release-check --json --verbose` for the full payload.
+`release-check --json` returns a compact release summary by default, including public, maintainer, internal-regression, runtime, and local-corpus gates as pass/fail/skip records. It also includes `product_gate`, which summarizes `public_path`, `benchmark`, and `corpus` as `pass`, `fail`, `skip`, or `review`; corpus review includes compact failure examples when available. Use `release-check --json --verbose` for the full payload.
 
 `readme-smoke-check --json` builds and installs the package into a temporary environment, then replays the public README flow: `init`, `doctor`, `create-demo-pdf`, `smoke-check`, and `runtime-check`. It intentionally excludes maintainer benchmark regressions.
 

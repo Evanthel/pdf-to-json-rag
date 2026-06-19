@@ -46,6 +46,34 @@ DOCUMENT_TYPE_HINTS = {
         "office report",
         "bureau",
     ),
+    "statistical_table": (
+        "census of agriculture",
+        "median farm size",
+        "figures taken from",
+        "by county",
+        "county median",
+    ),
+    "web_job_listing": (
+        "indeed.com",
+        "online job postings",
+        "job postings",
+        "jobs on indeed.com",
+        "powered by joomla",
+    ),
+    "environmental_site_record": (
+        "waste site id",
+        "waste site reclassification",
+        "current waste site condition",
+        "doe project manager",
+        "ecology project manager",
+    ),
+    "institutional_correspondence": (
+        "letterhead",
+        "memorandum",
+        "the rockefeller university",
+        "university new york",
+        "new york 10021",
+    ),
     "financial_statement": (
         "financial statement",
         "net worth",
@@ -110,6 +138,27 @@ DOCUMENT_PURPOSE_HINTS = {
         "department of",
         "bureau",
         "animal welfare",
+        "waste site id",
+        "waste site reclassification",
+        "current waste site condition",
+    ),
+    "statistical_reference": (
+        "census of agriculture",
+        "median farm size",
+        "figures taken from",
+        "by county",
+    ),
+    "employment_listing": (
+        "indeed.com",
+        "online job postings",
+        "job postings",
+        "jobs on indeed.com",
+    ),
+    "institutional_communication": (
+        "letterhead",
+        "memorandum",
+        "the rockefeller university",
+        "university new york",
     ),
     "administrative_submission": (
         "application",
@@ -162,6 +211,8 @@ AUDIENCE_HINTS = {
     "public_readers": ("public notice", "newsletter", "constituent", "resident", "office of"),
     "legal_professionals": ("court of appeals", "appellant", "appellee", "petitioner", "respondent"),
     "officials": ("department of", "agency", "bureau", "inspection"),
+    "job_seekers": ("indeed.com", "job postings", "jobs on indeed.com"),
+    "institutional_staff": ("university", "memorandum", "letterhead"),
 }
 
 EVIDENCE_STYLE_HINTS = {
@@ -178,6 +229,10 @@ EVIDENCE_STYLE_HINTS = {
         "announcement",
         "office of",
     ),
+    "statistical_table": ("census of agriculture", "median farm size", "by county", "figures taken from"),
+    "web_listing": ("indeed.com", "online job postings", "powered by joomla"),
+    "environmental_record": ("waste site id", "waste site reclassification", "project manager signature"),
+    "institutional_correspondence": ("letterhead", "memorandum", "university"),
     "administrative_form": (
         "personal details",
         "date of birth",
@@ -214,6 +269,10 @@ STRUCTURE_STYLE_HINTS = {
         "office of",
         "announcement",
     ),
+    "data_table": ("census of agriculture", "median farm size", "by county"),
+    "web_page_printout": ("powered by joomla", "generated:", "indeed.com"),
+    "structured_site_record": ("waste site id", "waste site reclassification", "project manager signature"),
+    "letterhead": ("letterhead", "university", "memorandum"),
     "financial_grid": ("financial statement", "net worth", "total assets", "total liabilities"),
     "administrative_form": (
         "personal details",
@@ -291,6 +350,12 @@ def derive_document_facets(
         document_type = "government_bulletin"
     elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["inspection_report"]):
         document_type = "inspection_report"
+    elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["environmental_site_record"]):
+        document_type = "environmental_site_record"
+    elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["statistical_table"]):
+        document_type = "statistical_table"
+    elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["web_job_listing"]):
+        document_type = "web_job_listing"
     elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["agency_report"]):
         document_type = "agency_report"
     elif (
@@ -298,6 +363,12 @@ def derive_document_facets(
         and _contains_any(signal_text, DOCUMENT_TYPE_HINTS["administrative_form"])
     ):
         document_type = "administrative_form"
+    elif (
+        document_type in {None, "document", "report"}
+        and page_count <= 2
+        and _contains_any(signal_text, DOCUMENT_TYPE_HINTS["institutional_correspondence"])
+    ):
+        document_type = "institutional_correspondence"
     if document_type is None:
         if page_count >= 100 and ("chapter" in signal_text or "foreword" in signal_text):
             document_type = "book"
@@ -319,6 +390,14 @@ def derive_document_facets(
         document_purpose = "public_notice"
     elif document_type in {"inspection_report", "agency_report"} and document_purpose in {None, "reference_lookup"}:
         document_purpose = "institutional_reporting"
+    elif document_type == "environmental_site_record" and document_purpose in {None, "reference_lookup"}:
+        document_purpose = "institutional_reporting"
+    elif document_type == "statistical_table" and document_purpose in {None, "reference_lookup"}:
+        document_purpose = "statistical_reference"
+    elif document_type == "web_job_listing" and document_purpose in {None, "reference_lookup"}:
+        document_purpose = "employment_listing"
+    elif document_type == "institutional_correspondence" and document_purpose in {None, "reference_lookup"}:
+        document_purpose = "institutional_communication"
     elif document_type == "administrative_form" and document_purpose in {None, "reference_lookup"}:
         document_purpose = "administrative_intake"
     if document_purpose is None:
@@ -328,6 +407,10 @@ def derive_document_facets(
             "government_bulletin": "public_notice",
             "inspection_report": "institutional_reporting",
             "agency_report": "institutional_reporting",
+            "environmental_site_record": "institutional_reporting",
+            "statistical_table": "statistical_reference",
+            "web_job_listing": "employment_listing",
+            "institutional_correspondence": "institutional_communication",
             "book": "teaching_reference",
             "guidance_note": "procedural_guidance",
             "questionnaire": "structured_data_capture",
@@ -355,6 +438,14 @@ def derive_document_facets(
         audience = "public_readers"
     elif document_type in {"inspection_report", "agency_report"} and audience in {None, "general_professional"}:
         audience = "officials"
+    elif document_type == "environmental_site_record" and audience in {None, "general_professional"}:
+        audience = "officials"
+    elif document_type == "statistical_table" and audience in {None, "general_professional"}:
+        audience = "analysts"
+    elif document_type == "web_job_listing" and audience in {None, "general_professional"}:
+        audience = "job_seekers"
+    elif document_type == "institutional_correspondence" and audience in {None, "general_professional"}:
+        audience = "institutional_staff"
     if audience is None:
         fallback_audience = {
             "registration_form": "filers",
@@ -362,6 +453,10 @@ def derive_document_facets(
             "government_bulletin": "public_readers",
             "inspection_report": "officials",
             "agency_report": "officials",
+            "environmental_site_record": "officials",
+            "statistical_table": "analysts",
+            "web_job_listing": "job_seekers",
+            "institutional_correspondence": "institutional_staff",
             "book": "learners",
             "guidance_note": "practitioners",
             "questionnaire": "practitioners",
@@ -383,6 +478,14 @@ def derive_document_facets(
         evidence_style = "legal_record"
     elif document_type in {"government_bulletin", "inspection_report", "agency_report"}:
         evidence_style = "government_notice"
+    elif document_type == "environmental_site_record":
+        evidence_style = "environmental_record"
+    elif document_type == "statistical_table":
+        evidence_style = "statistical_table"
+    elif document_type == "web_job_listing":
+        evidence_style = "web_listing"
+    elif document_type == "institutional_correspondence":
+        evidence_style = "institutional_correspondence"
     if evidence_style is None:
         fallback_evidence_style = {
             "registration_form": "administrative_form",
@@ -390,6 +493,10 @@ def derive_document_facets(
             "government_bulletin": "government_notice",
             "inspection_report": "government_notice",
             "agency_report": "government_notice",
+            "environmental_site_record": "environmental_record",
+            "statistical_table": "statistical_table",
+            "web_job_listing": "web_listing",
+            "institutional_correspondence": "institutional_correspondence",
             "book": "educational_exposition",
             "guidance_note": "procedural_guidance",
             "questionnaire": "structured_form",
@@ -413,6 +520,14 @@ def derive_document_facets(
         structure_style = "legal_opinion"
     elif document_type in {"government_bulletin", "inspection_report", "agency_report"} and structure_style in {None, "report_sections"}:
         structure_style = "government_notice"
+    elif document_type == "environmental_site_record" and structure_style in {None, "report_sections"}:
+        structure_style = "structured_site_record"
+    elif document_type == "statistical_table" and structure_style in {None, "report_sections"}:
+        structure_style = "data_table"
+    elif document_type == "web_job_listing" and structure_style in {None, "report_sections"}:
+        structure_style = "web_page_printout"
+    elif document_type == "institutional_correspondence" and structure_style in {None, "report_sections"}:
+        structure_style = "letterhead"
     if structure_style is None:
         fallback_structure_style = {
             "registration_form": "administrative_form",
@@ -420,6 +535,10 @@ def derive_document_facets(
             "government_bulletin": "government_notice",
             "inspection_report": "government_notice",
             "agency_report": "government_notice",
+            "environmental_site_record": "structured_site_record",
+            "statistical_table": "data_table",
+            "web_job_listing": "web_page_printout",
+            "institutional_correspondence": "letterhead",
             "book": "chapter_book",
             "guidance_note": "report_sections",
             "questionnaire": "questionnaire_grid",
@@ -479,9 +598,28 @@ def derive_document_facets(
         semantic_warnings.append("generic_document_purpose")
     if audience == "general_professional":
         semantic_warnings.append("generic_audience")
-    if document_type in {"court_opinion", "registration_form", "government_bulletin", "inspection_report", "agency_report"}:
+    if document_type in {
+        "court_opinion",
+        "registration_form",
+        "government_bulletin",
+        "inspection_report",
+        "agency_report",
+        "environmental_site_record",
+        "statistical_table",
+        "web_job_listing",
+        "institutional_correspondence",
+    }:
         semantic_warnings = [warning for warning in semantic_warnings if warning != "generic_document_type"]
-    if document_purpose in {"legal_record", "registration_update", "public_notice", "institutional_reporting", "administrative_submission"}:
+    if document_purpose in {
+        "legal_record",
+        "registration_update",
+        "public_notice",
+        "institutional_reporting",
+        "administrative_submission",
+        "statistical_reference",
+        "employment_listing",
+        "institutional_communication",
+    }:
         semantic_warnings = [warning for warning in semantic_warnings if warning != "generic_document_purpose"]
     if type_matches == 0 and purpose_matches == 0:
         semantic_warnings.append("limited_explicit_semantic_cues")

@@ -22,11 +22,11 @@ This codebase is intentionally separate from that fork. The fork captures the ba
 
 Current public version: `0.1.0-beta`
 
-Internal development iterations in this repo use `v1.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
+Internal development iterations in this repo use `vN.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
 
 Current package metadata version: `0.1.0`
 
-Current internal milestone: `v1.99.0`
+Current internal milestone: `v3.9.0`
 
 The public release label is `0.1.0-beta`; package metadata remains PEP440-compatible `0.1.0` until the first non-beta public cut.
 
@@ -58,6 +58,7 @@ The current baseline includes:
 - explicit classification-rationale and classification-limits answers for trust-aware document semantics
 - a local corpus sampler over repo-local `pdf/` artifacts and metadata for unknown-document sanity checks
 - stronger unknown-document typing for registration forms, court opinions, government bulletins, and inspection-style records
+- stronger public-record semantics for statistical tables, web job listings, environmental site records, and institutional correspondence found in unknown-PDF corpus buckets
 - corpus-level semantic pass metrics so unfamiliar PDFs are tracked as semantically understood vs only technically processable
 - a dedicated `processing_layer_core` maintainer gate for block typing, section roles, and chunk provenance
 - a dedicated `processing_strategy_core` maintainer gate for strategy-aware chunking on structure-heavy inputs
@@ -86,6 +87,8 @@ The current baseline includes:
 - `quality_profile.overall_status` and `recommended_next_action` for random-PDF UX
 - compact `processing_diagnostics` with failure taxonomy for extraction/layout/chunking issues
 - retrieval/synthesis contract status with support coverage and answer source mix
+- `assess-pdf` as a compact public acceptance layer for unfamiliar PDFs
+- `unknown_document_semantics_core` as a maintainer shard for document type, purpose, audience, and confidence behavior on unfamiliar-document semantics
 - a layer-aware evaluation report that separates processing, retrieval, and answer-faithfulness signals
 - layer-stability and architecture-gate summaries on top of the layer-aware evaluation report
 - corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
@@ -93,7 +96,9 @@ The current baseline includes:
 - corpus sample profiles, deterministic sample manifests, saved corpus snapshots, and a contract gate for bucket diagnostics
 - saved corpus snapshot comparison through `corpus-profile-compare`
 - compact corpus snapshots and saved snapshot comparison without reprocessing PDFs
+- compact release `product_gate` summary over public path, benchmark, and corpus pass/review state
 - compact default workflow JSON output with richer debug state behind `--verbose`
+- frozen public compact JSON contracts for `run-workflow`, `smoke-check`, and `assess-pdf`
 - explicit backend policy: `hash` default, sentence-transformers recommended opt-in, cross-encoder experimental, LLM synthesis opt-in only
 - compact `release-check --json` summaries, with full release payloads behind `--verbose`
 - deterministic local embeddings by default, with optional `sentence-transformers` or `auto` backend selection
@@ -101,6 +106,11 @@ The current baseline includes:
 Validation state:
 
 - public CLI tests rerun in the current milestone: green
+- public compact workflow contract tests rerun in the current milestone: green
+- unknown-document semantics shard rerun in the current milestone: green, `9/9`
+- balanced local corpus sanity rerun in the current milestone: green, `12/12` technical and semantic pass
+- quick local corpus sanity rerun in the current milestone: green, `4/4` technical and semantic pass
+- quick-latest vs balanced-latest corpus profile compare rerun in the current milestone: review due lower average structure confidence on the larger sample
 - full-suite baseline vs local `all-MiniLM-L6-v2` runtime comparison: green, `77/77` for both modes, sentence-transformer promotion gate green
 - processing-layer maintainer shards rerun in the current milestone: green
 - retrieval-contract maintainer shard rerun in the current milestone: green
@@ -153,6 +163,7 @@ Current engineering direction:
   - `answer-query`
   - `run-workflow`
   - `smoke-check`
+  - `assess-pdf`
 - Expose maintainer-facing release gates through:
   - `package-check`
   - `release-check`
@@ -216,6 +227,14 @@ Fastest full workflow:
 ```bash
 pdf-to-json-rag run-workflow --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 ```
+
+For an unfamiliar PDF where you only need a trust/readiness decision:
+
+```bash
+pdf-to-json-rag assess-pdf --pdf /path/to/file.pdf --json
+```
+
+`assess-pdf` returns a compact acceptance summary: `overall_status`, `processing_status`, `semantic_status`, `retrieval_status`, `answer_trust`, `recommended_next_action`, an `acceptance_profile`, and short diagnostic messages. Use `--verbose` only when you need the full workflow payload behind that assessment.
 
 Maintainer release validation:
 

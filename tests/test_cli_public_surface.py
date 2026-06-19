@@ -78,6 +78,46 @@ class CliPublicSurfaceTests(unittest.TestCase):
         doc.save(path)
         doc.close()
 
+    def _assert_public_workflow_contract(self, result: dict[str, object], *, smoke: bool = False) -> None:
+        expected_keys = (
+            cli_module.PUBLIC_COMPACT_SMOKE_KEYS
+            if smoke
+            else cli_module.PUBLIC_COMPACT_WORKFLOW_KEYS
+        )
+        self.assertEqual(set(result), set(expected_keys))
+        self.assertEqual(set(result["document"]), set(cli_module.PUBLIC_COMPACT_DOCUMENT_KEYS))
+        self.assertEqual(set(result["index"]), set(cli_module.PUBLIC_COMPACT_INDEX_KEYS))
+        self.assertEqual(set(result["answer"]), set(cli_module.PUBLIC_COMPACT_ANSWER_KEYS))
+        self.assertEqual(
+            set(result["quality_profile_summary"]),
+            {"available", "overall_status", "statuses", "reasons", "recommended_next_action"},
+        )
+        self.assertEqual(
+            set(result["processing_diagnostics"]),
+            {"status", "taxonomy", "technical_processed", "structurally_reliable", "recommended_next_action", "summary"},
+        )
+        self.assertNotIn("artifacts", result)
+        self.assertNotIn("quality_profile", result)
+        self.assertNotIn("top_k_hits", result["answer"])
+        self.assertNotIn("expanded_hits", result["answer"])
+        self.assertNotIn("evidence", result["answer"])
+
+    def _assert_assess_pdf_contract(self, result: dict[str, object]) -> None:
+        self.assertEqual(set(result), set(cli_module.PUBLIC_ASSESS_PDF_KEYS))
+        self.assertNotIn("workflow", result)
+        self.assertIsInstance(result["messages"], list)
+        self.assertIn(
+            result["acceptance_profile"],
+            {
+                "scanned_pdf",
+                "form_heavy_pdf",
+                "table_heavy_pdf",
+                "short_document",
+                "medium_document",
+                "long_document",
+            },
+        )
+
     def _run(self, *args: str, expect_ok: bool = True) -> subprocess.CompletedProcess[str]:
         process = subprocess.run(
             [sys.executable, "-m", "pdf_to_json_rag", *args],
@@ -307,9 +347,67 @@ class CliPublicSurfaceTests(unittest.TestCase):
 
         self.assertEqual(compact["overall"]["status"], "pass")
         self.assertEqual(compact["runtime_decision"]["default_backend"], "hash")
+        self.assertTrue(compact["product_gate"]["all_pass"])
+        self.assertEqual(compact["product_gate"]["public_path"]["status"], "pass")
+        self.assertEqual(compact["product_gate"]["benchmark"]["status"], "pass")
+        self.assertEqual(compact["product_gate"]["corpus"]["status"], "pass")
         self.assertEqual(compact["internal_regressions"]["selected_shard_count"], 1)
         self.assertEqual(compact["internal_regressions"]["shards"][0]["status"], "pass")
         self.assertEqual(compact["local_corpus_sanity"]["gate"]["status"], "pass")
+
+    def test_release_check_compact_payload_marks_corpus_review_with_examples(self) -> None:
+        compact = cli_module._release_check_compact_payload(
+            {
+                "doctor": {"ready_for_public_cli": True, "runtime": {"runtime_decision": {}}},
+                "public_surface": {"all_pass": True, "smoke": {"smoke_all_pass": True}},
+                "maintainer_checks": {
+                    "available": True,
+                    "all_pass": True,
+                    "package_check": {"all_pass": True, "skipped": False},
+                    "unittests": {"passed": True, "skipped": False},
+                },
+                "internal_regressions": {
+                    "benchmark_assets_available": True,
+                    "selected_shards": ["query_planning_core"],
+                    "skipped": False,
+                    "all_pass": True,
+                    "results": [],
+                },
+                "local_corpus_sanity": {
+                    "available": True,
+                    "result": {
+                        "architecture_gates": {"all_pass": False},
+                        "sample_manifest": {"selected_digest_checksum": "abc"},
+                        "follow_up_actions": [
+                            {
+                                "bucket": "scan_like",
+                                "focus": "semantics",
+                                "priority": "high",
+                                "failure_examples": [
+                                    {
+                                        "pdf": "/tmp/example.pdf",
+                                        "doc_id": "example",
+                                        "reasons": ["low_semantic_confidence"],
+                                        "document_type": "document",
+                                        "document_purpose": "reference_lookup",
+                                        "semantic_confidence": 0.47,
+                                    }
+                                ],
+                            }
+                        ],
+                    },
+                },
+                "overall_pass": False,
+                "recommendation": {"release_ready": False},
+            }
+        )
+
+        corpus_gate = compact["product_gate"]["corpus"]
+        self.assertFalse(compact["product_gate"]["all_pass"])
+        self.assertEqual(corpus_gate["status"], "review")
+        self.assertEqual(corpus_gate["follow_up_count"], 1)
+        self.assertEqual(corpus_gate["failure_examples"][0]["bucket"], "scan_like")
+        self.assertEqual(corpus_gate["failure_examples"][0]["doc_id"], "example")
 
     def test_public_beta_check_compact_payload_aggregates_release_gates(self) -> None:
         payload = cli_module._public_beta_check_compact_payload(
@@ -604,6 +702,57 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIn("table_or_form_heavy", table["taxonomy"])
         self.assertEqual(table["status"], "warn")
 
+    def test_assessment_profiles_cover_unknown_pdf_shapes(self) -> None:
+        base_doc = {
+            "page_count": 1,
+            "semantic_confidence_label": "high",
+            "extraction_summary": {
+                "block_role_counts": {},
+                "layout_signal_counts": {},
+            },
+        }
+        self.assertEqual(cli_module._assessment_profile(base_doc, {"taxonomy": []}), "short_document")
+        self.assertEqual(
+            cli_module._assessment_profile(
+                {**base_doc, "page_count": 20},
+                {"taxonomy": []},
+            ),
+            "long_document",
+        )
+        self.assertEqual(
+            cli_module._assessment_profile(
+                base_doc,
+                {"taxonomy": ["ocr_required", "native_text_low"]},
+            ),
+            "scanned_pdf",
+        )
+        self.assertEqual(
+            cli_module._assessment_profile(
+                {
+                    **base_doc,
+                    "extraction_summary": {
+                        "block_role_counts": {"form_field": 2, "key_value": 2},
+                        "layout_signal_counts": {"form_like": 1},
+                    },
+                },
+                {"taxonomy": ["table_or_form_heavy"]},
+            ),
+            "form_heavy_pdf",
+        )
+        self.assertEqual(
+            cli_module._assessment_profile(
+                {
+                    **base_doc,
+                    "extraction_summary": {
+                        "block_role_counts": {"table_like": 3},
+                        "layout_signal_counts": {"table_like": 1},
+                    },
+                },
+                {"taxonomy": ["table_or_form_heavy"]},
+            ),
+            "table_heavy_pdf",
+        )
+
     def test_corpus_profile_compare_reports_snapshot_deltas(self) -> None:
         baseline_path = self.workspace / "quick.json"
         candidate_path = self.workspace / "balanced.json"
@@ -799,9 +948,82 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertTrue(result["answer"]["answer"])
         self.assertIn("quality_profile_summary", result)
         self.assertNotIn("quality_profile", result)
+        self._assert_public_workflow_contract(result, smoke=True)
         written = json.loads(output_path.read_text(encoding="utf-8"))
         self.assertEqual(written["command"], "smoke-check")
         self.assertTrue(written["result"]["all_pass"])
+
+    def test_run_workflow_public_json_contract_is_compact(self) -> None:
+        self._run("init", "--json")
+        process = self._run(
+            "run-workflow",
+            "--pdf",
+            str(self.pdf_path),
+            "--query",
+            "What does this file cover?",
+            "--json",
+        )
+        payload = json.loads(process.stdout)
+        self.assertTrue(payload["ok"])
+        result = payload["result"]
+        self._assert_public_workflow_contract(result)
+        self.assertTrue(result["answer"]["answer"])
+        self.assertIn(
+            result["quality_profile_summary"]["overall_status"],
+            {"pass", "warn", "review", "fail", "skip", "unknown"},
+        )
+
+        verbose_payload = json.loads(
+            self._run(
+                "run-workflow",
+                "--pdf",
+                str(self.pdf_path),
+                "--query",
+                "What does this file cover?",
+                "--json",
+                "--verbose",
+            ).stdout
+        )
+        verbose_result = verbose_payload["result"]
+        self.assertIn("artifacts", verbose_result)
+        self.assertIn("quality_profile", verbose_result)
+        self.assertIn("top_k_hits", verbose_result["answer"])
+
+    def test_assess_pdf_end_to_end_json_is_compact(self) -> None:
+        self._run("init", "--json")
+        demo_path = self.workspace / "assess-demo.pdf"
+        self._run("create-demo-pdf", "--path", str(demo_path), "--json")
+        process = self._run(
+            "assess-pdf",
+            "--pdf",
+            str(demo_path),
+            "--json",
+        )
+        payload = json.loads(process.stdout)
+        self.assertTrue(payload["ok"])
+        result = payload["result"]
+        self.assertEqual(result["overall_status"], "pass")
+        self.assertEqual(result["processing_status"], "pass")
+        self.assertEqual(result["semantic_status"], "pass")
+        self.assertEqual(result["retrieval_status"], "pass")
+        self.assertEqual(result["answer_trust"], "pass")
+        self.assertEqual(result["recommended_next_action"], "none")
+        self.assertEqual(result["acceptance_profile"], "short_document")
+        self.assertIn("answer_supported_by_document_semantics_only", result["messages"])
+        self.assertNotIn("workflow", result)
+        self._assert_assess_pdf_contract(result)
+
+        verbose_payload = json.loads(
+            self._run(
+                "assess-pdf",
+                "--pdf",
+                str(demo_path),
+                "--json",
+                "--verbose",
+            ).stdout
+        )
+        self.assertIn("workflow", verbose_payload["result"])
+        self.assertIn("quality_profile", verbose_payload["result"]["workflow"])
 
     def test_create_demo_then_smoke_then_answer_query_chain(self) -> None:
         self._run("init", "--json")
@@ -1939,6 +2161,79 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(facets["document_purpose"], "legal_record")
         self.assertEqual(facets["audience"], "legal_professionals")
         self.assertGreaterEqual(facets["semantic_confidence"], 0.75)
+
+    def test_unknown_document_semantics_cover_public_record_buckets(self) -> None:
+        statistical = derive_document_facets(
+            source_pdf="30 median farm size 2004.pdf",
+            title="30% Median Farm Size by County",
+            toc=[],
+            summary_cues=["County", "Figures taken from the 2002 Census of Agriculture"],
+            leading_block_lines=[
+                "Colorado Agricultural Development Authority",
+                "30% of Median Farm Size by County",
+                "Figures taken from the 2002 Census of Agriculture",
+            ],
+            metadata_values=[],
+            page_count=1,
+        )
+        self.assertEqual(statistical["document_type"], "statistical_table")
+        self.assertEqual(statistical["document_purpose"], "statistical_reference")
+        self.assertEqual(statistical["audience"], "analysts")
+        self.assertGreaterEqual(statistical["semantic_confidence"], 0.75)
+
+        job_listing = derive_document_facets(
+            source_pdf="index2.pdf",
+            title="Utah GIS Portal",
+            toc=[],
+            summary_cues=["Indeed.com index of Utah GIS jobs", "Utah GIS Jobs on indeed.com"],
+            leading_block_lines=[
+                "Indeed.com is an index of several online job postings.",
+                "Location = Utah AND Description CONTAINS GIS",
+                "Powered by Joomla! Generated: 25 April, 2010",
+            ],
+            metadata_values=[],
+            page_count=1,
+        )
+        self.assertEqual(job_listing["document_type"], "web_job_listing")
+        self.assertEqual(job_listing["document_purpose"], "employment_listing")
+        self.assertEqual(job_listing["audience"], "job_seekers")
+        self.assertGreaterEqual(job_listing["semantic_confidence"], 0.75)
+
+        environmental = derive_document_facets(
+            source_pdf="waste-site-reclassification.pdf",
+            title="Waste Site Reclassification Form",
+            toc=[],
+            summary_cues=["Waste Site Reclassification Form", "Description of current waste site condition"],
+            leading_block_lines=[
+                "Originator Charlie Shipler Waste Site ID: 200-W48",
+                "Description of current waste site condition:",
+                "DOE Project Manager Signature Date",
+                "Ecology Project Manager Signature Date",
+            ],
+            metadata_values=[],
+            page_count=1,
+        )
+        self.assertEqual(environmental["document_type"], "environmental_site_record")
+        self.assertEqual(environmental["document_purpose"], "institutional_reporting")
+        self.assertEqual(environmental["audience"], "officials")
+        self.assertGreaterEqual(environmental["semantic_confidence"], 0.75)
+
+        correspondence = derive_document_facets(
+            source_pdf="scanned-letter.pdf",
+            title="The Rockefeller University",
+            toc=[],
+            summary_cues=["THE ROCKEFELLER UNIVERSITY NEW YORK 10021-6399"],
+            leading_block_lines=[
+                "THE ROCKEFELLER UNIVERSITY NEW YORK 10021-6399",
+                "University letterhead",
+            ],
+            metadata_values=[],
+            page_count=1,
+        )
+        self.assertEqual(correspondence["document_type"], "institutional_correspondence")
+        self.assertEqual(correspondence["document_purpose"], "institutional_communication")
+        self.assertEqual(correspondence["audience"], "institutional_staff")
+        self.assertGreaterEqual(correspondence["semantic_confidence"], 0.75)
 
     def test_layout_sanity_check_json_for_multiple_pdfs(self) -> None:
         second_pdf = self.workspace / "financial-form.pdf"

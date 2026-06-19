@@ -6,6 +6,7 @@ Main commands:
 
 - `pdf-to-json-rag evaluate-mvp --json`
 - `pdf-to-json-rag evaluate-regression --shard query_planning_core --json`
+- `pdf-to-json-rag evaluate-regression --shard unknown_document_semantics_core --json`
 
 Artifacts:
 
@@ -17,6 +18,7 @@ Use this layer for:
 
 - regression checking while changing retrieval or answering
 - slice-level stability checks
+- unknown-document type, purpose, audience, and confidence checks
 - faithfulness spot checks
 
 Do not treat this document as the primary onboarding path for first-time users. For that, start with:

@@ -63,6 +63,7 @@ COMMAND_ALIASES = {
     "chunk": "chunk-document",
     "index": "build-index",
     "workflow": "run-workflow",
+    "assess": "assess-pdf",
     "create-demo": "create-demo-pdf",
     "list": "list-documents",
     "inspect": "inspect-document",
@@ -108,6 +109,10 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
     "smoke-check": {
         "summary": "Validate the packaged workflow path and return pass/fail checks.",
         "example": "pdf-to-json-rag smoke-check --pdf /path/to/file.pdf --query \"What does this file cover?\" --json",
+    },
+    "assess-pdf": {
+        "summary": "Assess whether an unfamiliar PDF processed reliably and how much to trust the answer.",
+        "example": "pdf-to-json-rag assess-pdf --pdf /path/to/file.pdf --json",
     },
     "list-documents": {
         "summary": "List indexed document inventory entries, optionally filtered by a query.",
@@ -202,6 +207,7 @@ CLI_EPILOG = """Common first-run commands:
   pdf-to-json-rag doctor --json
   pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
   pdf-to-json-rag smoke-check --pdf /path/to/file.pdf --query "What does this file cover?" --json
+  pdf-to-json-rag assess-pdf --pdf /path/to/file.pdf --json
 
 Use `pdf-to-json-rag help --topic <command>` for a focused command summary.
 """
@@ -1076,32 +1082,68 @@ def _quality_profile_summary(quality_profile: dict[str, object] | None) -> dict[
     }
 
 
+PUBLIC_COMPACT_WORKFLOW_KEYS = (
+    "pdf",
+    "doc_id",
+    "document",
+    "plan",
+    "index",
+    "answer",
+    "processing_diagnostics",
+    "quality_profile_summary",
+)
+PUBLIC_COMPACT_SMOKE_KEYS = (*PUBLIC_COMPACT_WORKFLOW_KEYS, "checks", "all_pass")
+PUBLIC_ASSESS_PDF_KEYS = (
+    "pdf",
+    "doc_id",
+    "overall_status",
+    "processing_status",
+    "semantic_status",
+    "retrieval_status",
+    "answer_trust",
+    "recommended_next_action",
+    "acceptance_profile",
+    "messages",
+)
+PUBLIC_COMPACT_DOCUMENT_KEYS = (
+    "doc_id",
+    "label",
+    "title",
+    "document_family",
+    "document_type",
+    "document_purpose",
+    "audience",
+    "inventory_summary",
+    "coverage_terms",
+    "structure_confidence",
+    "layout_confidence",
+    "semantic_confidence",
+    "semantic_confidence_label",
+    "page_count",
+    "section_count",
+)
+PUBLIC_COMPACT_INDEX_KEYS = ("doc_ids", "chunk_count", "embedding")
+PUBLIC_COMPACT_ANSWER_KEYS = (
+    "query",
+    "query_intent",
+    "answer",
+    "answer_trace",
+    "contract_health",
+    "retrieval_contract_status",
+    "support_coverage",
+    "answer_source_mix",
+)
+
+
 def _compact_workflow_payload(payload: dict[str, object]) -> dict[str, object]:
     document = payload.get("document", {}) if isinstance(payload.get("document"), dict) else {}
     index = payload.get("index", {}) if isinstance(payload.get("index"), dict) else {}
-    compact_document_keys = [
-        "doc_id",
-        "label",
-        "title",
-        "document_family",
-        "document_type",
-        "document_purpose",
-        "audience",
-        "inventory_summary",
-        "coverage_terms",
-        "structure_confidence",
-        "layout_confidence",
-        "semantic_confidence",
-        "semantic_confidence_label",
-        "page_count",
-        "section_count",
-    ]
     return {
         "pdf": payload.get("pdf"),
         "doc_id": payload.get("doc_id"),
         "document": {
             key: document.get(key)
-            for key in compact_document_keys
+            for key in PUBLIC_COMPACT_DOCUMENT_KEYS
             if key in document
         },
         "plan": payload.get("plan", {}),
@@ -1116,6 +1158,115 @@ def _compact_workflow_payload(payload: dict[str, object]) -> dict[str, object]:
             payload.get("quality_profile") if isinstance(payload.get("quality_profile"), dict) else None
         ),
     }
+
+
+def _assessment_profile(document: dict[str, object], processing_diagnostics: dict[str, object]) -> str:
+    extraction_summary = document.get("extraction_summary", {}) if isinstance(document.get("extraction_summary"), dict) else {}
+    block_role_counts = extraction_summary.get("block_role_counts", {})
+    layout_signal_counts = extraction_summary.get("layout_signal_counts", {})
+    taxonomy = set(_string_list(processing_diagnostics.get("taxonomy")))
+    page_count = document.get("page_count")
+    form_signal_count = 0
+    table_signal_count = 0
+    if isinstance(block_role_counts, dict):
+        form_signal_count += int(block_role_counts.get("form_field", 0) or 0)
+        form_signal_count += int(block_role_counts.get("key_value", 0) or 0)
+        table_signal_count += int(block_role_counts.get("table_like", 0) or 0)
+    if isinstance(layout_signal_counts, dict):
+        form_signal_count += int(layout_signal_counts.get("form_like", 0) or 0)
+        table_signal_count += int(layout_signal_counts.get("table_like", 0) or 0)
+    if "ocr_required" in taxonomy or "native_text_low" in taxonomy:
+        return "scanned_pdf"
+    if form_signal_count >= max(3, table_signal_count):
+        return "form_heavy_pdf"
+    if table_signal_count >= 3:
+        return "table_heavy_pdf"
+    if isinstance(page_count, int) and page_count <= 2:
+        return "short_document"
+    if isinstance(page_count, int) and page_count >= 15:
+        return "long_document"
+    return "medium_document"
+
+
+def _assessment_messages(
+    *,
+    processing_diagnostics: dict[str, object],
+    quality_summary: dict[str, object],
+    answer: dict[str, object],
+    document: dict[str, object],
+) -> list[str]:
+    messages: list[str] = []
+    statuses = quality_summary.get("statuses", {}) if isinstance(quality_summary.get("statuses"), dict) else {}
+    processing_status = str(statuses.get("processing_quality") or "unknown")
+    semantic_status = str(statuses.get("semantic_confidence") or "unknown")
+    answer_trust = str(statuses.get("answer_trust") or "unknown")
+    taxonomy = set(_string_list(processing_diagnostics.get("taxonomy")))
+    source_mix = answer.get("answer_source_mix", {}) if isinstance(answer.get("answer_source_mix"), dict) else {}
+    chunk_evidence = source_mix.get("chunk_evidence", {}) if isinstance(source_mix.get("chunk_evidence"), dict) else {}
+    document_semantics = source_mix.get("document_semantics", {}) if isinstance(source_mix.get("document_semantics"), dict) else {}
+
+    if processing_status == "pass":
+        messages.append("processed_with_reliable_structure")
+    elif processing_status == "warn":
+        messages.append("processed_with_processing_caveats")
+    elif processing_status == "review":
+        messages.append("processed_but_structurally_weak")
+    elif processing_status == "fail":
+        messages.append("processing_failed_or_no_reliable_text")
+
+    if "ocr_required" in taxonomy:
+        messages.append("ocr_or_scan_path_used")
+    if "table_or_form_heavy" in taxonomy:
+        messages.append("table_or_form_heavy_layout")
+
+    semantic_label = str(document.get("semantic_confidence_label") or "")
+    if semantic_status == "pass" and semantic_label != "low":
+        messages.append("semantic_classification_supported")
+    else:
+        messages.append("semantic_guess_review_recommended")
+
+    if bool(document_semantics.get("present")) and not bool(chunk_evidence.get("present")):
+        messages.append("answer_supported_by_document_semantics_only")
+    elif bool(chunk_evidence.get("present")):
+        messages.append("answer_supported_by_chunk_evidence")
+
+    if answer_trust == "review":
+        messages.append("answer_claims_need_review")
+    elif answer_trust == "pass":
+        messages.append("answer_claims_supported")
+    return list(dict.fromkeys(messages))
+
+
+def _assess_pdf_payload(workflow_payload: dict[str, object]) -> dict[str, object]:
+    quality_summary = _quality_profile_summary(
+        workflow_payload.get("quality_profile") if isinstance(workflow_payload.get("quality_profile"), dict) else None
+    )
+    statuses = quality_summary.get("statuses", {}) if isinstance(quality_summary.get("statuses"), dict) else {}
+    document = workflow_payload.get("document", {}) if isinstance(workflow_payload.get("document"), dict) else {}
+    answer = workflow_payload.get("answer", {}) if isinstance(workflow_payload.get("answer"), dict) else {}
+    processing_diagnostics = (
+        workflow_payload.get("processing_diagnostics", {})
+        if isinstance(workflow_payload.get("processing_diagnostics"), dict)
+        else {}
+    )
+    assessment = {
+        "pdf": workflow_payload.get("pdf"),
+        "doc_id": workflow_payload.get("doc_id"),
+        "overall_status": quality_summary.get("overall_status"),
+        "processing_status": statuses.get("processing_quality", "unknown"),
+        "semantic_status": statuses.get("semantic_confidence", "unknown"),
+        "retrieval_status": statuses.get("retrieval_readiness", "unknown"),
+        "answer_trust": statuses.get("answer_trust", "unknown"),
+        "recommended_next_action": quality_summary.get("recommended_next_action"),
+        "acceptance_profile": _assessment_profile(document, processing_diagnostics),
+        "messages": _assessment_messages(
+            processing_diagnostics=processing_diagnostics,
+            quality_summary=quality_summary,
+            answer=answer,
+            document=document,
+        ),
+    }
+    return assessment
 
 
 def _wants_json(argv: list[str]) -> bool:
@@ -1971,6 +2122,37 @@ def _compact_corpus_sanity_snapshot(payload: dict[str, object]) -> dict[str, obj
     }
 
 
+def _compact_corpus_failure_examples(follow_up_actions: object, *, limit: int = 5) -> list[dict[str, object]]:
+    if not isinstance(follow_up_actions, list):
+        return []
+    examples: list[dict[str, object]] = []
+    for action in follow_up_actions:
+        if not isinstance(action, dict):
+            continue
+        bucket = action.get("bucket")
+        focus = action.get("focus")
+        priority = action.get("priority")
+        for example in action.get("failure_examples", []):
+            if not isinstance(example, dict):
+                continue
+            examples.append(
+                {
+                    "bucket": bucket,
+                    "focus": focus,
+                    "priority": priority,
+                    "pdf": example.get("pdf"),
+                    "doc_id": example.get("doc_id"),
+                    "reasons": example.get("reasons", []),
+                    "document_type": example.get("document_type"),
+                    "document_purpose": example.get("document_purpose"),
+                    "semantic_confidence": example.get("semantic_confidence"),
+                }
+            )
+            if len(examples) >= limit:
+                return examples
+    return examples
+
+
 def _corpus_snapshot_path_for_profile(profile: str) -> Path:
     safe_profile = profile.strip().lower()
     if safe_profile in {"latest", "default-latest", "default"}:
@@ -2579,6 +2761,7 @@ RELEASE_CHECK_SHARDS = [
     "retrieval_contract_core",
     "retrieval_synthesis_core",
     "semantic_document_understanding_core",
+    "unknown_document_semantics_core",
     "confidence_aware_document_core",
     "trust_policy_document_core",
     "document_maintenance_core",
@@ -2779,12 +2962,52 @@ def _release_check_compact_payload(payload: dict[str, object]) -> dict[str, obje
         }
         for item in regression_results
     ]
+    public_path_pass = bool(payload.get("public_surface", {}).get("all_pass"))
+    benchmark_skipped = bool(regressions.get("skipped"))
+    benchmark_pass = bool(regressions.get("all_pass")) if not benchmark_skipped else None
+    corpus_available = bool(local_corpus.get("available")) if isinstance(local_corpus, dict) else False
+    corpus_pass = bool(corpus_gates.get("all_pass")) if corpus_gates else None
+    follow_up_actions = (
+        local_corpus_result.get("follow_up_actions", [])
+        if isinstance(local_corpus_result, dict)
+        else []
+    )
+    product_gate = {
+        "all_pass": public_path_pass and benchmark_pass is True and (corpus_pass is True or not corpus_available),
+        "public_path": {
+            "status": "pass" if public_path_pass else "fail",
+            "reason": None if public_path_pass else "public CLI path is failing",
+        },
+        "benchmark": {
+            "status": "skip" if benchmark_skipped else "pass" if benchmark_pass else "fail",
+            "reason": "benchmark assets not present in the active data root" if benchmark_skipped else None,
+        },
+        "corpus": {
+            "status": (
+                "skip"
+                if not corpus_available
+                else "pass"
+                if corpus_pass
+                else "review"
+            ),
+            "reason": (
+                "repo-local pdf/ corpus is not available or was not sampled"
+                if not corpus_available
+                else None
+                if corpus_pass
+                else "local unknown-document corpus gate needs review"
+            ),
+            "follow_up_count": len(follow_up_actions) if isinstance(follow_up_actions, list) else None,
+            "failure_examples": _compact_corpus_failure_examples(follow_up_actions),
+        },
+    }
     return {
         "overall": _gate_record("overall", bool(payload.get("overall_pass"))),
         "recommendation": payload.get("recommendation", {}),
         "runtime_decision": runtime.get("runtime_decision", {}),
+        "product_gate": product_gate,
         "public_path": {
-            "all_pass": bool(payload.get("public_surface", {}).get("all_pass")),
+            "all_pass": public_path_pass,
             "gates": [
                 _gate_record("doctor_public_cli", bool(doctor.get("ready_for_public_cli"))),
                 _gate_record(
@@ -2828,11 +3051,11 @@ def _release_check_compact_payload(payload: dict[str, object]) -> dict[str, obje
             "shards": shard_records,
         },
         "local_corpus_sanity": {
-            "available": local_corpus.get("available") if isinstance(local_corpus, dict) else False,
+            "available": corpus_available,
             "gate": _gate_record(
                 "local_corpus_architecture",
                 bool(corpus_gates.get("all_pass")) if corpus_gates else None,
-                skipped=not bool(local_corpus.get("available")) if isinstance(local_corpus, dict) else True,
+                skipped=not corpus_available,
                 reason=(
                     None
                     if corpus_gates
@@ -2849,6 +3072,7 @@ def _release_check_compact_payload(payload: dict[str, object]) -> dict[str, obje
                 if isinstance(local_corpus_result, dict)
                 else None
             ),
+            "failure_examples": _compact_corpus_failure_examples(follow_up_actions),
         },
     }
 
@@ -4143,9 +4367,12 @@ def main() -> None:
             )
             return
 
-        if command in {"run-workflow", "smoke-check"}:
+        if command in {"run-workflow", "smoke-check", "assess-pdf"}:
             pdf_value = _require_arg(args.pdf, "--pdf", command)
-            query = _require_arg(args.query, "--query", command)
+            if command == "assess-pdf":
+                query = args.query or "What does this file cover?"
+            else:
+                query = _require_arg(args.query, "--query", command)
             PATHS.ensure_dirs()
             pdf_path = _resolve_pdf_path(pdf_value)
             workflow_index_dir = (
@@ -4220,6 +4447,23 @@ def main() -> None:
             }
             payload["processing_diagnostics"] = _processing_diagnostics(payload["document"], payload["index"])
             payload["quality_profile"] = _workflow_quality_profile(payload)
+            if command == "assess-pdf":
+                assessment_payload = _assess_pdf_payload(payload)
+                if args.verbose:
+                    assessment_payload["workflow"] = payload
+                if json_output:
+                    _emit_json("assess-pdf", assessment_payload, output_path=output_path)
+                    return
+                print(f"PDF assessment for: {pdf_path.name}")
+                print(f"overall_status: {assessment_payload['overall_status']}")
+                print(f"processing_status: {assessment_payload['processing_status']}")
+                print(f"semantic_status: {assessment_payload['semantic_status']}")
+                print(f"retrieval_status: {assessment_payload['retrieval_status']}")
+                print(f"answer_trust: {assessment_payload['answer_trust']}")
+                print(f"acceptance_profile: {assessment_payload['acceptance_profile']}")
+                print(f"recommended_next_action: {assessment_payload['recommended_next_action']}")
+                print("messages: " + ", ".join(assessment_payload["messages"]))
+                return
             if command == "smoke-check":
                 checks = _smoke_checks(payload)
                 smoke_payload = {

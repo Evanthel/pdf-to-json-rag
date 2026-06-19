@@ -240,6 +240,17 @@ DEFAULT_REGRESSION_SHARDS: dict[str, list[str]] = {
         "model_report_niger_document_type",
         "model_report_niger_document_audience",
     ],
+    "unknown_document_semantics_core": [
+        "lbdl_document_type",
+        "lbdl_document_audience",
+        "ocha_incident_document_purpose",
+        "ocha_incident_document_audience",
+        "model_report_niger_document_type",
+        "model_report_niger_document_audience",
+        "lbdl_document_confidence",
+        "ocha_incident_document_confidence",
+        "model_report_niger_document_confidence",
+    ],
     "confidence_aware_document_core": [
         "lbdl_document_confidence",
         "ocha_incident_document_confidence",

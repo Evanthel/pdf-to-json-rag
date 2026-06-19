@@ -4,11 +4,11 @@
 
 This file records the project at a practical level without mirroring every code edit. It is intended as a concise engineering log rather than a public changelog.
 
-Internal development iterations in this file use `v1.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
+Internal development iterations in this file use `vN.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
 
 ## Current State
 
-Current implementation level: `v1.99.0`
+Current implementation level: `v3.9.0`
 Current public version: `0.1.0-beta`
 Current package metadata version: `0.1.0`
 
@@ -35,6 +35,7 @@ Repo-local regression shards currently passing in saved runs or current mileston
 - `table_layout_robustness_core`
 - `form_layout_robustness_core`
 - `semantic_document_understanding_core`
+- `unknown_document_semantics_core`
 - `confidence_aware_document_core`
 - `trust_policy_document_core`
 - `processing_layer_core`
@@ -48,7 +49,7 @@ Repo-local regression shards currently passing in saved runs or current mileston
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v1.99.0`:
+Broad benchmark note after `v3.9.0`:
 
 - the targeted maintainer shard set run in this milestone is green
 - the opt-in local-command LLM synthesis and LLM-as-judge paths are covered in unit tests while remaining disabled by default
@@ -72,8 +73,13 @@ Broad benchmark note after `v1.99.0`:
 - `quality_profile` now exposes `overall_status`, normalized `statuses`, aggregate `reasons`, and `recommended_next_action`
 - `processing_diagnostics` now exposes processing taxonomy, `technical_processed`, and `structurally_reliable`
 - answer payloads now expose `retrieval_contract_status`, `support_coverage`, and `answer_source_mix`
+- `assess-pdf` exposes the compact real-world PDF acceptance decision for public use
+- `unknown_document_semantics_core` is now part of the maintainer gate and passes `9/9`
+- balanced local-corpus sanity now passes `12/12` technical and semantic checks with no follow-up actions
 - corpus sanity writes compact snapshots and compares them without reprocessing PDFs
+- release summaries now expose a compact `product_gate` across public path, benchmark, and corpus pass/review status
 - workflow JSON is compact by default; full workflow diagnostics require `--verbose`
+- compact JSON contracts for `run-workflow`, `smoke-check`, and `assess-pdf` are now covered by public-surface contract tests
 - runtime policy is explicit: `hash` default, sentence-transformers recommended opt-in, cross-encoder experimental, and LLM synthesis opt-in only
 - current broad benchmark scope:
   - `Cases`: `77`
@@ -613,6 +619,36 @@ Representative validation that has already been completed:
 
 - Beta freeze scope: no learned reranker/default LLM changes.
 - Final validation focuses on tests, package/runtime/release checks, compact workflow smoke, and corpus snapshot comparison.
+
+### v2.0.0-v2.4.0
+
+- Added public `assess-pdf --pdf ... --json` over the existing workflow path.
+- Added compact acceptance fields: `overall_status`, `processing_status`, `semantic_status`, `retrieval_status`, `answer_trust`, and `recommended_next_action`.
+- Added acceptance profiles for scanned, form-heavy, table-heavy, short, medium, and long PDFs.
+- Added diagnostic messages for structurally weak processing, semantic guesses, OCR/scan paths, table/form layouts, and document-semantics-only support.
+- Kept full workflow diagnostics behind `--verbose`.
+
+### v2.5.0-v2.9.0
+
+- Reviewed balanced corpus failures by bucket rather than adding one-off PDF exceptions.
+- Added reusable public-record semantics for statistical tables, web job listings, environmental site records, and institutional correspondence.
+- Added `unknown_document_semantics_core` to cover unfamiliar-document type, purpose, audience, and confidence behavior in the maintainer regression gate.
+- Reran focused local-corpus failures and confirmed all four prior semantic failures now classify as specific high-confidence document types.
+- Reran balanced corpus sanity and confirmed `12/12` technical pass, `12/12` semantic pass, architecture gate pass, and no follow-up actions.
+
+### v3.0.0-v3.4.0
+
+- Added public compact contract constants for `run-workflow`, `smoke-check`, `assess-pdf`, compact document, compact index, and compact answer payloads.
+- Added public-surface tests that fail if compact workflow wrapper keys are removed or debug-only payloads leak into default JSON.
+- Documented the schema-like compact contract in `docs/CLI_REFERENCE.md`.
+- Verified debug-only fields such as `artifacts`, full `quality_profile`, `top_k_hits`, `expanded_hits`, and `evidence` remain behind `--verbose`.
+
+### v3.5.0-v3.9.0
+
+- Refreshed local quick and balanced corpus snapshots without tracking generated reports.
+- Verified `corpus-profile-compare --baseline-profile quick-latest --candidate-profile balanced-latest`; the larger balanced sample currently returns review because average structure confidence is lower than quick.
+- Added compact `product_gate` output to `release-check --json` for `public_path`, `benchmark`, and `corpus`.
+- Added compact corpus failure examples to release summaries when corpus status is review.
 
 ### v0.1.1-v0.1.2
 
