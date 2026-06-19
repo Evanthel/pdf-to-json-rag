@@ -26,7 +26,7 @@ Internal development iterations in this repo use `vN.x` labels. Public releases 
 
 Current package metadata version: `0.1.0`
 
-Current internal milestone: `v3.9.0`
+Current internal milestone: `v4.5.0`
 
 The public release label is `0.1.0-beta`; package metadata remains PEP440-compatible `0.1.0` until the first non-beta public cut.
 
@@ -95,11 +95,13 @@ The current baseline includes:
 - bucket-level corpus diagnostics and follow-up actions for unknown-document sanity checks
 - corpus sample profiles, deterministic sample manifests, saved corpus snapshots, and a contract gate for bucket diagnostics
 - saved corpus snapshot comparison through `corpus-profile-compare`
+- corpus review workbench output with `pass/review/fail`, top review metrics, and opt-in model experiment scope
 - compact corpus snapshots and saved snapshot comparison without reprocessing PDFs
 - compact release `product_gate` summary over public path, benchmark, and corpus pass/review state
 - compact default workflow JSON output with richer debug state behind `--verbose`
 - frozen public compact JSON contracts for `run-workflow`, `smoke-check`, and `assess-pdf`
 - explicit backend policy: `hash` default, sentence-transformers recommended opt-in, cross-encoder experimental, LLM synthesis opt-in only
+- model decision gates for runtime comparisons and promotion reports, always with `default_change_allowed=false`
 - compact `release-check --json` summaries, with full release payloads behind `--verbose`
 - deterministic local embeddings by default, with optional `sentence-transformers` or `auto` backend selection
 
@@ -111,6 +113,7 @@ Validation state:
 - balanced local corpus sanity rerun in the current milestone: green, `12/12` technical and semantic pass
 - quick local corpus sanity rerun in the current milestone: green, `4/4` technical and semantic pass
 - quick-latest vs balanced-latest corpus profile compare rerun in the current milestone: review due lower average structure confidence on the larger sample
+- corpus review and model-decision focused tests rerun in the current milestone: green
 - full-suite baseline vs local `all-MiniLM-L6-v2` runtime comparison: green, `77/77` for both modes, sentence-transformer promotion gate green
 - processing-layer maintainer shards rerun in the current milestone: green
 - retrieval-contract maintainer shard rerun in the current milestone: green

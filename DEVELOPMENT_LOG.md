@@ -8,7 +8,7 @@ Internal development iterations in this file use `vN.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v3.9.0`
+Current implementation level: `v4.5.0`
 Current public version: `0.1.0-beta`
 Current package metadata version: `0.1.0`
 
@@ -49,7 +49,7 @@ Repo-local regression shards currently passing in saved runs or current mileston
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v3.9.0`:
+Broad benchmark note after `v4.5.0`:
 
 - the targeted maintainer shard set run in this milestone is green
 - the opt-in local-command LLM synthesis and LLM-as-judge paths are covered in unit tests while remaining disabled by default
@@ -68,6 +68,7 @@ Broad benchmark note after `v3.9.0`:
 - answer payloads now expose `contract_health` so retrieval path, support scope, selected docs, support docs, and claim-alignment presence are easy to gate
 - `quality_profile` now includes processing drilldown, retrieval readiness reasons, and stricter answer trust review status for weak or unsupported claims
 - `corpus-profile-compare` compares saved corpus profile snapshots without reprocessing PDFs
+- `corpus-profile-compare` now returns `corpus_review` with top review metrics and opt-in model experiment scope
 - document-level claim alignment now includes support-trace fragments, so metadata claims can be supported by document semantics instead of only chunk text
 - `quality_profile` now carries explicit thresholds, and `public-beta-check` includes the public smoke quality summary
 - `quality_profile` now exposes `overall_status`, normalized `statuses`, aggregate `reasons`, and `recommended_next_action`
@@ -81,6 +82,7 @@ Broad benchmark note after `v3.9.0`:
 - workflow JSON is compact by default; full workflow diagnostics require `--verbose`
 - compact JSON contracts for `run-workflow`, `smoke-check`, and `assess-pdf` are now covered by public-surface contract tests
 - runtime policy is explicit: `hash` default, sentence-transformers recommended opt-in, cross-encoder experimental, and LLM synthesis opt-in only
+- runtime comparison and promotion reports now include `model_decision_gate` with `default_change_allowed=false`
 - current broad benchmark scope:
   - `Cases`: `77`
   - `Indexed sample documents`: `25`
@@ -649,6 +651,13 @@ Representative validation that has already been completed:
 - Verified `corpus-profile-compare --baseline-profile quick-latest --candidate-profile balanced-latest`; the larger balanced sample currently returns review because average structure confidence is lower than quick.
 - Added compact `product_gate` output to `release-check --json` for `public_path`, `benchmark`, and `corpus`.
 - Added compact corpus failure examples to release summaries when corpus status is review.
+
+### v4.0.0-v4.5.0
+
+- Added `corpus_review` to `corpus-profile-compare` so saved corpus snapshots produce `pass`, `review`, or `fail` rather than only metric deltas.
+- Added top review metrics and `model_experiment_scope` so optional model work is tied to measured corpus review/failure signals.
+- Added `model_decision_gate` to runtime comparison and runtime promotion reporting.
+- Kept `hash` as the default backend; sentence-transformers can be recommended opt-in, cross-encoder remains experimental opt-in, and LLM synthesis remains opt-in only.
 
 ### v0.1.1-v0.1.2
 

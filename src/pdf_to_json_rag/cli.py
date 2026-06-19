@@ -2278,6 +2278,103 @@ def _corpus_diff_summary(
     }
 
 
+def _corpus_review_status(
+    *,
+    candidate_summary: dict[str, object],
+    regressions: list[str],
+    diff_summary: dict[str, object],
+) -> str:
+    if not bool(candidate_summary.get("architecture_gate_pass")):
+        return "fail"
+    hard_regressions = {
+        "technical_pass_rate",
+        "semantic_pass_rate",
+        "trust_limited_rate",
+        "follow_up_count",
+    }
+    if any(metric in hard_regressions for metric in regressions):
+        return "fail"
+    if regressions or not bool(diff_summary.get("all_pass")):
+        return "review"
+    return "pass"
+
+
+def _top_corpus_review_metrics(deltas: dict[str, float | None], regressions: list[str]) -> list[dict[str, object]]:
+    metric_priority = [
+        "technical_pass_rate",
+        "semantic_pass_rate",
+        "trust_limited_rate",
+        "follow_up_count",
+        "avg_structure_confidence",
+        "avg_layout_confidence",
+        "avg_semantic_confidence",
+        "specific_document_rate",
+        "specific_purpose_rate",
+        "low_confidence_rate",
+    ]
+    regression_set = set(regressions)
+    scored: list[tuple[int, float, str, float | None]] = []
+    for index, metric in enumerate(metric_priority):
+        delta = deltas.get(metric)
+        if delta is None:
+            continue
+        severity = 0 if metric in regression_set else 1
+        scored.append((severity, -abs(float(delta)), metric, delta))
+    return [
+        {
+            "metric": metric,
+            "delta": delta,
+            "status": "review" if metric in regression_set else "pass",
+        }
+        for _, _, metric, delta in sorted(scored)[:3]
+    ]
+
+
+def _corpus_model_experiment_scope(review_status: str, review_metrics: list[dict[str, object]]) -> dict[str, object]:
+    review_metric_names = [
+        str(item.get("metric"))
+        for item in review_metrics
+        if item.get("status") == "review"
+    ]
+    semantics_metrics = {
+        "semantic_pass_rate",
+        "avg_semantic_confidence",
+        "specific_document_rate",
+        "specific_purpose_rate",
+        "trust_limited_rate",
+    }
+    retrieval_or_structure_metrics = {
+        "avg_structure_confidence",
+        "avg_layout_confidence",
+        "technical_pass_rate",
+        "follow_up_count",
+    }
+    if review_status == "pass":
+        return {
+            "worth_running": False,
+            "reason": "corpus profiles are stable; no opt-in model experiment is justified by this comparison",
+            "candidate_backends": [],
+            "target_metrics": [],
+            "default_change_allowed": False,
+        }
+    candidate_backends: list[str] = []
+    if any(metric in semantics_metrics for metric in review_metric_names):
+        candidate_backends.append("sentence-transformers")
+    if any(metric in retrieval_or_structure_metrics for metric in review_metric_names):
+        candidate_backends.append("cross-encoder")
+    if "trust_limited_rate" in review_metric_names:
+        candidate_backends.append("llm-synthesis")
+    if not candidate_backends and review_metric_names:
+        candidate_backends.append("sentence-transformers")
+    return {
+        "worth_running": bool(candidate_backends),
+        "reason": "run opt-in model experiments only against the listed review metrics",
+        "candidate_backends": list(dict.fromkeys(candidate_backends)),
+        "target_metrics": review_metric_names,
+        "default_change_allowed": False,
+    }
+
+
 def _corpus_profile_compare_payload(
     *,
     baseline_profile: str = "quick",
@@ -2340,9 +2437,16 @@ def _corpus_profile_compare_payload(
         deltas,
         regressions,
     )
+    review_status = _corpus_review_status(
+        candidate_summary=candidate_summary,
+        regressions=regressions,
+        diff_summary=diff_summary,
+    )
+    review_metrics = _top_corpus_review_metrics(deltas, regressions)
     return {
         "available": True,
         "all_pass": not regressions and bool(candidate_summary.get("architecture_gate_pass")),
+        "review_status": review_status,
         "baseline_path": str(baseline_snapshot_path),
         "candidate_path": str(candidate_snapshot_path),
         "baseline": baseline_summary,
@@ -2351,6 +2455,13 @@ def _corpus_profile_compare_payload(
         "regressions": regressions,
         "sample_changed": checksum_changed,
         "corpus_diff_summary": diff_summary,
+        "corpus_review": {
+            "status": review_status,
+            "top_metrics": review_metrics,
+            "sample_changed": checksum_changed,
+            "bucket_changes": diff_summary.get("bucket_changes", {}),
+            "model_experiment_scope": _corpus_model_experiment_scope(review_status, review_metrics),
+        },
         "recommendation": (
             "Candidate corpus profile is stable against baseline snapshot."
             if not regressions
@@ -3486,6 +3597,73 @@ def _write_runtime_promotion_snapshot(report: dict[str, object], report_path: Pa
     return snapshot_path
 
 
+def _model_decision_gate_from_runtime_report(report: dict[str, object]) -> dict[str, object]:
+    mode_results = {str(item.get("mode")): item for item in report.get("mode_results", []) if isinstance(item, dict)}
+    promotion_gates = report.get("promotion_gates", {}) if isinstance(report.get("promotion_gates"), dict) else {}
+    baseline = mode_results.get("baseline", {})
+    decisions: list[dict[str, object]] = []
+
+    sentence_gate = promotion_gates.get("sentence-transformers", {}) if isinstance(promotion_gates, dict) else {}
+    sentence_result = mode_results.get("sentence-transformers", {})
+    if sentence_result:
+        decisions.append(
+            {
+                "backend": "sentence-transformers",
+                "status": "recommended_opt_in" if sentence_gate.get("promotable") else "opt_in_review",
+                "model_helped": bool(sentence_gate.get("promotable")),
+                "default_change_allowed": False,
+                "reason": (
+                    "green full-suite promotion gate; keep as explicit opt-in"
+                    if sentence_gate.get("promotable")
+                    else "promotion gate is not green"
+                ),
+            }
+        )
+
+    cross_result = mode_results.get("cross-encoder", {})
+    if cross_result:
+        baseline_pass = int(baseline.get("pass_count", 0) or 0)
+        cross_pass = int(cross_result.get("pass_count", 0) or 0)
+        fallback_count = int(cross_result.get("runtime_signals", {}).get("cross_encoder_fallback_count", 0) or 0)
+        decisions.append(
+            {
+                "backend": "cross-encoder",
+                "status": "experimental_opt_in",
+                "model_helped": cross_pass > baseline_pass and fallback_count == 0,
+                "default_change_allowed": False,
+                "reason": "only promote for concrete failure buckets; fallback/reporting path otherwise",
+            }
+        )
+
+    llm_result = mode_results.get("llm-synthesis", {})
+    if llm_result:
+        llm_used = int(llm_result.get("runtime_signals", {}).get("llm_used_case_count", 0) or 0)
+        decisions.append(
+            {
+                "backend": "llm-synthesis",
+                "status": "opt_in_only",
+                "model_helped": False,
+                "default_change_allowed": False,
+                "reason": (
+                    "local command was invoked for comparison; keep synthesis opt-in"
+                    if llm_used
+                    else "LLM synthesis not configured or not used"
+                ),
+            }
+        )
+
+    return {
+        "default_backend": "hash",
+        "default_change_allowed": False,
+        "decisions": decisions,
+        "next_step": (
+            "keep current default; run opt-in model experiments only for measured corpus review buckets"
+            if decisions
+            else "run compare-runtime-modes before making model decisions"
+        ),
+    }
+
+
 def _runtime_promotion_report_payload(report_path: Path | None = None) -> dict[str, object]:
     path = report_path or (PATHS.data_eval / DEFAULT_RUNTIME_COMPARISON_REPORT_FILENAME)
     path = path.expanduser().resolve()
@@ -3543,6 +3721,7 @@ def _runtime_promotion_report_payload(report_path: Path | None = None) -> dict[s
                 else "No green full-suite promotion gate is available, so hash remains the only public default."
             ),
         },
+        "model_decision_gate": _model_decision_gate_from_runtime_report(report),
         "recommendation": recommendation,
     }
 
@@ -4869,6 +5048,7 @@ def main() -> None:
                         ],
                         "baseline_deltas": report.get("baseline_deltas", {}),
                         "promotion_gates": report.get("promotion_gates", {}),
+                        "model_decision_gate": _model_decision_gate_from_runtime_report(report),
                         "promotion_snapshot_path": str(promotion_snapshot_path) if promotion_snapshot_path else None,
                         "all_pass": report.get("all_pass", False),
                     },

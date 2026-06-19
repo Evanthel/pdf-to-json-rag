@@ -53,7 +53,7 @@ The first working version stayed local-first and deliberately narrow:
 
 Current public version: `0.1.0-beta`
 Current package metadata version: `0.1.0`
-Current internal implementation level: `v3.9.0`
+Current internal implementation level: `v4.5.0`
 
 `0.1.0-beta` is the public release label. The package version remains PEP440-compatible `0.1.0` until the beta checkpoint is cut as a formal package release.
 
@@ -118,10 +118,12 @@ What the repo now has:
 - corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
 - deterministic corpus sampling manifests for quick/balanced/stress unknown-PDF sanity checks
 - compact corpus snapshots and saved profile comparison without reprocessing PDFs
+- corpus review workbench output with `pass/review/fail`, top review metrics, and opt-in model experiment scope
 - compact release `product_gate` summary over public path, benchmark, and corpus pass/review state
 - compact public workflow payloads by default, with full debug payloads behind `--verbose`
 - frozen public compact JSON contracts for `run-workflow`, `smoke-check`, and `assess-pdf`
 - explicit backend policy that keeps `hash` as default and keeps cross-encoder/LLM paths opt-in
+- model decision gates for runtime comparison and promotion reports, always with `default_change_allowed=false`
 - compact release-check summaries with full maintainer payloads behind `--verbose`
 
 Current validation snapshot:
@@ -132,6 +134,7 @@ Current validation snapshot:
 - balanced local corpus sanity rerun in the current milestone: green, `12/12` technical and semantic pass, no follow-up actions
 - quick local corpus sanity rerun in the current milestone: green, `4/4` technical and semantic pass, no follow-up actions
 - quick-latest vs balanced-latest corpus profile compare rerun in the current milestone: review due lower average structure confidence on the larger sample
+- corpus review and model-decision focused tests rerun in the current milestone: green
 - processing-layer maintainer shards rerun in the current milestone: green
 - retrieval-contract maintainer shard rerun in the current milestone: green
 - retrieval-synthesis maintainer shard rerun in the current milestone: green
@@ -382,15 +385,20 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
   - verified `corpus-profile-compare --baseline-profile quick-latest --candidate-profile balanced-latest`
   - added compact release `product_gate` output for `public_path`, `benchmark`, and `corpus`
   - added compact corpus failure examples to release summaries when corpus status is review
+- `v4.0.0-v4.5.0`
+  - added `corpus_review` to `corpus-profile-compare` with pass/review/fail status and top review metrics
+  - added `model_experiment_scope` so opt-in model runs are tied to measured corpus review metrics
+  - added `model_decision_gate` to runtime comparison and promotion reporting
+  - kept hash as the default backend and made every model decision explicitly default-change-disabled
 
 
 ### 6.2. Next Steps
 
-1. Keep `hash` as the default backend while treating sentence-transformers as the recommended opt-in backend.
-2. Use corpus review signals to decide whether optional model experiments are worth running.
-3. Only test cross-encoder or LLM synthesis against concrete failure buckets, not as default behavior.
-4. Keep public compact contracts stable while optional model reports evolve.
-5. Change defaults only after an opt-in model beats the simpler baseline on measured corpus or benchmark failures.
+1. Run optional model experiments only when `corpus_review.model_experiment_scope.worth_running` is true.
+2. Use `model_decision_gate` to decide whether a backend stays experimental or recommended opt-in.
+3. Keep public compact contracts stable while optional model reports evolve.
+4. Do not change defaults unless an explicit future default-change gate is added and passes.
+5. Continue improving structure-aware baseline first when corpus review points to processing/layout metrics.
 
 ## 7. Explicitly Deferred
 

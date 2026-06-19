@@ -250,6 +250,13 @@ class CliPublicSurfaceTests(unittest.TestCase):
             "sentence-transformers",
         )
         self.assertEqual(payload["result"]["default_decision"]["cross_encoder"], "experimental_opt_in_only")
+        self.assertFalse(payload["result"]["model_decision_gate"]["default_change_allowed"])
+        decisions = {
+            item["backend"]: item
+            for item in payload["result"]["model_decision_gate"]["decisions"]
+        }
+        self.assertEqual(decisions["sentence-transformers"]["status"], "recommended_opt_in")
+        self.assertTrue(decisions["sentence-transformers"]["model_helped"])
 
     def test_corpus_sampling_manifest_is_deterministic(self) -> None:
         entries = [
@@ -813,12 +820,77 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertTrue(payload["sample_changed"])
         self.assertEqual(payload["deltas"]["semantic_pass_rate"], 0.25)
         self.assertEqual(payload["regressions"], [])
+        self.assertEqual(payload["review_status"], "pass")
+        self.assertEqual(payload["corpus_review"]["status"], "pass")
+        self.assertFalse(payload["corpus_review"]["model_experiment_scope"]["worth_running"])
         self.assertTrue(payload["corpus_diff_summary"]["all_pass"])
         checksum_check = {
             item["name"]: item["status"]
             for item in payload["corpus_diff_summary"]["checks"]
         }
         self.assertEqual(checksum_check["sample_checksum"], "skip")
+
+    def test_corpus_profile_compare_review_scopes_model_experiments(self) -> None:
+        baseline_path = self.workspace / "quick-review.json"
+        candidate_path = self.workspace / "balanced-review.json"
+        baseline_path.write_text(
+            json.dumps(
+                {
+                    "sample_profile": "quick",
+                    "sample_size": 4,
+                    "sample_manifest": {"selected_digest_checksum": "aaa"},
+                    "summary": {
+                        "technical_pass_rate": 1.0,
+                        "semantic_pass_rate": 1.0,
+                        "avg_structure_confidence": 0.75,
+                        "avg_layout_confidence": 0.8,
+                        "avg_semantic_confidence": 0.9,
+                        "specific_document_rate": 1.0,
+                        "specific_purpose_rate": 1.0,
+                        "low_confidence_rate": 0.0,
+                        "trust_limited_rate": 0.0,
+                    },
+                    "architecture_gates": {"all_pass": True},
+                    "follow_up_actions": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        candidate_path.write_text(
+            json.dumps(
+                {
+                    "sample_profile": "balanced",
+                    "sample_size": 12,
+                    "sample_manifest": {"selected_digest_checksum": "bbb"},
+                    "summary": {
+                        "technical_pass_rate": 1.0,
+                        "semantic_pass_rate": 1.0,
+                        "avg_structure_confidence": 0.65,
+                        "avg_layout_confidence": 0.8,
+                        "avg_semantic_confidence": 0.9,
+                        "specific_document_rate": 1.0,
+                        "specific_purpose_rate": 1.0,
+                        "low_confidence_rate": 0.0,
+                        "trust_limited_rate": 0.0,
+                    },
+                    "architecture_gates": {"all_pass": True},
+                    "follow_up_actions": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        payload = cli_module._corpus_profile_compare_payload(
+            baseline_path=baseline_path,
+            candidate_path=candidate_path,
+        )
+
+        self.assertFalse(payload["all_pass"])
+        self.assertEqual(payload["review_status"], "review")
+        review = payload["corpus_review"]
+        self.assertEqual(review["top_metrics"][0]["metric"], "avg_structure_confidence")
+        self.assertEqual(review["model_experiment_scope"]["candidate_backends"], ["cross-encoder"])
+        self.assertFalse(review["model_experiment_scope"]["default_change_allowed"])
 
     def test_corpus_snapshot_aliases_and_compact_write_do_not_require_reprocessing(self) -> None:
         payload = {
@@ -1843,6 +1915,10 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(report["case_count"], 2)
         self.assertEqual(report["selected_case_ids"], ["symptoms_case", "care_case"])
         self.assertIn("sentence-transformers", report["promotion_gates"])
+        decision_gate = cli_module._model_decision_gate_from_runtime_report(report)
+        self.assertEqual(decision_gate["default_backend"], "hash")
+        self.assertFalse(decision_gate["default_change_allowed"])
+        self.assertTrue(any(item["backend"] == "sentence-transformers" for item in decision_gate["decisions"]))
 
     def test_layer_stability_passes_for_green_layer_summary(self) -> None:
         stability = _evaluate_layer_stability(
