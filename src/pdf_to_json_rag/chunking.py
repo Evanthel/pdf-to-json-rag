@@ -661,6 +661,21 @@ def _section_path_with_context(
     return [*cleaned_base, section_title]
 
 
+def _section_path_with_document_title(
+    *,
+    section_path: list[str] | None,
+    resolved_section_title: str | None,
+    document_title: str | None,
+) -> list[str]:
+    path = [item for item in (section_path or ([resolved_section_title] if resolved_section_title else [])) if item]
+    if not document_title:
+        return path
+    normalized_title = _normalize_for_match(document_title)
+    if any(_normalize_for_match(item) == normalized_title for item in path):
+        return path
+    return [document_title, *path]
+
+
 def _inline_section_state(
     *,
     section_title: str,
@@ -1070,6 +1085,11 @@ def _make_chunk_record(
         sum(block.text_quality_score for block in blocks) / max(len(blocks), 1),
         3,
     ) if blocks else None
+    resolved_section_path = _section_path_with_document_title(
+        section_path=section_path,
+        resolved_section_title=resolved_section_title,
+        document_title=document.title,
+    )
     return ChunkRecord(
         doc_id=document.doc_id,
         chunk_id=f"{document.doc_id}-chunk-{chunk_number:04d}",
@@ -1082,7 +1102,7 @@ def _make_chunk_record(
         section_title=resolved_section_title,
         section_level=section_level,
         section_parent_id=section_parent_id,
-        section_path=list(section_path or ([resolved_section_title] if resolved_section_title else [])),
+        section_path=resolved_section_path,
         section_kind=section_kind,
         section_role=resolved_section_role,
         section_summary=section_summary,
@@ -1163,6 +1183,23 @@ def chunk_document(
     last_buffer_page_num: int | None = None
     buffer_treatment_subtopic: str | None = None
     sections = list(document.sections)
+    heading_blocks = [block for block in ordered_blocks if block.block_kind == "heading"]
+    non_heading_chars = sum(
+        len(_clean_text(block.text))
+        for block in ordered_blocks
+        if block.block_kind != "heading"
+    )
+    heading_dense_document = len(heading_blocks) >= 6 and non_heading_chars < 220
+    retain_heading_text = document.document_type in {
+        "administrative_form",
+        "assessment_form",
+        "financial_statement",
+        "legislative_amendment",
+    }
+    form_grouped_headings = document.document_type in {
+        "administrative_form",
+        "assessment_form",
+    }
 
     def flush_buffer() -> None:
         nonlocal buffer, buffer_chars, chunk_number, last_buffer_page_num, buffer_treatment_subtopic
@@ -1193,9 +1230,13 @@ def chunk_document(
         buffer_treatment_subtopic = None
 
     for block in ordered_blocks:
-        section = _section_for_block(block.reading_order_index, sections)
-        if section and section.section_id != current_section_id:
+        if heading_dense_document and last_buffer_page_num is not None and block.page_num != last_buffer_page_num:
             flush_buffer()
+
+        section = _section_for_block(block.reading_order_index, sections)
+        if section and section.section_id != current_section_id and not heading_dense_document:
+            if not (form_grouped_headings and buffer and buffer_chars < target_chars):
+                flush_buffer()
             current_section_id = section.section_id
             current_section_title = section.title
             current_section_level = section.level
@@ -1221,6 +1262,8 @@ def chunk_document(
             section
             and block.block_kind == "heading"
             and _normalize_for_match(raw_block_text) == _normalize_for_match(section.title)
+            and not heading_dense_document
+            and not retain_heading_text
         ):
             continue
         if _normalize_for_match(raw_block_text) == "key points":
@@ -1289,6 +1332,7 @@ def chunk_document(
                     for structured_segment in structured_segments:
                         if (
                             buffer
+                            and not form_grouped_headings
                             and (
                                 current_section_kind in {"table_section", "checklist_section", "questionnaire_section", "appendix"}
                                 or block.block_kind == "table_like"
@@ -1336,8 +1380,13 @@ def chunk_document(
                         content_hints=current_section_content_hints,
                     )
 
-                if block.block_kind == "heading" or _is_probable_header(segment, toc_entries):
-                    flush_buffer()
+                if (
+                    not heading_dense_document
+                    and (block.block_kind == "heading" or _is_probable_header(segment, toc_entries))
+                ):
+                    group_form_heading = form_grouped_headings and block.block_kind == "heading"
+                    if not group_form_heading:
+                        flush_buffer()
                     (
                         current_section_path,
                         current_section_kind,
@@ -1368,7 +1417,8 @@ def chunk_document(
                         block_roles=[],
                         content_hints=current_section_content_hints,
                     )
-                    continue
+                    if not retain_heading_text:
+                        continue
 
                 if block.block_kind == "table_like" and buffer and buffer_chars >= min_chunk_chars:
                     flush_buffer()

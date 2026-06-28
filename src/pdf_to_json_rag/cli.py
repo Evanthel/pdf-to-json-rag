@@ -114,6 +114,10 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
         "summary": "Assess whether an unfamiliar PDF processed reliably and how much to trust the answer.",
         "example": "pdf-to-json-rag assess-pdf --pdf /path/to/file.pdf --json",
     },
+    "inspect-pdf-quality": {
+        "summary": "Inspect processing quality, table/form signals, and readiness for an unfamiliar PDF.",
+        "example": "pdf-to-json-rag inspect-pdf-quality --pdf /path/to/file.pdf --json",
+    },
     "list-documents": {
         "summary": "List indexed document inventory entries, optionally filtered by a query.",
         "example": "pdf-to-json-rag list-documents --json",
@@ -165,6 +169,10 @@ COMMAND_HELP: dict[str, dict[str, object]] = {
     "public-beta-check": {
         "summary": "Maintainer check: aggregate public README smoke, runtime decision, corpus quick gate, and compact release summary.",
         "example": "pdf-to-json-rag public-beta-check --json",
+    },
+    "real-ground-truth-check": {
+        "summary": "Product gate: evaluate real local PDFs against a small hand-built ground-truth retrieval/evidence set.",
+        "example": "pdf-to-json-rag real-ground-truth-check --json",
     },
     "demo-profile": {
         "summary": "Show a public-safe demo profile with stable example commands and queries.",
@@ -220,6 +228,7 @@ EXPECTED_EXAMPLE_FILES = (
     "plan_query.example.json",
     "answer_query.example.json",
 )
+DEFAULT_REAL_PDF_GROUND_TRUTH_FILENAME = "real_pdf_ground_truth_cases.json"
 CORPUS_SAMPLE_PROFILES = {
     "quick": 4,
     "balanced": 12,
@@ -1103,6 +1112,7 @@ PUBLIC_ASSESS_PDF_KEYS = (
     "answer_trust",
     "recommended_next_action",
     "acceptance_profile",
+    "structure_support",
     "messages",
 )
 PUBLIC_COMPACT_DOCUMENT_KEYS = (
@@ -1166,6 +1176,7 @@ def _assessment_profile(document: dict[str, object], processing_diagnostics: dic
     layout_signal_counts = extraction_summary.get("layout_signal_counts", {})
     taxonomy = set(_string_list(processing_diagnostics.get("taxonomy")))
     page_count = document.get("page_count")
+    document_type = str(document.get("document_type") or "")
     form_signal_count = 0
     table_signal_count = 0
     if isinstance(block_role_counts, dict):
@@ -1177,6 +1188,8 @@ def _assessment_profile(document: dict[str, object], processing_diagnostics: dic
         table_signal_count += int(layout_signal_counts.get("table_like", 0) or 0)
     if "ocr_required" in taxonomy or "native_text_low" in taxonomy:
         return "scanned_pdf"
+    if document_type in {"financial_statement", "statistical_table"}:
+        return "table_heavy_pdf"
     if form_signal_count >= max(3, table_signal_count):
         return "form_heavy_pdf"
     if table_signal_count >= 3:
@@ -1201,6 +1214,7 @@ def _assessment_messages(
     semantic_status = str(statuses.get("semantic_confidence") or "unknown")
     answer_trust = str(statuses.get("answer_trust") or "unknown")
     taxonomy = set(_string_list(processing_diagnostics.get("taxonomy")))
+    document_type = str(document.get("document_type") or "")
     source_mix = answer.get("answer_source_mix", {}) if isinstance(answer.get("answer_source_mix"), dict) else {}
     chunk_evidence = source_mix.get("chunk_evidence", {}) if isinstance(source_mix.get("chunk_evidence"), dict) else {}
     document_semantics = source_mix.get("document_semantics", {}) if isinstance(source_mix.get("document_semantics"), dict) else {}
@@ -1259,6 +1273,7 @@ def _assess_pdf_payload(workflow_payload: dict[str, object]) -> dict[str, object
         "answer_trust": statuses.get("answer_trust", "unknown"),
         "recommended_next_action": quality_summary.get("recommended_next_action"),
         "acceptance_profile": _assessment_profile(document, processing_diagnostics),
+        "structure_support": _structure_support_summary(document, processing_diagnostics),
         "messages": _assessment_messages(
             processing_diagnostics=processing_diagnostics,
             quality_summary=quality_summary,
@@ -1267,6 +1282,49 @@ def _assess_pdf_payload(workflow_payload: dict[str, object]) -> dict[str, object
         ),
     }
     return assessment
+
+
+def _structure_support_summary(
+    document: dict[str, object],
+    processing_diagnostics: dict[str, object],
+) -> dict[str, object]:
+    extraction_summary = document.get("extraction_summary", {}) if isinstance(document.get("extraction_summary"), dict) else {}
+    block_role_counts = extraction_summary.get("block_role_counts", {})
+    layout_signal_counts = extraction_summary.get("layout_signal_counts", {})
+    taxonomy = set(_string_list(processing_diagnostics.get("taxonomy")))
+    document_type = str(document.get("document_type") or "")
+    form_signal_count = 0
+    table_signal_count = 0
+    if document_type in {"financial_statement", "statistical_table"}:
+        table_signal_count += 3
+    if isinstance(block_role_counts, dict):
+        form_signal_count += int(block_role_counts.get("form_field", 0) or 0)
+        form_signal_count += int(block_role_counts.get("key_value", 0) or 0)
+        table_signal_count += int(block_role_counts.get("table_like", 0) or 0)
+    if isinstance(layout_signal_counts, dict):
+        form_signal_count += int(layout_signal_counts.get("form_like", 0) or 0)
+        table_signal_count += int(layout_signal_counts.get("table_like", 0) or 0)
+    if "low_text_coverage" in taxonomy or "native_text_low" in taxonomy:
+        status = "weak"
+    elif "weak_sections" in taxonomy or "layout_uncertain" in taxonomy:
+        status = "review"
+    elif form_signal_count >= 3 or table_signal_count >= 3:
+        status = "structured"
+    else:
+        status = "basic"
+    return {
+        "status": status,
+        "form_signal_count": form_signal_count,
+        "table_signal_count": table_signal_count,
+        "table_or_form_signal_count": processing_diagnostics.get("drilldown", {}).get("table_or_form_signal_count")
+        if isinstance(processing_diagnostics.get("drilldown"), dict)
+        else None,
+        "section_count": document.get("section_count"),
+        "chunk_count": processing_diagnostics.get("drilldown", {}).get("chunk_count")
+        if isinstance(processing_diagnostics.get("drilldown"), dict)
+        else None,
+        "taxonomy": sorted(taxonomy),
+    }
 
 
 def _wants_json(argv: list[str]) -> bool:
@@ -3212,7 +3270,7 @@ def _public_beta_check_compact_payload(release_payload: dict[str, object]) -> di
         ),
         _gate_record(
             "runtime_default_policy",
-            runtime_decision.get("default_backend") == "hash",
+            runtime_decision.get("default_backend") == "auto",
             reason=runtime_decision.get("not_default_reason"),
         ),
         corpus_summary.get("gate", _gate_record("local_corpus_architecture", None, skipped=True)),
@@ -3237,8 +3295,8 @@ def _public_beta_check_compact_payload(release_payload: dict[str, object]) -> di
         "corpus_quick": corpus_summary,
         "release_summary": release_summary,
         "scope": {
-            "default_backend": "hash",
-            "sentence_transformers": "recommended_opt_in_only",
+            "default_backend": "auto",
+            "sentence_transformers": "default_when_cached",
             "cross_encoder": "experimental_opt_in_only",
             "llm_synthesis": "opt_in_only",
         },
@@ -3468,11 +3526,11 @@ def _runtime_decision_payload(embedding: dict[str, object]) -> dict[str, object]
         else None
     )
     not_default_reason = (
-        "The deterministic hash backend remains the public default because it is offline-safe, reproducible, "
-        "and the sentence-transformer backend has only been promoted as an explicit opt-in path."
+        "The public default is auto: use a locally cached sentence-transformer model when available, "
+        "otherwise fall back to deterministic hash embeddings without downloading models."
     )
     return {
-        "default_backend": "hash",
+        "default_backend": "auto",
         "effective_backend": embedding.get("effective_backend"),
         "requested_backend": embedding.get("requested_backend"),
         "recommended_opt_in_backend": recommended_backend,
@@ -3483,9 +3541,11 @@ def _runtime_decision_payload(embedding: dict[str, object]) -> dict[str, object]
         "llm_synthesis_default": "disabled",
         "backend_policy": {
             "default_backend": {
-                "name": "hash",
+                "name": "auto",
                 "status": "default",
-                "reason": "offline-safe deterministic baseline",
+                "reason": "local real embeddings when cached; deterministic hash fallback otherwise",
+                "fallback_backend": "hash",
+                "preferred_backend": "sentence-transformers",
             },
             "recommended_opt_in_backend": {
                 "name": recommended_backend,
@@ -3533,11 +3593,515 @@ def _runtime_check_payload() -> dict[str, object]:
             "default_enabled": False,
         },
         "default_policy": {
-            "embedding_backend": "hash",
-            "sentence_transformers": "opt_in",
+            "embedding_backend": "auto",
+            "sentence_transformers": "default_when_cached",
             "cross_encoder": "opt_in",
             "llm_synthesis": "opt_in",
         },
+    }
+
+
+def _temporary_env(updates: dict[str, str | None]) -> dict[str, str | None]:
+    previous: dict[str, str | None] = {}
+    for key, value in updates.items():
+        previous[key] = os.environ.get(key)
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+    return previous
+
+
+def _restore_env(previous: dict[str, str | None]) -> None:
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+def _load_real_pdf_ground_truth_cases(eval_path: Path | None = None) -> list[dict[str, object]]:
+    path = eval_path or (PATHS.root / "data" / "eval" / DEFAULT_REAL_PDF_GROUND_TRUTH_FILENAME)
+    if not path.exists():
+        path = PATHS.data_eval / DEFAULT_REAL_PDF_GROUND_TRUTH_FILENAME
+    if not path.exists():
+        raise CliError(
+            "missing_real_pdf_ground_truth_cases",
+            f"Real-PDF ground-truth case file was not found: {path}",
+            {"path": str(path)},
+        )
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, list):
+        raise CliError(
+            "invalid_real_pdf_ground_truth_cases",
+            "Real-PDF ground-truth file must contain a list of cases.",
+            {"path": str(path)},
+        )
+    return [case for case in data if isinstance(case, dict)]
+
+
+def _keyword_coverage(text: str, keywords: list[str]) -> dict[str, object]:
+    normalized = text.lower()
+    matches = [keyword for keyword in keywords if keyword.lower() in normalized]
+    return {
+        "coverage": round(len(matches) / max(len(keywords), 1), 3),
+        "matched": matches,
+        "missing": [keyword for keyword in keywords if keyword not in matches],
+    }
+
+
+def _rank_score(retrieved_doc_ids: list[str], expected_doc_id: str) -> dict[str, object]:
+    if expected_doc_id not in retrieved_doc_ids:
+        return {"recall_at_k": 0.0, "reciprocal_rank": 0.0, "rank": None}
+    rank = retrieved_doc_ids.index(expected_doc_id) + 1
+    return {"recall_at_k": 1.0, "reciprocal_rank": round(1.0 / rank, 3), "rank": rank}
+
+
+def _prepare_real_pdf_ground_truth_workspace(
+    *,
+    cases: list[dict[str, object]],
+    workspace: Path,
+    env_updates: dict[str, str | None],
+) -> tuple[dict[str, str], dict[str, object], dict[str, object]]:
+    corpus_paths = _local_pdf_corpus_paths(None)
+    if corpus_paths is None:
+        raise CliError(
+            "missing_local_pdf_corpus",
+            "The repo-local pdf/ corpus is required for real-ground-truth-check.",
+            {"corpus_dir": "pdf"},
+        )
+    pdf_dir, _metadata_path = corpus_paths
+    document_dir = workspace / "documents"
+    chunk_root = workspace / "chunks"
+    index_dir = workspace / "index"
+    document_dir.mkdir(parents=True, exist_ok=True)
+    chunk_root.mkdir(parents=True, exist_ok=True)
+    digests = sorted({str(case.get("pdf_digest", "")).strip() for case in cases if case.get("pdf_digest")})
+    if not digests:
+        raise CliError(
+            "empty_real_pdf_ground_truth_cases",
+            "Real-PDF ground-truth cases must include at least one pdf_digest.",
+            {},
+        )
+
+    digest_to_doc_id: dict[str, str] = {}
+    processing_docs: list[dict[str, object]] = []
+    all_chunks = []
+    previous = _temporary_env(env_updates)
+    try:
+        for digest in digests:
+            pdf_path = pdf_dir / f"{digest}.pdf"
+            if not pdf_path.exists():
+                raise CliError(
+                    "missing_real_pdf_ground_truth_pdf",
+                    f"Ground-truth PDF was not found: {pdf_path}",
+                    {"pdf_digest": digest, "path": str(pdf_path)},
+                )
+            extraction, document, native_path, document_path = process_native_pdf_to_json(
+                pdf_path=pdf_path,
+                output_dir=document_dir,
+            )
+            chunked_document, chunks, _saved_paths = process_saved_document_to_chunks(
+                native_path=native_path,
+                document_path=document_path,
+                output_dir=chunk_root,
+            )
+            all_chunks.extend(chunks)
+            digest_to_doc_id[digest] = chunked_document.doc_id
+            covered_pages = sorted({page for chunk in chunks for page in range(chunk.page_start, chunk.page_end + 1)})
+            processing_docs.append(
+                {
+                    "pdf_digest": digest,
+                    "source_pdf": pdf_path.name,
+                    "doc_id": chunked_document.doc_id,
+                    "title": chunked_document.title,
+                    "document_type": chunked_document.document_type,
+                    "document_purpose": chunked_document.document_purpose,
+                    "document_family": chunked_document.document_family,
+                    "page_count": chunked_document.page_count,
+                    "chunk_count": len(chunks),
+                    "covered_pages": covered_pages,
+                    "page_coverage": round(len(covered_pages) / max(chunked_document.page_count, 1), 3),
+                    "structure_confidence": chunked_document.structure_confidence,
+                    "layout_confidence": chunked_document.layout_confidence,
+                    "semantic_confidence": chunked_document.semantic_confidence,
+                    "semantic_warnings": list(chunked_document.semantic_warnings),
+                }
+            )
+        manifest = build_local_index(chunks=all_chunks, index_dir=index_dir)
+    finally:
+        _restore_env(previous)
+
+    return digest_to_doc_id, manifest, {
+        "documents": processing_docs,
+        "chunk_root": str(chunk_root),
+        "index_dir": str(index_dir),
+    }
+
+
+def _evaluate_real_pdf_mode(
+    *,
+    mode: str,
+    cases: list[dict[str, object]],
+    digest_to_doc_id: dict[str, str],
+    index_dir: Path,
+    chunk_root: Path,
+    k: int,
+    env_updates: dict[str, str | None],
+) -> dict[str, object]:
+    previous = _temporary_env(env_updates)
+    try:
+        case_results: list[dict[str, object]] = []
+        for case in cases:
+            digest = str(case.get("pdf_digest", ""))
+            expected_doc_id = digest_to_doc_id.get(digest)
+            expected_keywords = [str(item) for item in case.get("expected_keywords", [])]
+            evidence_keywords = [str(item) for item in case.get("evidence_keywords", [])]
+            answer = answer_query_with_retrieval(
+                query=str(case["query"]),
+                index_dir=index_dir,
+                chunk_root=chunk_root,
+                k=k,
+                use_lightweight_rerank=True,
+            )
+            retrieved_doc_ids = []
+            for chunk in answer.top_k_hits:
+                if chunk.doc_id not in retrieved_doc_ids:
+                    retrieved_doc_ids.append(chunk.doc_id)
+            rank = _rank_score(retrieved_doc_ids, expected_doc_id or "")
+            support_text = "\n".join(
+                [
+                    answer.answer,
+                    *[
+                        "\n".join(
+                            [
+                                chunk.section_title or "",
+                                " > ".join(chunk.section_path),
+                                chunk.section_summary or "",
+                                " ".join(chunk.section_coverage_terms),
+                                chunk.text,
+                            ]
+                        )
+                        for chunk in answer.top_k_hits
+                    ],
+                    *[
+                        "\n".join(
+                            [
+                                chunk.section_title or "",
+                                " > ".join(chunk.section_path),
+                                chunk.section_summary or "",
+                                " ".join(chunk.section_coverage_terms),
+                                chunk.text,
+                            ]
+                        )
+                        for chunk in answer.expanded_hits
+                    ],
+                    *[item.sentence for item in answer.evidence],
+                ]
+            )
+            answer_keyword_eval = _keyword_coverage(answer.answer, expected_keywords)
+            evidence_keyword_eval = _keyword_coverage(support_text, evidence_keywords)
+            synthesis_runtime = answer.answer_trace.get("synthesis_runtime", {})
+            cross_encoder_fallback = any(
+                bool(chunk.retrieval_signals.get("cross_encoder_fallback"))
+                for chunk in answer.top_k_hits + answer.expanded_hits
+            )
+            passed = bool(rank["recall_at_k"]) and float(evidence_keyword_eval["coverage"]) >= 0.67
+            case_results.append(
+                {
+                    "case_id": case.get("case_id"),
+                    "bucket": case.get("bucket"),
+                    "query": case.get("query"),
+                    "expected_doc_id": expected_doc_id,
+                    "retrieved_doc_ids": retrieved_doc_ids,
+                    "rank": rank["rank"],
+                    "recall_at_k": rank["recall_at_k"],
+                    "reciprocal_rank": rank["reciprocal_rank"],
+                    "answer_keyword_coverage": answer_keyword_eval,
+                    "evidence_keyword_coverage": evidence_keyword_eval,
+                    "passed": passed,
+                    "answer_preview": answer.answer[:240],
+                    "runtime": {
+                        "synthesis_runtime": synthesis_runtime,
+                        "cross_encoder_fallback": cross_encoder_fallback,
+                    },
+                }
+            )
+    finally:
+        _restore_env(previous)
+
+    grounded = case_results
+    pass_count = sum(1 for item in grounded if item["passed"])
+    return {
+        "mode": mode,
+        "case_count": len(grounded),
+        "pass_count": pass_count,
+        "fail_count": len(grounded) - pass_count,
+        "all_pass": pass_count == len(grounded),
+        "summary": {
+            "avg_recall_at_k": round(sum(float(item["recall_at_k"]) for item in grounded) / max(len(grounded), 1), 3),
+            "mrr": round(sum(float(item["reciprocal_rank"]) for item in grounded) / max(len(grounded), 1), 3),
+            "avg_answer_keyword_coverage": round(
+                sum(float(item["answer_keyword_coverage"]["coverage"]) for item in grounded) / max(len(grounded), 1),
+                3,
+            ),
+            "avg_evidence_keyword_coverage": round(
+                sum(float(item["evidence_keyword_coverage"]["coverage"]) for item in grounded) / max(len(grounded), 1),
+                3,
+            ),
+            "cross_encoder_fallback_case_count": sum(
+                1 for item in grounded if item["runtime"]["cross_encoder_fallback"]
+            ),
+            "llm_used_case_count": sum(
+                1
+                for item in grounded
+                if item["runtime"]["synthesis_runtime"].get("used_for_final_answer")
+            ),
+        },
+        "failed_case_ids": [str(item["case_id"]) for item in grounded if not item["passed"]],
+        "case_results": grounded,
+    }
+
+
+def _real_pdf_runtime_decisions(default_result: dict[str, object], mode_results: list[dict[str, object]]) -> dict[str, object]:
+    by_mode = {str(item.get("mode")): item for item in mode_results}
+    default_summary = default_result.get("summary", {})
+    decisions: list[dict[str, object]] = []
+    cross = by_mode.get("cross-encoder")
+    if cross:
+        cross_summary = cross.get("summary", {})
+        fallback_count = int(cross_summary.get("cross_encoder_fallback_case_count") or 0)
+        improved = (
+            int(cross.get("pass_count", 0)) > int(default_result.get("pass_count", 0))
+            or float(cross_summary.get("mrr") or 0.0) > float(default_summary.get("mrr") or 0.0)
+        )
+        degraded = (
+            int(cross.get("pass_count", 0)) < int(default_result.get("pass_count", 0))
+            or float(cross_summary.get("mrr") or 0.0) < float(default_summary.get("mrr") or 0.0)
+        )
+        if fallback_count:
+            status = "not_ready"
+            reason = "cross-encoder fallback occurred on the real-PDF eval"
+        elif improved:
+            status = "recommended_opt_in"
+            reason = "cross-encoder improved real-PDF ranking without fallback"
+        elif degraded:
+            status = "do_not_promote"
+            reason = "cross-encoder regressed real-PDF ranking"
+        else:
+            status = "keep_experimental"
+            reason = "cross-encoder did not improve the real-PDF eval"
+        decisions.append(
+            {
+                "backend": "cross-encoder",
+                "status": status,
+                "default_change_allowed": False,
+                "reason": reason,
+            }
+        )
+    llm = by_mode.get("llm-synthesis")
+    if llm:
+        llm_summary = llm.get("summary", {})
+        configured = bool(os.environ.get("PDF_TO_JSON_RAG_LLM_COMMAND"))
+        used = int(llm_summary.get("llm_used_case_count") or 0)
+        improved_answer = float(llm_summary.get("avg_answer_keyword_coverage") or 0.0) > float(
+            default_summary.get("avg_answer_keyword_coverage") or 0.0
+        )
+        if not configured:
+            status = "skipped_not_configured"
+            reason = "PDF_TO_JSON_RAG_LLM_COMMAND is not configured"
+        elif used and improved_answer:
+            status = "valuable_opt_in"
+            reason = "LLM synthesis improved answer keyword coverage on the real-PDF eval"
+        else:
+            status = "no_value_added"
+            reason = "LLM synthesis did not improve the real-PDF eval"
+        decisions.append(
+            {
+                "backend": "llm-synthesis",
+                "status": status,
+                "default_change_allowed": False,
+                "reason": reason,
+            }
+        )
+    return {
+        "default_backend": "auto",
+        "default_change_allowed": False,
+        "decisions": decisions,
+    }
+
+
+def _real_pdf_modes_from_arg(value: str | None) -> list[str]:
+    if not value:
+        return ["default-auto"]
+    raw_modes = [item.strip() for item in value.split(",") if item.strip()]
+    if "all" in raw_modes:
+        return ["default-auto", "hash-baseline", "cross-encoder", "llm-synthesis"]
+    allowed = {"default-auto", "hash-baseline", "cross-encoder", "llm-synthesis"}
+    modes = []
+    for mode in raw_modes:
+        if mode not in allowed:
+            raise CliError(
+                "invalid_real_pdf_mode",
+                f"Unsupported real-ground-truth-check mode: {mode}",
+                {"mode": mode, "allowed": sorted(allowed | {"all"})},
+            )
+        modes.append(mode)
+    return modes or ["default-auto", "hash-baseline"]
+
+
+def _run_real_pdf_ground_truth_check(
+    k: int,
+    eval_path: Path | None = None,
+    modes: list[str] | None = None,
+) -> dict[str, object]:
+    cases = _load_real_pdf_ground_truth_cases(eval_path)
+    selected_modes = modes or ["default-auto", "hash-baseline", "cross-encoder", "llm-synthesis"]
+    default_env = {
+        "PDF_TO_JSON_RAG_EMBEDDING_BACKEND": None,
+        "PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS": None,
+        "PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD": None,
+    }
+    hash_env = {"PDF_TO_JSON_RAG_EMBEDDING_BACKEND": "hash"}
+    with tempfile.TemporaryDirectory(prefix="pdf-to-json-rag-real-gt-") as workspace:
+        workspace_path = Path(workspace)
+        digest_to_doc_id, default_manifest, processing = _prepare_real_pdf_ground_truth_workspace(
+            cases=cases,
+            workspace=workspace_path / "default_auto",
+            env_updates=default_env,
+        )
+        default_index_dir = Path(str(processing["index_dir"]))
+        default_chunk_root = Path(str(processing["chunk_root"]))
+        hash_manifest: dict[str, object] = {}
+        hash_index_dir: Path | None = None
+        hash_chunk_root: Path | None = None
+        if "hash-baseline" in selected_modes:
+            _, hash_manifest, hash_processing = _prepare_real_pdf_ground_truth_workspace(
+                cases=cases,
+                workspace=workspace_path / "hash",
+                env_updates=hash_env,
+            )
+            hash_index_dir = Path(str(hash_processing["index_dir"]))
+            hash_chunk_root = Path(str(hash_processing["chunk_root"]))
+        mode_results = []
+        if "default-auto" in selected_modes:
+            mode_results.append(
+                _evaluate_real_pdf_mode(
+                    mode="default-auto",
+                    cases=cases,
+                    digest_to_doc_id=digest_to_doc_id,
+                    index_dir=default_index_dir,
+                    chunk_root=default_chunk_root,
+                    k=k,
+                    env_updates={"PDF_TO_JSON_RAG_USE_CROSS_ENCODER": None, "PDF_TO_JSON_RAG_LLM_COMMAND": None},
+                )
+            )
+        if "hash-baseline" in selected_modes:
+            if hash_index_dir is None or hash_chunk_root is None:
+                raise CliError(
+                    "missing_hash_ground_truth_workspace",
+                    "Hash-baseline mode was requested but its workspace was not prepared.",
+                    {},
+                )
+            mode_results.append(
+                _evaluate_real_pdf_mode(
+                    mode="hash-baseline",
+                    cases=cases,
+                    digest_to_doc_id=digest_to_doc_id,
+                    index_dir=hash_index_dir,
+                    chunk_root=hash_chunk_root,
+                    k=k,
+                    env_updates={"PDF_TO_JSON_RAG_USE_CROSS_ENCODER": None, "PDF_TO_JSON_RAG_LLM_COMMAND": None},
+                )
+            )
+        if "cross-encoder" in selected_modes:
+            mode_results.append(
+                _evaluate_real_pdf_mode(
+                    mode="cross-encoder",
+                    cases=cases,
+                    digest_to_doc_id=digest_to_doc_id,
+                    index_dir=default_index_dir,
+                    chunk_root=default_chunk_root,
+                    k=k,
+                    env_updates={
+                        "PDF_TO_JSON_RAG_USE_CROSS_ENCODER": "1",
+                        "PDF_TO_JSON_RAG_LLM_COMMAND": None,
+                        "HF_HUB_OFFLINE": os.environ.get("HF_HUB_OFFLINE", "1"),
+                        "TRANSFORMERS_OFFLINE": os.environ.get("TRANSFORMERS_OFFLINE", "1"),
+                    },
+                )
+            )
+        if "llm-synthesis" in selected_modes:
+            mode_results.append(
+                _evaluate_real_pdf_mode(
+                    mode="llm-synthesis",
+                    cases=cases,
+                    digest_to_doc_id=digest_to_doc_id,
+                    index_dir=default_index_dir,
+                    chunk_root=default_chunk_root,
+                    k=k,
+                    env_updates={"PDF_TO_JSON_RAG_USE_CROSS_ENCODER": None},
+                )
+            )
+
+    default_result = next((item for item in mode_results if item.get("mode") == "default-auto"), mode_results[0])
+    processing_docs = list(processing["documents"]) if isinstance(processing.get("documents"), list) else []
+    processing_gate = {
+        "all_pass": all(
+            float(doc.get("page_coverage") or 0.0) >= 1.0 and int(doc.get("chunk_count") or 0) > 0
+            for doc in processing_docs
+        ),
+        "documents": processing_docs,
+    }
+    hash_result = next((item for item in mode_results if item.get("mode") == "hash-baseline"), default_result)
+    hash_summary = hash_result["summary"]
+    default_summary = default_result["summary"]
+    quality_gate = {
+        "passed": (
+            int(default_result.get("pass_count") or 0) / max(int(default_result.get("case_count") or 0), 1) >= 0.75
+            and float(default_summary.get("mrr") or 0.0) >= 0.75
+            and float(default_summary.get("avg_evidence_keyword_coverage") or 0.0) >= 0.75
+        ),
+        "min_pass_rate": 0.75,
+        "min_mrr": 0.75,
+        "min_evidence_keyword_coverage": 0.75,
+    }
+    return {
+        "case_file": str(eval_path or (PATHS.root / "data" / "eval" / DEFAULT_REAL_PDF_GROUND_TRUTH_FILENAME)),
+        "k": k,
+        "modes": selected_modes,
+        "case_count": len(cases),
+        "pdf_count": len(processing_docs),
+        "default_index_manifest": {
+            "embedding_backend": default_manifest.get("embedding_backend"),
+            "embedding_model": default_manifest.get("embedding_model"),
+            "embedding_requested_backend": default_manifest.get("embedding_requested_backend"),
+            "embedding_fallback_reason": default_manifest.get("embedding_fallback_reason"),
+            "chunk_count": default_manifest.get("chunk_count"),
+        },
+        "hash_index_manifest": {
+            "embedding_backend": hash_manifest.get("embedding_backend"),
+            "embedding_model": hash_manifest.get("embedding_model"),
+            "embedding_requested_backend": hash_manifest.get("embedding_requested_backend"),
+            "chunk_count": hash_manifest.get("chunk_count"),
+        },
+        "processing_quality": processing_gate,
+        "mode_results": mode_results,
+        "default_vs_hash": {
+            "mrr_delta": round(float(default_summary.get("mrr") or 0.0) - float(hash_summary.get("mrr") or 0.0), 3),
+            "recall_delta": round(
+                float(default_summary.get("avg_recall_at_k") or 0.0) - float(hash_summary.get("avg_recall_at_k") or 0.0),
+                3,
+            ),
+            "answer_keyword_coverage_delta": round(
+                float(default_summary.get("avg_answer_keyword_coverage") or 0.0)
+                - float(hash_summary.get("avg_answer_keyword_coverage") or 0.0),
+                3,
+            ),
+        },
+        "runtime_decisions": _real_pdf_runtime_decisions(default_result, mode_results),
+        "quality_gate": quality_gate,
+        "all_pass": bool(default_result.get("all_pass")) and bool(processing_gate["all_pass"]),
     }
 
 
@@ -3589,7 +4153,7 @@ def _write_runtime_promotion_snapshot(report: dict[str, object], report_path: Pa
         "baseline_deltas": report.get("baseline_deltas", {}).get("sentence-transformers", {}),
         "promotion_gate": _portable_snapshot_value(gate),
         "recommended_default_change": False,
-        "recommendation": "Sentence-transformers is validated as an opt-in backend; keep hash as default until an explicit default-change decision is made.",
+        "recommendation": "Sentence-transformers is validated as the preferred auto backend when cached locally; deterministic hash remains the offline fallback.",
     }
     snapshot_path = PATHS.data_eval / DEFAULT_RUNTIME_PROMOTION_SNAPSHOT_FILENAME
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3653,11 +4217,11 @@ def _model_decision_gate_from_runtime_report(report: dict[str, object]) -> dict[
         )
 
     return {
-        "default_backend": "hash",
+        "default_backend": "auto",
         "default_change_allowed": False,
         "decisions": decisions,
         "next_step": (
-            "keep current default; run opt-in model experiments only for measured corpus review buckets"
+            "keep auto default; run cross-encoder or LLM experiments only for measured corpus review buckets"
             if decisions
             else "run compare-runtime-modes before making model decisions"
         ),
@@ -3682,9 +4246,9 @@ def _runtime_promotion_report_payload(report_path: Path | None = None) -> dict[s
     gate = report.get("promotion_gates", {}).get("sentence-transformers", {})
     promotion_ready = bool(gate.get("promotable"))
     recommendation = (
-        "Optional sentence-transformer embeddings are promotion-ready; default remains hash until an explicit default-change decision is made."
+        "Sentence-transformer embeddings are promotion-ready and are used by the auto default when cached locally."
         if promotion_ready
-        else "Keep sentence-transformers opt-in until the promotion gate is green on the full suite."
+        else "Auto default will use deterministic hash fallback until the sentence-transformer gate is green and the model is cached locally."
     )
     snapshot_path = _write_runtime_promotion_snapshot(report, path)
     return {
@@ -3710,15 +4274,16 @@ def _runtime_promotion_report_payload(report_path: Path | None = None) -> dict[s
         "promotion_ready": promotion_ready,
         "promotion_snapshot_path": str(snapshot_path) if snapshot_path else None,
         "default_decision": {
-            "default_backend": "hash",
-            "recommended_opt_in_backend": "sentence-transformers" if promotion_ready else None,
+            "default_backend": "auto",
+            "preferred_backend_when_cached": "sentence-transformers" if promotion_ready else None,
+            "fallback_backend": "hash",
             "cross_encoder": "experimental_opt_in_only",
             "llm_synthesis": "opt_in_only",
             "why_not_default": (
-                "A green promotion gate recommends sentence-transformers as opt-in only; "
-                "the default remains the deterministic hash backend until a separate default-change decision."
+                "The auto default uses sentence-transformers only when the model is cached locally; "
+                "hash remains the offline-safe fallback."
                 if promotion_ready
-                else "No green full-suite promotion gate is available, so hash remains the only public default."
+                else "No green full-suite promotion gate is available, so auto falls back to hash unless explicitly configured."
             ),
         },
         "model_decision_gate": _model_decision_gate_from_runtime_report(report),
@@ -4082,6 +4647,37 @@ def main() -> None:
             if reasons:
                 print(f"Promotion reasons: {', '.join(reasons)}")
             print(payload["recommendation"])
+            return
+
+        if command == "real-ground-truth-check":
+            eval_path = Path(args.eval_file).expanduser().resolve() if args.eval_file else None
+            payload = _run_real_pdf_ground_truth_check(
+                k=args.k,
+                eval_path=eval_path,
+                modes=_real_pdf_modes_from_arg(args.modes),
+            )
+            if json_output:
+                _emit_json("real-ground-truth-check", payload, output_path=output_path)
+                return
+            default_result = next(
+                item for item in payload["mode_results"] if item["mode"] == "default-auto"
+            )
+            print("Real-PDF ground-truth check")
+            print(f"cases: {payload['case_count']}")
+            print(f"pdfs: {payload['pdf_count']}")
+            print(f"all_pass: {payload['all_pass']}")
+            print(f"quality_gate: {payload['quality_gate']['passed']}")
+            print(f"default_embedding_backend: {payload['default_index_manifest']['embedding_backend']}")
+            print(f"default_embedding_model: {payload['default_index_manifest']['embedding_model']}")
+            print(
+                "default-auto: "
+                f"pass={default_result['pass_count']}/{default_result['case_count']} "
+                f"mrr={default_result['summary']['mrr']:.3f} "
+                f"recall={default_result['summary']['avg_recall_at_k']:.3f} "
+                f"evidence={default_result['summary']['avg_evidence_keyword_coverage']:.3f}"
+            )
+            for decision in payload["runtime_decisions"]["decisions"]:
+                print(f"{decision['backend']}: {decision['status']} - {decision['reason']}")
             return
 
         if command == "doctor":
@@ -4546,9 +5142,9 @@ def main() -> None:
             )
             return
 
-        if command in {"run-workflow", "smoke-check", "assess-pdf"}:
+        if command in {"run-workflow", "smoke-check", "assess-pdf", "inspect-pdf-quality"}:
             pdf_value = _require_arg(args.pdf, "--pdf", command)
-            if command == "assess-pdf":
+            if command in {"assess-pdf", "inspect-pdf-quality"}:
                 query = args.query or "What does this file cover?"
             else:
                 query = _require_arg(args.query, "--query", command)
@@ -4626,20 +5222,21 @@ def main() -> None:
             }
             payload["processing_diagnostics"] = _processing_diagnostics(payload["document"], payload["index"])
             payload["quality_profile"] = _workflow_quality_profile(payload)
-            if command == "assess-pdf":
+            if command in {"assess-pdf", "inspect-pdf-quality"}:
                 assessment_payload = _assess_pdf_payload(payload)
                 if args.verbose:
                     assessment_payload["workflow"] = payload
                 if json_output:
-                    _emit_json("assess-pdf", assessment_payload, output_path=output_path)
+                    _emit_json(command, assessment_payload, output_path=output_path)
                     return
-                print(f"PDF assessment for: {pdf_path.name}")
+                print(f"PDF quality assessment for: {pdf_path.name}")
                 print(f"overall_status: {assessment_payload['overall_status']}")
                 print(f"processing_status: {assessment_payload['processing_status']}")
                 print(f"semantic_status: {assessment_payload['semantic_status']}")
                 print(f"retrieval_status: {assessment_payload['retrieval_status']}")
                 print(f"answer_trust: {assessment_payload['answer_trust']}")
                 print(f"acceptance_profile: {assessment_payload['acceptance_profile']}")
+                print(f"structure_support: {assessment_payload['structure_support']}")
                 print(f"recommended_next_action: {assessment_payload['recommended_next_action']}")
                 print("messages: " + ", ".join(assessment_payload["messages"]))
                 return

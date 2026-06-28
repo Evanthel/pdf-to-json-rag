@@ -26,7 +26,7 @@ Internal development iterations in this repo use `vN.x` labels. Public releases 
 
 Current package metadata version: `0.1.0`
 
-Current internal milestone: `v4.5.0`
+Current internal milestone: `v4.8.0`
 
 The public release label is `0.1.0-beta`; package metadata remains PEP440-compatible `0.1.0` until the first non-beta public cut.
 
@@ -67,7 +67,7 @@ The current baseline includes:
 - runtime-mode comparison for baseline, sentence-transformers, cross-encoder, and opt-in LLM synthesis
 - full-suite runtime comparison with a green promotion gate for optional sentence-transformer embeddings
 - explicit `runtime-check` and `runtime-promotion-report` commands for backend selection and promotion readiness
-- explicit runtime decision output with `hash` default, recommended opt-in backend, and not-default rationale
+- explicit runtime decision output with `auto` default: cached local sentence-transformer embeddings when available, deterministic hash fallback otherwise
 - explicit embedding backend policy via `PDF_TO_JSON_RAG_EMBEDDING_BACKEND=hash|sentence-transformers|auto`
 - promotion snapshots saved after green full-suite runtime comparisons
 - installed-entrypoint verification for the public README flow through `readme-smoke-check`
@@ -100,10 +100,12 @@ The current baseline includes:
 - compact release `product_gate` summary over public path, benchmark, and corpus pass/review state
 - compact default workflow JSON output with richer debug state behind `--verbose`
 - frozen public compact JSON contracts for `run-workflow`, `smoke-check`, and `assess-pdf`
-- explicit backend policy: `hash` default, sentence-transformers recommended opt-in, cross-encoder experimental, LLM synthesis opt-in only
+- explicit backend policy: `auto` default, sentence-transformers used only when locally cached, hash fallback, cross-encoder experimental, LLM synthesis opt-in only
 - model decision gates for runtime comparisons and promotion reports, always with `default_change_allowed=false`
 - compact `release-check --json` summaries, with full release payloads behind `--verbose`
-- deterministic local embeddings by default, with optional `sentence-transformers` or `auto` backend selection
+- default `auto` embeddings that remain offline-safe by falling back to deterministic hash embeddings
+- real-PDF ground-truth evaluation over repo-local form, financial/table, scan/layout, legal, public-record, and occupational samples
+- `inspect-pdf-quality` for compact processing/structure/readiness inspection on unfamiliar PDFs
 
 Validation state:
 
@@ -137,6 +139,11 @@ Validation state:
   - `failing_case_count = 0`
   - `llm_judge_prompt_contract = faithfulness_context_judge.v1`
   - `contract_validation.all_pass = true`
+- real-PDF ground-truth quality gate: green on thresholds, strict `all_pass=false`, `28/31`
+  - default backend in this environment: `auto` requested, `hash-fallback` effective because no local sentence-transformer model is cached
+  - default-auto metrics: `recall@5 = 1.000`, `MRR = 0.919`, `evidence_keyword_coverage = 0.919`
+  - remaining failures are visible in `failed_case_ids` and currently point to inspection-site field extraction and QIP support selection
+  - run `pdf-to-json-rag real-ground-truth-check --modes all --json` for cross-encoder and LLM-synthesis decision reporting
 
 Current engineering direction:
 
@@ -208,9 +215,9 @@ export PDF_TO_JSON_RAG_SENTENCE_TRANSFORMERS_MODEL=/path/to/local/all-MiniLM-L6-
 pdf-to-json-rag runtime-check --json
 ```
 
-`PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1` remains supported as a legacy alias. The default remains `hash`; `auto` selects sentence-transformers only when the local model is already available.
+`PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1` remains supported as a legacy alias. The default is now `auto`: it selects sentence-transformers only when the local model is already available, otherwise it uses the deterministic hash fallback without downloading models.
 
-The latest full-suite comparison promotes local `all-MiniLM-L6-v2` as the recommended opt-in embedding backend for retrieval quality, not as a silent default change. Run `pdf-to-json-rag runtime-promotion-report --json` to inspect the saved promotion snapshot and gate decision.
+The latest full-suite comparison promotes local `all-MiniLM-L6-v2` as the preferred backend inside `auto` when it is cached locally. Run `pdf-to-json-rag runtime-promotion-report --json` to inspect the saved promotion snapshot and gate decision.
 
 Optional local LLM hooks are provider-agnostic and disabled by default. Commands receive the prompt on stdin and must write the answer or strict judge JSON to stdout:
 
@@ -235,9 +242,10 @@ For an unfamiliar PDF where you only need a trust/readiness decision:
 
 ```bash
 pdf-to-json-rag assess-pdf --pdf /path/to/file.pdf --json
+pdf-to-json-rag inspect-pdf-quality --pdf /path/to/file.pdf --json
 ```
 
-`assess-pdf` returns a compact acceptance summary: `overall_status`, `processing_status`, `semantic_status`, `retrieval_status`, `answer_trust`, `recommended_next_action`, an `acceptance_profile`, and short diagnostic messages. Use `--verbose` only when you need the full workflow payload behind that assessment.
+`assess-pdf` and `inspect-pdf-quality` return compact acceptance summaries: `overall_status`, processing/semantic/retrieval status, `answer_trust`, `acceptance_profile`, `structure_support`, and short diagnostic messages. Use `--verbose` only when you need the full workflow payload behind that assessment.
 
 Maintainer release validation:
 
@@ -266,7 +274,7 @@ pdf-to-json-rag runtime-check --json
 
 Maintainers can run the same installed README flow in one command with `pdf-to-json-rag readme-smoke-check --json`. It validates the public installed path only; use `release-check` for benchmark regressions.
 
-For one aggregated pre-tag gate, use `pdf-to-json-rag public-beta-check --json`. It combines the installed README flow, public-smoke quality summary, runtime default decision, corpus quick gate, and compact release summary while keeping `hash` as the default backend.
+For one aggregated pre-tag gate, use `pdf-to-json-rag public-beta-check --json`. It combines the installed README flow, public-smoke quality summary, runtime default decision, corpus quick gate, and compact release summary while checking the `auto` default backend policy.
 
 Local sanity check for unfamiliar PDFs:
 
@@ -337,7 +345,8 @@ The saved evaluation report includes:
 - strict JSON parser and prompt/eval contract diagnostics for opt-in LLM judge output
 - a runtime-mode comparison report for baseline vs optional sentence-transformer, cross-encoder, and LLM synthesis paths
 - a promotion gate that verifies optional sentence-transformer promotion against full-suite pass count, recall, MRR, and warning count
-- a runtime decision block that keeps `hash` as default while recommending sentence-transformers only as an opt-in backend
+- a runtime decision block that uses `auto` as the public default while keeping deterministic hash as the offline fallback
+- a real-PDF ground-truth gate for form-like, financial/table, scan/layout, legal, public-record, and occupational documents
 - processing-layer shards for block typing, section-role recovery, chunk provenance, and strategy-aware chunking
 - a retrieval-contract shard that keeps single-doc, doc-understanding, and cross-doc paths separated in regression coverage
 - a retrieval-synthesis shard that keeps document selection, support scope, and answer-chunk handoff aligned
@@ -350,7 +359,7 @@ Current gate status:
 - public release gates are green
 - the maintainer shard set used by `release-check` is green
 - `release-check` distinguishes public checks, maintainer checks, and benchmark-only regressions
-- the current focus is preserving the structure-aware lightweight baseline while testing learned reranking only as an opt-in local path
+- the current focus is preserving the structure-aware lightweight baseline while making runtime promotion decisions from real-PDF evidence
 - the current focus is moving more unfamiliar PDFs out of `document/reference_lookup` while keeping confidence signalling honest
 
 ## Limitations
@@ -360,7 +369,7 @@ Current gate status:
 - Section detection is improved, but still rule-based and fragile on unfamiliar layouts
 - Chunking and document-level reasoning are still heuristic-first rather than learned
 - Retrieval still defaults to heuristic scoring, structure cues, and lightweight reranking; cross-encoder reranking is opt-in and model availability depends on the local environment
-- Stronger local sentence-transformer embeddings are opt-in; the default public path uses deterministic fallback embeddings
+- Local sentence-transformer embeddings are used by the default `auto` policy only when already cached; otherwise the public path uses deterministic fallback embeddings
 - Document facets, document families, shortlist decisions, and type/purpose/audience inference are still handcrafted metadata layers
 - Grounded answers are still extractive by default; opt-in local-command synthesis can replace the final answer when explicitly configured
 - Claim/evidence alignment is diagnostic; it is not a replacement for human review on high-risk answers

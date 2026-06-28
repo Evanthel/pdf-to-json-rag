@@ -34,6 +34,7 @@ def classify_document_family(
         return "administrative_financial_form"
     if dt in {
         "court_opinion",
+        "legislative_amendment",
         "government_bulletin",
         "inspection_report",
         "agency_report",
@@ -43,6 +44,7 @@ def classify_document_family(
         "institutional_correspondence",
     } or dp in {
         "legal_record",
+        "legislative_markup",
         "public_notice",
         "institutional_reporting",
         "administrative_submission",
@@ -51,6 +53,7 @@ def classify_document_family(
         "institutional_communication",
     } or ev in {
         "legal_record",
+        "legislative_markup",
         "government_notice",
         "statistical_table",
         "web_listing",
@@ -58,6 +61,7 @@ def classify_document_family(
         "institutional_correspondence",
     } or ss in {
         "legal_opinion",
+        "legislative_markup",
         "government_notice",
         "data_table",
         "web_page_printout",

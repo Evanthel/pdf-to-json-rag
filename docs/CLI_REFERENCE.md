@@ -74,6 +74,7 @@ User-facing commands:
 - `run-workflow`
 - `smoke-check`
 - `assess-pdf`
+- `inspect-pdf-quality`
 
 Maintainer validation commands:
 
@@ -85,6 +86,7 @@ Maintainer validation commands:
 - `corpus-sanity-check`
 - `corpus-profile-compare`
 - `compare-runtime-modes`
+- `real-ground-truth-check`
 
 Benchmark/debug commands:
 
@@ -132,6 +134,7 @@ Examples:
 pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 pdf-to-json-rag run-workflow --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 pdf-to-json-rag assess-pdf --pdf /tmp/pdf-to-json-rag-demo.pdf --json
+pdf-to-json-rag inspect-pdf-quality --pdf /tmp/pdf-to-json-rag-demo.pdf --json
 pdf-to-json-rag inspect-document --doc-id your-doc-id --json --output inspect.json
 pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
 pdf-to-json-rag package-check --json
@@ -147,6 +150,8 @@ pdf-to-json-rag layout-sanity-check --pdfs /path/a.pdf,/path/b.pdf --json
 pdf-to-json-rag compare-runtime-modes --shard evidence_anchor_core --json
 pdf-to-json-rag compare-runtime-modes --modes baseline,sentence-transformers --all-cases --json
 pdf-to-json-rag runtime-promotion-report --json
+pdf-to-json-rag real-ground-truth-check --json
+pdf-to-json-rag real-ground-truth-check --modes all --json
 pdf-to-json-rag answer-query --query "What does this file cover?" --format json
 ```
 
@@ -154,7 +159,7 @@ pdf-to-json-rag answer-query --query "What does this file cover?" --format json
 
 `inspect-document --json` now also exposes compact `processing_diagnostics` plus processing-layer details such as `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, `extraction_summary.layout_signal_counts`, and per-section `section_role` / `source_block_roles`. Processing taxonomy codes include `native_text_low`, `ocr_required`, `weak_sections`, `table_or_form_heavy`, `layout_uncertain`, and `low_text_coverage`.
 
-`assess-pdf --json` is the compact public acceptance layer for unfamiliar PDFs. It returns `overall_status`, `processing_status`, `semantic_status`, `retrieval_status`, `answer_trust`, `recommended_next_action`, `acceptance_profile`, and short diagnostic `messages`. Use `--verbose` to include the full workflow payload behind the assessment.
+`assess-pdf --json` is the compact public acceptance layer for unfamiliar PDFs. `inspect-pdf-quality --json` uses the same processing path but emphasizes `structure_support` for table/form/scan readiness. These commands return `overall_status`, `processing_status`, `semantic_status`, `retrieval_status`, `answer_trust`, `recommended_next_action`, `acceptance_profile`, `structure_support`, and short diagnostic `messages`. Use `--verbose` to include the full workflow payload behind the assessment.
 
 `answer-query --json`, `run-workflow --json`, and `smoke-check --json` include compact `retrieval_contract`, `document_synthesis`, `claim_alignment`, `contract_health`, `retrieval_contract_status`, `support_coverage`, and `answer_source_mix` blocks so both the retrieval path and answer support sources are explicit. `run-workflow --json` and `smoke-check --json` are compact by default and return `processing_diagnostics` plus `quality_profile_summary`; add `--verbose` for the full workflow `quality_profile`, artifacts, and debug payload. Weak or unsupported claims move answer trust to `review`; document-level metadata claims can be supported by `support_trace`.
 
@@ -180,9 +185,11 @@ pdf-to-json-rag corpus-sanity-check --profile quick --json
 
 `compare-runtime-modes --json` writes `data/eval/runtime_mode_comparison.json` and compares the same cases across `baseline`, `sentence-transformers`, `cross-encoder`, and `llm-synthesis`. Add `--all-cases` to run the full evaluation suite. Optional models remain offline-safe: if a model or `PDF_TO_JSON_RAG_LLM_COMMAND` is not locally available, the report shows the effective fallback/runtime state instead of treating it as a hidden success. The compact JSON also includes `model_decision_gate`, which can mark a model as recommended or experimental opt-in but keeps `default_change_allowed=false`.
 
-`runtime-check --json` reports install context, the requested embedding backend, effective backend/model, local sentence-transformer availability, fallback reason, runtime decision, cross-encoder opt-in state, LLM synthesis opt-in state, and a unified `backend_policy` that keeps `hash` as default.
+`real-ground-truth-check --json` runs a hand-built product gate over real repo-local PDFs from the `pdf/` corpus. It checks expected document retrieval, evidence keyword support, processing quality for form/table/scan/legal/public-record samples, and emits both strict `all_pass` and threshold-based `quality_gate`. Default mode runs `default-auto`; use `--modes hash-baseline`, `--modes cross-encoder`, `--modes llm-synthesis`, or `--modes all` for comparison/decision reporting.
 
-`runtime-promotion-report --json` summarizes the latest saved `runtime_mode_comparison.json` without rerunning the benchmark. When the full-suite sentence-transformer gate is green, it also writes `data/eval/runtime_promotion_snapshot.json`. The output includes `default_decision` and `model_decision_gate`, which keep sentence-transformers recommended opt-in only and keep cross-encoder/LLM paths out of the default.
+`runtime-check --json` reports install context, the requested embedding backend, effective backend/model, local sentence-transformer availability, fallback reason, runtime decision, cross-encoder opt-in state, LLM synthesis opt-in state, and a unified `backend_policy`. The public default is `auto`: cached local sentence-transformer embeddings when available, deterministic hash fallback otherwise.
+
+`runtime-promotion-report --json` summarizes the latest saved `runtime_mode_comparison.json` without rerunning the benchmark. When the full-suite sentence-transformer gate is green, it also writes `data/eval/runtime_promotion_snapshot.json`. The output includes `default_decision` and `model_decision_gate`, which keep sentence-transformers as the preferred cached backend inside `auto` and keep cross-encoder/LLM paths out of the default.
 
 `build-index --json`, `run-workflow --json`, and `smoke-check --json` include an `index.embedding` block with requested backend, effective backend/model, fallback reason, and runtime-check diagnostics.
 
@@ -190,4 +197,4 @@ pdf-to-json-rag corpus-sanity-check --profile quick --json
 
 `readme-smoke-check --json` builds and installs the package into a temporary environment, then replays the public README flow: `init`, `doctor`, `create-demo-pdf`, `smoke-check`, and `runtime-check`. It intentionally excludes maintainer benchmark regressions.
 
-`public-beta-check --json` aggregates the installed README flow, public-smoke quality summary, runtime default decision, local corpus quick gate, and compact release summary into one pre-tag gate. It reports `hash` as the default backend and keeps sentence-transformers, cross-encoder, and LLM synthesis as opt-in scopes.
+`public-beta-check --json` aggregates the installed README flow, public-smoke quality summary, runtime default decision, local corpus quick gate, and compact release summary into one pre-tag gate. It reports `auto` as the default backend, with sentence-transformers used only when cached locally, and keeps cross-encoder and LLM synthesis as opt-in scopes.

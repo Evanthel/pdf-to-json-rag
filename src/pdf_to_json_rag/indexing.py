@@ -68,7 +68,7 @@ def _requested_embedding_backend() -> str:
             return "sentence-transformers"
         if os.environ.get(ALLOW_MODEL_DOWNLOAD_ENV) == "1":
             return "sentence-transformers"
-        return "hash"
+        return "auto"
     if requested in SUPPORTED_EMBEDDING_BACKENDS:
         return requested
     return "hash"
@@ -271,8 +271,21 @@ def _chunk_metadata(chunk: ChunkRecord) -> dict[str, str | int | bool | None]:
         "noise_labels": "|".join(chunk.noise_labels) if chunk.noise_labels else None,
         "text_quality_score": chunk.text_quality_score,
         "quality_score": chunk.quality_score,
+        "chunk_text": chunk.text,
     }
     return {key: value for key, value in metadata.items() if value is not None}
+
+
+def _chunk_retrieval_text(chunk: ChunkRecord) -> str:
+    """Build the text surface used for embeddings and vector search."""
+    parts = [
+        chunk.section_title or "",
+        chunk.section_summary or "",
+        " ".join(chunk.section_coverage_terms),
+        " ".join(chunk.section_content_hints),
+        chunk.text,
+    ]
+    return "\n".join(part for part in parts if part.strip())
 
 
 def _save_index_manifest(index_dir: Path, manifest: dict) -> Path:
@@ -348,7 +361,7 @@ def build_local_index(
         metadata={"hnsw:space": "cosine"},
     )
 
-    texts = [chunk.text for chunk in chunks]
+    texts = [_chunk_retrieval_text(chunk) for chunk in chunks]
     embeddings = embed_texts(texts)
     ids = [chunk.chunk_id for chunk in chunks]
     metadatas = [_chunk_metadata(chunk) for chunk in chunks]
@@ -366,6 +379,7 @@ def build_local_index(
         "doc_ids": sorted({chunk.doc_id for chunk in chunks}),
         "source_pdfs": sorted({chunk.source_pdf for chunk in chunks}),
         "built_at_utc": datetime.now(timezone.utc).isoformat(),
+        "retrieval_text_surface": "section_metadata_plus_chunk_text",
         **embedder_info,
     }
     _save_index_manifest(index_dir, manifest)

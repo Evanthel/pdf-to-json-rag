@@ -8,7 +8,7 @@ Internal development iterations in this file use `vN.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v4.5.0`
+Current implementation level: `v4.8.0`
 Current public version: `0.1.0-beta`
 Current package metadata version: `0.1.0`
 
@@ -49,16 +49,16 @@ Repo-local regression shards currently passing in saved runs or current mileston
 - `inventory_coverage_core`
 - `relationship_core`
 
-Broad benchmark note after `v4.5.0`:
+Broad benchmark note after `v4.6.0`:
 
 - the targeted maintainer shard set run in this milestone is green
 - the opt-in local-command LLM synthesis and LLM-as-judge paths are covered in unit tests while remaining disabled by default
 - strict JSON/fence parsing, provider metadata, answer-claim alignment, prompt/eval contract validation, and opt-in semantic multipass behavior have targeted unit coverage
 - `compare-runtime-modes` now compares baseline, sentence-transformers, cross-encoder, and opt-in LLM synthesis paths on the same cases while reporting fallback/runtime availability
 - `runtime-check` reports the requested/effective embedding backend, optional model availability, and opt-in runtime state without building an index
-- `runtime-check` now also reports the runtime decision: `hash` default, recommended opt-in backend, promotion-snapshot source, and not-default rationale
+- `runtime-check` now also reports the runtime decision: `auto` default, cached sentence-transformer preference, hash fallback, promotion-snapshot source, and rationale
 - `runtime-promotion-report` summarizes the latest saved runtime comparison and promotion gate without rerunning the benchmark, and writes a compact promotion snapshot after green full-suite comparisons
-- full-suite `compare-runtime-modes --all-cases --modes baseline,sentence-transformers` with local `all-MiniLM-L6-v2` is green for both modes; sentence-transformers improves recall/MRR and passes the promotion gate while remaining opt-in
+- full-suite `compare-runtime-modes --all-cases --modes baseline,sentence-transformers` with local `all-MiniLM-L6-v2` is green for both modes; sentence-transformers improves recall/MRR and passes the promotion gate as the preferred cached backend inside `auto`
 - installed-entrypoint verification passes after `python -m pip install .`; `runtime-check`, `doctor`, `create-demo-pdf`, and `smoke-check` work through `pdf-to-json-rag`
 - `readme-smoke-check` now replays the installed public README flow in one maintainer command without running benchmark regressions
 - `corpus-sanity-check` now returns a deterministic sample manifest with bucket counts, selected digests, and a sample checksum
@@ -81,7 +81,7 @@ Broad benchmark note after `v4.5.0`:
 - release summaries now expose a compact `product_gate` across public path, benchmark, and corpus pass/review status
 - workflow JSON is compact by default; full workflow diagnostics require `--verbose`
 - compact JSON contracts for `run-workflow`, `smoke-check`, and `assess-pdf` are now covered by public-surface contract tests
-- runtime policy is explicit: `hash` default, sentence-transformers recommended opt-in, cross-encoder experimental, and LLM synthesis opt-in only
+- runtime policy is explicit: `auto` default, deterministic hash fallback, cross-encoder experimental, and LLM synthesis opt-in only
 - runtime comparison and promotion reports now include `model_decision_gate` with `default_change_allowed=false`
 - current broad benchmark scope:
   - `Cases`: `77`
@@ -658,6 +658,38 @@ Representative validation that has already been completed:
 - Added top review metrics and `model_experiment_scope` so optional model work is tied to measured corpus review/failure signals.
 - Added `model_decision_gate` to runtime comparison and runtime promotion reporting.
 - Kept `hash` as the default backend; sentence-transformers can be recommended opt-in, cross-encoder remains experimental opt-in, and LLM synthesis remains opt-in only.
+
+### v4.6.0
+
+- Changed the public embedding default from fixed `hash` to offline-safe `auto`: use cached local sentence-transformer embeddings when available, otherwise deterministic hash fallback.
+- Added `real-ground-truth-check` with 12 hand-built cases over repo-local form-like, financial/table, and scan/layout PDFs.
+- Improved administrative-form chunking so field labels and submission instructions stay in retrievable support chunks instead of fragmenting into one-heading chunks.
+- Tightened legislative-amendment semantics so scan/layout amendment PDFs are typed correctly without misclassifying web/job-listing records.
+- Cached retrieval query-intent detection inside reranking so broad release/regression gates do not repeatedly run document planning once per chunk.
+- Ran the real-PDF gate across default-auto, hash baseline, cross-encoder, and LLM-synthesis modes:
+  - default-auto: `12/12`, `MRR=1.0`, `evidence_keyword_coverage=1.0`
+  - hash baseline: `12/12`, same metrics in this environment because the sentence-transformer model was not cached
+  - cross-encoder: not promoted because it fell back on all real-PDF eval cases
+  - LLM synthesis: skipped because no local `PDF_TO_JSON_RAG_LLM_COMMAND` was configured
+
+### v4.7.0
+
+- Expanded `real_pdf_ground_truth_cases.json` from 12 to 31 cases across 12 repo-local PDFs.
+- Improved retrieval recovery for short/real PDFs by allowing global lexical recovery when no explicit document scope is present.
+- Fixed reranker score decomposition so lexical overlap is not canceled by rank-prior or negative metadata residuals.
+- Added lightweight prefix overlap for common variants such as singular/plural and submitted/submit.
+- Added `inspect-pdf-quality` and `structure_support` to the compact assessment payload.
+- Made `real-ground-truth-check` default to `default-auto`; use `--modes all` for hash/cross-encoder/LLM comparison.
+- Current real-PDF result after this milestone: strict `all_pass=false`, quality gate passes, `24/31`, `MRR=0.790`, `evidence_keyword_coverage=0.801`.
+
+### v4.8.0
+
+- Focused on the seven real-PDF failure cases rather than adding more synthetic shards.
+- Treated generic evidence inventory candidates as retrieval hints instead of hard document scopes while preserving structured/source-anchor preferred-doc contracts.
+- Propagated document titles into chunk `section_path` and used section paths as retrieval/evidence support.
+- Added exact section-path phrase scoring, short title/heading support, and presentation/program support boosts for real PDFs.
+- Improved the real-PDF ground-truth baseline to strict `all_pass=false`, quality gate passes, `28/31`, `MRR=0.919`, `recall@5=1.000`, `evidence_keyword_coverage=0.919`.
+- Remaining failures are now narrow: inspection-site field extraction and QIP support selection.
 
 ### v0.1.1-v0.1.2
 

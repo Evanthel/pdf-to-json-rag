@@ -1,0 +1,250 @@
+[
+  {
+    "case_id": "ship_application_program",
+    "pdf_digest": "KNB57BFSJINB7DC3WJQ452LPY5C7L7UL",
+    "bucket": "form_like",
+    "query": "What program is the ship application for?",
+    "expected_keywords": ["Adopt-A-Ship", "Program"],
+    "evidence_keywords": ["Adopt-A-Ship", "SHIP INFORMATION"]
+  },
+  {
+    "case_id": "ship_application_fields",
+    "pdf_digest": "KNB57BFSJINB7DC3WJQ452LPY5C7L7UL",
+    "bucket": "form_like",
+    "query": "What ship information fields are requested?",
+    "expected_keywords": ["Ship Name", "Ship Type", "Type of Cargo", "Home Port"],
+    "evidence_keywords": ["Ship Name", "Type of Cargo", "Home Port"]
+  },
+  {
+    "case_id": "ship_application_submission",
+    "pdf_digest": "KNB57BFSJINB7DC3WJQ452LPY5C7L7UL",
+    "bucket": "form_like",
+    "query": "Where should applications or pictures be submitted?",
+    "expected_keywords": ["International Propeller Club", "Fairfax", "adopt@propellerclubhq.com"],
+    "evidence_keywords": ["International Propeller Club", "Fairfax", "adopt@propellerclubhq.com"]
+  },
+  {
+    "case_id": "ship_application_communication_methods",
+    "pdf_digest": "KNB57BFSJINB7DC3WJQ452LPY5C7L7UL",
+    "bucket": "form_like",
+    "query": "What communication methods are offered for the adopted classroom?",
+    "expected_keywords": ["Email", "Fax", "US Mail"],
+    "evidence_keywords": ["Email", "Fax", "US Mail"]
+  },
+  {
+    "case_id": "financial_statement_entity",
+    "pdf_digest": "65UHUSAELNKVXUYGUXKY2JQLAKWINVC2",
+    "bucket": "financial_table",
+    "query": "What entity is covered by the balance sheet?",
+    "expected_keywords": ["CITY OF FARGO", "FARGODOME", "State Investment Board"],
+    "evidence_keywords": ["CITY OF FARGO", "FARGODOME", "Balance Sheet"]
+  },
+  {
+    "case_id": "financial_total_assets",
+    "pdf_digest": "65UHUSAELNKVXUYGUXKY2JQLAKWINVC2",
+    "bucket": "financial_table",
+    "query": "What were total assets as of 12-31-05?",
+    "expected_keywords": ["8,586,907", "TOTAL ASSETS"],
+    "evidence_keywords": ["TOTAL ASSETS", "8,586,907"]
+  },
+  {
+    "case_id": "financial_net_investment_income",
+    "pdf_digest": "65UHUSAELNKVXUYGUXKY2JQLAKWINVC2",
+    "bucket": "financial_table",
+    "query": "What was net investment income year-to-date?",
+    "expected_keywords": ["NET INVESTMENT INCOME", "368,335"],
+    "evidence_keywords": ["NET INVESTMENT INCOME", "368,335"]
+  },
+  {
+    "case_id": "financial_domestic_equities",
+    "pdf_digest": "65UHUSAELNKVXUYGUXKY2JQLAKWINVC2",
+    "bucket": "financial_table",
+    "query": "What was the domestic equities market value on 12-31-05?",
+    "expected_keywords": ["DOMESTIC EQUITIES", "4,364,436"],
+    "evidence_keywords": ["DOMESTIC EQUITIES", "4,364,436"]
+  },
+  {
+    "case_id": "amendment_sponsor",
+    "pdf_digest": "MILX4ZNQNYZNUWXL5SKQBFS2TJFYYSGU",
+    "bucket": "scan_like",
+    "query": "Who offered the amendments to H.R. 310?",
+    "expected_keywords": ["SCHAKOWSKY", "H.R. 310"],
+    "evidence_keywords": ["OFFERED BY", "SCHAKOWSKY", "H.R. 310"]
+  },
+  {
+    "case_id": "amendment_individual_violator_exception",
+    "pdf_digest": "MILX4ZNQNYZNUWXL5SKQBFS2TJFYYSGU",
+    "bucket": "scan_like",
+    "query": "What exception is added for individual violators?",
+    "expected_keywords": ["violator is an individual"],
+    "evidence_keywords": ["violator is an individual"]
+  },
+  {
+    "case_id": "amendment_utterance_reference",
+    "pdf_digest": "MILX4ZNQNYZNUWXL5SKQBFS2TJFYYSGU",
+    "bucket": "scan_like",
+    "query": "Which page and line are referenced for the utterance clause?",
+    "expected_keywords": ["Page 6", "line 13", "utterance"],
+    "evidence_keywords": ["Page 6", "line 13", "utterance"]
+  },
+  {
+    "case_id": "amendment_citations_penalties",
+    "pdf_digest": "MILX4ZNQNYZNUWXL5SKQBFS2TJFYYSGU",
+    "bucket": "scan_like",
+    "query": "What do the amendments preserve or change for individuals?",
+    "expected_keywords": ["Citations before penalties", "individuals"],
+    "evidence_keywords": ["Citations before penalties", "individuals"]
+  },
+  {
+    "case_id": "inspection_report_type_date",
+    "pdf_digest": "SQLC3S4MW5EPXOWILIWFDKDOYRHJ5CK2",
+    "bucket": "scan_like",
+    "query": "What inspection type and date are listed?",
+    "expected_keywords": ["ROUTINE INSPECTION", "NOV-16-2005"],
+    "evidence_keywords": ["Inspection Type", "ROUTINE INSPECTION", "NOV-16-2005"]
+  },
+  {
+    "case_id": "inspection_report_site",
+    "pdf_digest": "SQLC3S4MW5EPXOWILIWFDKDOYRHJ5CK2",
+    "bucket": "scan_like",
+    "query": "Which kennel or site is named in the inspection report?",
+    "expected_keywords": ["SHARON GRAVES", "ROCK CREEK KENNEL"],
+    "evidence_keywords": ["SHARON GRAVES", "ROCK CREEK KENNEL"]
+  },
+  {
+    "case_id": "voter_transfer_mail_address",
+    "pdf_digest": "IEAJEYOK5ACMQUZGX7QDHS7ZR6XXSVYV",
+    "bucket": "form_like",
+    "query": "Where should voter registration transfer requests be mailed?",
+    "expected_keywords": ["Clinton County Clerk", "PO Box 308", "Carlyle"],
+    "evidence_keywords": ["Clinton County Clerk", "PO Box 308", "Carlyle"]
+  },
+  {
+    "case_id": "voter_transfer_fields",
+    "pdf_digest": "IEAJEYOK5ACMQUZGX7QDHS7ZR6XXSVYV",
+    "bucket": "form_like",
+    "query": "What voter registration transfer fields are requested?",
+    "expected_keywords": ["Old Address", "New Address", "Voter's Name", "Social Security"],
+    "evidence_keywords": ["Old Address", "New Address", "Voter's Name", "Social Security"]
+  },
+  {
+    "case_id": "davis_office_bulletin",
+    "pdf_digest": "J5ZSV4CEZDUKODXRBOAVGJVB5XTR5QMA",
+    "bucket": "short_doc",
+    "query": "Whose online office is this short document from?",
+    "expected_keywords": ["Congressman Danny K. Davis", "ENewsletter"],
+    "evidence_keywords": ["The Online Office", "Congressman Danny K. Davis"]
+  },
+  {
+    "case_id": "court_opinion_claimant",
+    "pdf_digest": "OQCH5BPQO3G64HZOGOJKA26NQ23FAXD2",
+    "bucket": "long_doc",
+    "query": "Who is the claimant-appellant in the court opinion?",
+    "expected_keywords": ["FORTUNATA CAPELLAN", "Claimant-Appellant"],
+    "evidence_keywords": ["FORTUNATA CAPELLAN", "Claimant-Appellant"]
+  },
+  {
+    "case_id": "court_opinion_respondent",
+    "pdf_digest": "OQCH5BPQO3G64HZOGOJKA26NQ23FAXD2",
+    "bucket": "long_doc",
+    "query": "Who is the respondent-appellee in the court opinion?",
+    "expected_keywords": ["JAMES B. PEAKE", "Secretary of Veterans Affairs"],
+    "evidence_keywords": ["JAMES B. PEAKE", "Secretary of Veterans Affairs", "Respondent-Appellee"]
+  },
+  {
+    "case_id": "court_opinion_court",
+    "pdf_digest": "OQCH5BPQO3G64HZOGOJKA26NQ23FAXD2",
+    "bucket": "long_doc",
+    "query": "Which court issued the opinion?",
+    "expected_keywords": ["United States Court of Appeals", "Federal Circuit"],
+    "evidence_keywords": ["United States Court of Appeals", "Federal Circuit"]
+  },
+  {
+    "case_id": "rockefeller_university_scan",
+    "pdf_digest": "4F6ZJS2JPBXSPZK5FG5NMTRHS6NMWKOJ",
+    "bucket": "scan_like",
+    "query": "Which university appears in the scanned correspondence?",
+    "expected_keywords": ["THE ROCKEFELLER UNIVERSITY", "NEW YORK"],
+    "evidence_keywords": ["THE ROCKEFELLER UNIVERSITY", "NEW YORK"]
+  },
+  {
+    "case_id": "farm_size_colorado_state",
+    "pdf_digest": "HNOVSRWPYY3EVR44ERUZ4XTUS5SOKRWZ",
+    "bucket": "statistical_table",
+    "query": "What is the Colorado State median farm size and 30 percent value?",
+    "expected_keywords": ["Colorado State", "200", "60"],
+    "evidence_keywords": ["Colorado State", "200", "60"]
+  },
+  {
+    "case_id": "farm_size_baca_county",
+    "pdf_digest": "HNOVSRWPYY3EVR44ERUZ4XTUS5SOKRWZ",
+    "bucket": "statistical_table",
+    "query": "Which county has median farm size 1120 and 30 percent value 336?",
+    "expected_keywords": ["Baca", "1120", "336"],
+    "evidence_keywords": ["Baca", "1120", "336"]
+  },
+  {
+    "case_id": "utah_gis_jobs_link",
+    "pdf_digest": "CS4O7BCLPRK6J5MKIK7BPBFC2UURCM7X",
+    "bucket": "short_doc",
+    "query": "What job listing site does the Utah GIS Portal link to?",
+    "expected_keywords": ["Indeed.com", "Utah GIS Jobs", "GIS"],
+    "evidence_keywords": ["Indeed.com", "Utah GIS Jobs", "GIS"]
+  },
+  {
+    "case_id": "utah_gis_query_terms",
+    "pdf_digest": "CS4O7BCLPRK6J5MKIK7BPBFC2UURCM7X",
+    "bucket": "short_doc",
+    "query": "What location and description query does the Utah GIS page use?",
+    "expected_keywords": ["Location = Utah", "Description CONTAINS", "GIS"],
+    "evidence_keywords": ["Location = Utah", "Description CONTAINS", "GIS"]
+  },
+  {
+    "case_id": "careerzone_occupation",
+    "pdf_digest": "Z42OE7PSGVKK54B3J2LWZ4THMYJIJHGJ",
+    "bucket": "medium_doc",
+    "query": "What occupation is the CareerZone brief for?",
+    "expected_keywords": ["Food Service Managers", "Occupational Brief"],
+    "evidence_keywords": ["CareerZone Occupational Brief", "Food Service Managers"]
+  },
+  {
+    "case_id": "careerzone_tasks",
+    "pdf_digest": "Z42OE7PSGVKK54B3J2LWZ4THMYJIJHGJ",
+    "bucket": "medium_doc",
+    "query": "What tasks are listed for food service managers?",
+    "expected_keywords": ["Count money", "bank deposits", "complaints"],
+    "evidence_keywords": ["Count money", "bank deposits", "complaints"]
+  },
+  {
+    "case_id": "careerzone_skill",
+    "pdf_digest": "Z42OE7PSGVKK54B3J2LWZ4THMYJIJHGJ",
+    "bucket": "medium_doc",
+    "query": "Which persuasion skill is mentioned in the occupation brief?",
+    "expected_keywords": ["Persuasion", "Persuading others"],
+    "evidence_keywords": ["Persuasion", "Persuading others"]
+  },
+  {
+    "case_id": "qip_presentation_topic",
+    "pdf_digest": "YBADYKBNS5RN7M3CAMP75XV6Y2DQH2U6",
+    "bucket": "long_doc",
+    "query": "What program is the presentation about?",
+    "expected_keywords": ["Virginia Quality Improvement Program", "QIP"],
+    "evidence_keywords": ["Virginia Quality Improvement Program", "QIP"]
+  },
+  {
+    "case_id": "qip_presented_to",
+    "pdf_digest": "YBADYKBNS5RN7M3CAMP75XV6Y2DQH2U6",
+    "bucket": "long_doc",
+    "query": "Who was the QIP presentation presented to?",
+    "expected_keywords": ["Joint Commission on Health Care", "Terry Smith"],
+    "evidence_keywords": ["Joint Commission on Health Care", "Terry Smith"]
+  },
+  {
+    "case_id": "qip_legislation",
+    "pdf_digest": "YBADYKBNS5RN7M3CAMP75XV6Y2DQH2U6",
+    "bucket": "long_doc",
+    "query": "What legislation required the DMAS director to establish the QIP?",
+    "expected_keywords": ["House Bill 2290", "DMAS"],
+    "evidence_keywords": ["House Bill 2290", "DMAS"]
+  }
+]

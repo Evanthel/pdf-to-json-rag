@@ -28,9 +28,9 @@ export PDF_TO_JSON_RAG_SENTENCE_TRANSFORMERS_MODEL=/path/to/local/all-MiniLM-L6-
 pdf-to-json-rag runtime-check --json
 ```
 
-The default embedding backend remains deterministic `hash`. `PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1` is still accepted as a legacy alias. Use `PDF_TO_JSON_RAG_EMBEDDING_BACKEND=auto` only when you want the CLI to use a local sentence-transformer model if it is already available, otherwise fall back to hash.
+The default embedding backend is `auto`: the CLI uses a local sentence-transformer model when it is already available and otherwise falls back to deterministic hash embeddings without downloading models. `PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1` is still accepted as a legacy alias when you want to force the sentence-transformer path.
 
-`runtime-check --json` includes `runtime_decision.default_backend`, `runtime_decision.recommended_opt_in_backend`, `runtime_decision.not_default_reason`, and `runtime_decision.backend_policy` so the recommended optional backend is visible without changing the public default.
+`runtime-check --json` includes `runtime_decision.default_backend`, `runtime_decision.recommended_opt_in_backend`, `runtime_decision.not_default_reason`, and `runtime_decision.backend_policy` so the cached-model path and hash fallback are visible.
 
 Optional cross-encoder reranking for local environments with a model available:
 
@@ -68,6 +68,7 @@ pdf-to-json-rag create-demo-pdf --path /tmp/pdf-to-json-rag-demo.pdf --json
 ```bash
 pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What does this file cover?" --json
 pdf-to-json-rag assess-pdf --pdf /tmp/pdf-to-json-rag-demo.pdf --json
+pdf-to-json-rag inspect-pdf-quality --pdf /tmp/pdf-to-json-rag-demo.pdf --json
 ```
 
 ## Full workflow in one command
@@ -99,9 +100,11 @@ To compare the default baseline against optional model/runtime paths without cha
 ```bash
 pdf-to-json-rag compare-runtime-modes --json
 pdf-to-json-rag runtime-promotion-report --json
+pdf-to-json-rag real-ground-truth-check --json
+pdf-to-json-rag real-ground-truth-check --modes all --json
 ```
 
-The comparison reports the effective embedding backend, cross-encoder fallback count, LLM usage count, and sentence-transformer promotion gate, so missing local models or answer regressions are visible instead of hidden. Add `--all-cases` when you want the full evaluation suite rather than the quick comparison subset. `runtime-promotion-report` summarizes the latest saved comparison without rerunning it and writes `data/eval/runtime_promotion_snapshot.json` when the full-suite sentence-transformer gate is green.
+The comparison reports the effective embedding backend, cross-encoder fallback count, LLM usage count, and sentence-transformer promotion gate, so missing local models or answer regressions are visible instead of hidden. Add `--all-cases` when you want the full evaluation suite rather than the quick comparison subset. `runtime-promotion-report` summarizes the latest saved comparison without rerunning it and writes `data/eval/runtime_promotion_snapshot.json` when the full-suite sentence-transformer gate is green. `real-ground-truth-check` runs the product gate over real repo-local PDFs with expected document/evidence support. Its default mode runs `default-auto`; use `--modes all` when you want cross-encoder and LLM-synthesis decision reporting too.
 
 With `--verbose`, the same document-level commands also expose richer structure fields such as section paths, section kinds, section roles, source-block traces, and shortlist breakdowns.
 

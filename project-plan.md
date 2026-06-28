@@ -53,7 +53,7 @@ The first working version stayed local-first and deliberately narrow:
 
 Current public version: `0.1.0-beta`
 Current package metadata version: `0.1.0`
-Current internal implementation level: `v4.5.0`
+Current internal implementation level: `v4.8.0`
 
 `0.1.0-beta` is the public release label. The package version remains PEP440-compatible `0.1.0` until the beta checkpoint is cut as a formal package release.
 
@@ -92,8 +92,10 @@ What the repo now has:
 - runtime-mode comparison for baseline, sentence-transformers, cross-encoder, and opt-in LLM synthesis paths
 - full-suite runtime comparison and green promotion gate for optional sentence-transformer embeddings
 - explicit runtime diagnostics and promotion summary commands
-- explicit runtime decision output that keeps `hash` as default and recommends sentence-transformers only as opt-in
+- explicit runtime decision output with `auto` as default: cached sentence-transformers when available, deterministic hash fallback otherwise
 - explicit embedding backend selection with `hash`, `sentence-transformers`, and `auto`
+- a real-PDF ground-truth gate over form-like, financial/table, scan/layout, legal, public-record, and occupational samples
+- `inspect-pdf-quality` as a compact quality/readiness path for unfamiliar PDFs
 - saved promotion snapshots and backend payloads in build/workflow/smoke outputs
 - verified installed-entrypoint public path and a repeatable `readme-smoke-check`
 - aggregated public beta validation through `public-beta-check`
@@ -122,7 +124,7 @@ What the repo now has:
 - compact release `product_gate` summary over public path, benchmark, and corpus pass/review state
 - compact public workflow payloads by default, with full debug payloads behind `--verbose`
 - frozen public compact JSON contracts for `run-workflow`, `smoke-check`, and `assess-pdf`
-- explicit backend policy that keeps `hash` as default and keeps cross-encoder/LLM paths opt-in
+- explicit backend policy with `auto` as default, deterministic hash fallback, and cross-encoder/LLM paths opt-in
 - model decision gates for runtime comparison and promotion reports, always with `default_change_allowed=false`
 - compact release-check summaries with full maintainer payloads behind `--verbose`
 
@@ -390,15 +392,35 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
   - added `model_experiment_scope` so opt-in model runs are tied to measured corpus review metrics
   - added `model_decision_gate` to runtime comparison and promotion reporting
   - kept hash as the default backend and made every model decision explicitly default-change-disabled
+- `v4.6.0`
+  - changed the public embedding default to `auto`: local `all-MiniLM-L6-v2` is used when cached, deterministic hash remains the offline fallback
+  - added `real-ground-truth-check` with 12 hand-built cases over repo-local form, financial/table, and scan/layout PDFs
+  - improved administrative-form chunking so field labels and submission instructions stay in retrievable support context instead of fragmenting into one-heading chunks
+  - improved legislative amendment semantics without broad false positives on web/job-listing records
+  - ran the real-PDF gate across default-auto, hash baseline, cross-encoder, and LLM-synthesis modes
+  - kept cross-encoder out of promotion because it fell back on the real-PDF eval in this environment
+  - kept LLM synthesis out of the roadmap because no local synthesis command was configured for a value comparison
+- `v4.7.0`
+  - expanded the real-PDF ground-truth set from 12 to 31 cases across 12 repo-local PDFs
+  - improved retrieval recovery for short real PDFs by allowing global lexical recovery when no explicit document scope is present
+  - fixed reranker score decomposition so exact lexical overlap is not canceled by rank-prior or metadata residuals
+  - added `inspect-pdf-quality` with compact `structure_support` for table/form/scan readiness
+  - changed `real-ground-truth-check` default mode to `default-auto`; full cross-encoder/LLM decision reporting is now explicit through `--modes all`
+- `v4.8.0`
+  - reviewed the seven real-PDF failure cases instead of adding more synthetic shards
+  - preserved structured/source-anchor preferred-doc behavior while treating generic evidence inventory candidates as hints, not hard scopes
+  - carried document titles into chunk `section_path` and used section paths as retrieval/evidence support
+  - added exact section-path phrase scoring, short heading/title support, and presentation/program support boosts for real PDFs
+  - current real-PDF baseline: strict `all_pass=false`, quality gate passes, `28/31`, `MRR=0.919`, `recall@5=1.000`, `evidence_keyword_coverage=0.919`
 
 
 ### 6.2. Next Steps
 
-1. Run optional model experiments only when `corpus_review.model_experiment_scope.worth_running` is true.
-2. Use `model_decision_gate` to decide whether a backend stays experimental or recommended opt-in.
-3. Keep public compact contracts stable while optional model reports evolve.
-4. Do not change defaults unless an explicit future default-change gate is added and passes.
-5. Continue improving structure-aware baseline first when corpus review points to processing/layout metrics.
+1. Fix the remaining inspection-site field extraction failure before adding more PDF cases.
+2. Improve QIP support selection so title-slide and mission/program chunks are selected together.
+3. If a local cross-encoder is actually available, rerun `real-ground-truth-check --modes all` and promote it only if it improves ranking without fallback.
+4. Compare extractive vs LLM synthesis only with a configured local command and only on the same evidence chunks used by the real-PDF gate.
+5. Keep public compact contracts stable while real-PDF evaluation and runtime reports evolve.
 
 ## 7. Explicitly Deferred
 

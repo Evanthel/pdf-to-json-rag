@@ -82,6 +82,15 @@ DOCUMENT_TYPE_HINTS = {
         "cash in banks",
         "mortgage payable",
     ),
+    "legislative_amendment": (
+        "amendment to h.r.",
+        "offered by",
+        "page ",
+        "line ",
+        "insert the following",
+        "after \"",
+        "violator is an individual",
+    ),
     "assessment_form": (
         "assessment form",
         "financial assessment",
@@ -95,6 +104,10 @@ DOCUMENT_TYPE_HINTS = {
         "national insurance",
         "telephone no",
         "telephone numbers",
+        "ship information",
+        "shipping company information",
+        "application procedure",
+        "adopt-a-ship",
     ),
     "questionnaire": ("questionnaire", "survey", "interview"),
     "checklist_appendix": ("checklist", "check list", "appendix"),
@@ -175,6 +188,13 @@ DOCUMENT_PURPOSE_HINTS = {
         "market value",
         "cash in banks",
     ),
+    "legislative_markup": (
+        "amendment to h.r.",
+        "offered by",
+        "line ",
+        "insert the following",
+        "after \"",
+    ),
     "financial_assessment": (
         "financial assessment",
         "care charge",
@@ -189,6 +209,10 @@ DOCUMENT_PURPOSE_HINTS = {
         "date of birth",
         "address",
         "telephone",
+        "ship information",
+        "shipping company information",
+        "application procedure",
+        "adopt-a-ship",
     ),
     "teaching_reference": ("chapter", "learning", "introduction", "book"),
     "procedural_guidance": ("guidance", "protocol", "procedure", "recommended", "should"),
@@ -210,6 +234,7 @@ AUDIENCE_HINTS = {
     "analysts": ("analysis", "forecast", "trigger", "model"),
     "public_readers": ("public notice", "newsletter", "constituent", "resident", "office of"),
     "legal_professionals": ("court of appeals", "appellant", "appellee", "petitioner", "respondent"),
+    "lawmakers": ("amendment to h.r.", "offered by", "line ", "insert the following"),
     "officials": ("department of", "agency", "bureau", "inspection"),
     "job_seekers": ("indeed.com", "job postings", "jobs on indeed.com"),
     "institutional_staff": ("university", "memorandum", "letterhead"),
@@ -238,6 +263,9 @@ EVIDENCE_STYLE_HINTS = {
         "date of birth",
         "address",
         "service user",
+        "ship information",
+        "shipping company information",
+        "application procedure",
     ),
     "financial_form": (
         "financial statement",
@@ -246,6 +274,7 @@ EVIDENCE_STYLE_HINTS = {
         "liabilities",
         "cash in banks",
     ),
+    "legislative_markup": ("amendment to h.r.", "offered by", "line ", "insert the following"),
     "educational_exposition": ("chapter", "foreword", "learning", "concept"),
     "procedural_guidance": ("guidance", "recommended", "procedure", "should"),
     "structured_form": ("questionnaire", "checklist", "yes/no", "appendix"),
@@ -274,11 +303,15 @@ STRUCTURE_STYLE_HINTS = {
     "structured_site_record": ("waste site id", "waste site reclassification", "project manager signature"),
     "letterhead": ("letterhead", "university", "memorandum"),
     "financial_grid": ("financial statement", "net worth", "total assets", "total liabilities"),
+    "legislative_markup": ("amendment to h.r.", "offered by", "line ", "insert the following"),
     "administrative_form": (
         "personal details",
         "representative details",
         "date of birth",
         "telephone",
+        "ship information",
+        "shipping company information",
+        "application procedure",
     ),
     "chapter_book": ("chapter", "foreword", "part "),
     "report_sections": ("executive summary", "introduction", "conclusion", "recommendations"),
@@ -307,6 +340,16 @@ def _best_facet_match(text: str, hint_map: dict[str, tuple[str, ...]]) -> str | 
 
 def _contains_any(text: str, hints: tuple[str, ...]) -> bool:
     return any(hint in text for hint in hints)
+
+
+def _looks_like_legislative_amendment(text: str) -> bool:
+    if "amendment to h.r." in text or "amendment to h. r." in text:
+        return True
+    line_directive = bool(re.search(r"\bpage\s+\d+,\s+line\s+\d+\b", text))
+    insertion_directive = "insert the following" in text or "after \"" in text
+    sponsor_marker = "offered by" in text
+    chamber_marker = " of illinois" in text or " of ill:rnois" in text
+    return line_directive and insertion_directive and (sponsor_marker or chamber_marker)
 
 
 def _confidence_label(score: float) -> str:
@@ -338,7 +381,9 @@ def derive_document_facets(
     signal_text = "\n".join(part for part in signals if part).lower()
 
     document_type = _best_facet_match(signal_text, DOCUMENT_TYPE_HINTS)
-    if _contains_any(signal_text, DOCUMENT_TYPE_HINTS["financial_statement"]):
+    if _looks_like_legislative_amendment(signal_text):
+        document_type = "legislative_amendment"
+    elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["financial_statement"]):
         document_type = "financial_statement"
     elif _contains_any(signal_text, DOCUMENT_TYPE_HINTS["assessment_form"]):
         document_type = "assessment_form"
@@ -378,7 +423,9 @@ def derive_document_facets(
             document_type = "document"
 
     document_purpose = _best_facet_match(signal_text, DOCUMENT_PURPOSE_HINTS)
-    if document_type == "financial_statement":
+    if document_type == "legislative_amendment":
+        document_purpose = "legislative_markup"
+    elif document_type == "financial_statement":
         document_purpose = "financial_disclosure"
     elif document_type == "assessment_form":
         document_purpose = "financial_assessment"
@@ -420,6 +467,7 @@ def derive_document_facets(
             "empirical_study": "empirical_reporting",
             "technical_manual": "procedural_guidance",
             "financial_statement": "financial_disclosure",
+            "legislative_amendment": "legislative_markup",
             "assessment_form": "financial_assessment",
             "administrative_form": "administrative_intake",
         }
@@ -428,6 +476,8 @@ def derive_document_facets(
     audience = _best_facet_match(signal_text, AUDIENCE_HINTS)
     if document_type == "financial_statement" and audience in {None, "general_professional"}:
         audience = "applicants"
+    elif document_type == "legislative_amendment" and audience in {None, "general_professional"}:
+        audience = "lawmakers"
     elif document_type == "assessment_form":
         audience = "case_workers" if "local authority" in signal_text else "applicants"
     elif document_type == "registration_form" and audience in {None, "general_professional"}:
@@ -466,13 +516,16 @@ def derive_document_facets(
             "empirical_study": "clinicians",
             "technical_manual": "practitioners",
             "financial_statement": "applicants",
+            "legislative_amendment": "lawmakers",
             "assessment_form": "case_workers",
             "administrative_form": "applicants",
         }
         audience = fallback_audience.get(document_type, "general_professional")
 
     evidence_style = _best_facet_match(signal_text, EVIDENCE_STYLE_HINTS)
-    if document_type in {"financial_statement", "assessment_form", "administrative_form", "registration_form"}:
+    if document_type == "legislative_amendment":
+        evidence_style = "legislative_markup"
+    elif document_type in {"financial_statement", "assessment_form", "administrative_form", "registration_form"}:
         evidence_style = "financial_form" if document_type == "financial_statement" else "administrative_form"
     elif document_type == "court_opinion":
         evidence_style = "legal_record"
@@ -506,6 +559,7 @@ def derive_document_facets(
             "empirical_study": "empirical_study",
             "technical_manual": "technical_reference",
             "financial_statement": "financial_form",
+            "legislative_amendment": "legislative_markup",
             "assessment_form": "administrative_form",
             "administrative_form": "administrative_form",
         }
@@ -514,6 +568,8 @@ def derive_document_facets(
     structure_style = _best_facet_match(signal_text, STRUCTURE_STYLE_HINTS)
     if document_type == "financial_statement":
         structure_style = "financial_grid"
+    elif document_type == "legislative_amendment":
+        structure_style = "legislative_markup"
     elif document_type in {"assessment_form", "administrative_form", "registration_form"} and structure_style in {None, "report_sections"}:
         structure_style = "administrative_form"
     elif document_type == "court_opinion" and structure_style in {None, "report_sections"}:
@@ -548,6 +604,7 @@ def derive_document_facets(
             "empirical_study": "review_article",
             "technical_manual": "manual_reference",
             "financial_statement": "financial_grid",
+            "legislative_amendment": "legislative_markup",
             "assessment_form": "administrative_form",
             "administrative_form": "administrative_form",
         }
@@ -600,6 +657,7 @@ def derive_document_facets(
         semantic_warnings.append("generic_audience")
     if document_type in {
         "court_opinion",
+        "legislative_amendment",
         "registration_form",
         "government_bulletin",
         "inspection_report",
@@ -612,6 +670,7 @@ def derive_document_facets(
         semantic_warnings = [warning for warning in semantic_warnings if warning != "generic_document_type"]
     if document_purpose in {
         "legal_record",
+        "legislative_markup",
         "registration_update",
         "public_notice",
         "institutional_reporting",

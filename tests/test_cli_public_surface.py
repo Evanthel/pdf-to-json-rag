@@ -106,6 +106,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(set(result), set(cli_module.PUBLIC_ASSESS_PDF_KEYS))
         self.assertNotIn("workflow", result)
         self.assertIsInstance(result["messages"], list)
+        self.assertIsInstance(result["structure_support"], dict)
         self.assertIn(
             result["acceptance_profile"],
             {
@@ -153,10 +154,10 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIn("demo_pdf_generation_available", check_names)
         self.assertIn("pdfplumber_available", check_names)
         self.assertIn("embedding_backend_configured", check_names)
-        self.assertEqual(result["runtime"]["embedding"]["requested_backend"], "hash")
+        self.assertEqual(result["runtime"]["embedding"]["requested_backend"], "auto")
         self.assertEqual(result["runtime"]["embedding"]["effective_backend"], "hash-fallback")
 
-    def test_runtime_check_reports_default_hash_backend(self) -> None:
+    def test_runtime_check_reports_default_auto_backend(self) -> None:
         process = self._run("runtime-check", "--json")
         payload = json.loads(process.stdout)
         self.assertTrue(payload["ok"])
@@ -164,16 +165,19 @@ class CliPublicSurfaceTests(unittest.TestCase):
         decision = payload["result"]["runtime_decision"]
         self.assertEqual(payload["result"]["install_context"]["version"], "0.1.0")
         self.assertTrue(payload["result"]["install_context"]["module_path"].endswith("cli.py"))
-        self.assertEqual(embedding["requested_backend"], "hash")
+        self.assertEqual(embedding["requested_backend"], "auto")
         self.assertEqual(embedding["effective_backend"], "hash-fallback")
-        self.assertEqual(decision["default_backend"], "hash")
-        self.assertIn("sentence-transformer", decision["not_default_reason"])
-        self.assertEqual(decision["backend_policy"]["default_backend"]["name"], "hash")
+        self.assertEqual(decision["default_backend"], "auto")
+        self.assertIn("fall back", decision["not_default_reason"])
+        self.assertEqual(decision["backend_policy"]["default_backend"]["name"], "auto")
+        self.assertEqual(decision["backend_policy"]["default_backend"]["fallback_backend"], "hash")
         self.assertEqual(
             decision["backend_policy"]["experimental_backends"][0]["status"],
             "experimental_opt_in",
         )
         self.assertFalse(decision["backend_policy"]["llm_synthesis"]["default_enabled"])
+        self.assertEqual(payload["result"]["default_policy"]["embedding_backend"], "auto")
+        self.assertEqual(payload["result"]["default_policy"]["sentence_transformers"], "default_when_cached")
         self.assertEqual(payload["result"]["default_policy"]["llm_synthesis"], "opt_in")
 
     def test_runtime_check_reports_sentence_transformer_env_request(self) -> None:
@@ -244,11 +248,12 @@ class CliPublicSurfaceTests(unittest.TestCase):
         snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
         self.assertEqual(snapshot["candidate_mode"], "sentence-transformers")
         self.assertFalse(snapshot["recommended_default_change"])
-        self.assertEqual(payload["result"]["default_decision"]["default_backend"], "hash")
+        self.assertEqual(payload["result"]["default_decision"]["default_backend"], "auto")
         self.assertEqual(
-            payload["result"]["default_decision"]["recommended_opt_in_backend"],
+            payload["result"]["default_decision"]["preferred_backend_when_cached"],
             "sentence-transformers",
         )
+        self.assertEqual(payload["result"]["default_decision"]["fallback_backend"], "hash")
         self.assertEqual(payload["result"]["default_decision"]["cross_encoder"], "experimental_opt_in_only")
         self.assertFalse(payload["result"]["model_decision_gate"]["default_change_allowed"])
         decisions = {
@@ -312,7 +317,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
             {
                 "doctor": {
                     "ready_for_public_cli": True,
-                    "runtime": {"runtime_decision": {"default_backend": "hash"}},
+                    "runtime": {"runtime_decision": {"default_backend": "auto"}},
                 },
                 "public_surface": {
                     "all_pass": True,
@@ -353,7 +358,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
         )
 
         self.assertEqual(compact["overall"]["status"], "pass")
-        self.assertEqual(compact["runtime_decision"]["default_backend"], "hash")
+        self.assertEqual(compact["runtime_decision"]["default_backend"], "auto")
         self.assertTrue(compact["product_gate"]["all_pass"])
         self.assertEqual(compact["product_gate"]["public_path"]["status"], "pass")
         self.assertEqual(compact["product_gate"]["benchmark"]["status"], "pass")
@@ -423,9 +428,9 @@ class CliPublicSurfaceTests(unittest.TestCase):
                     "ready_for_public_cli": True,
                     "runtime": {
                         "runtime_decision": {
-                            "default_backend": "hash",
+                            "default_backend": "auto",
                             "recommended_opt_in_backend": "sentence-transformers",
-                            "not_default_reason": "sentence-transformers is opt-in.",
+                            "not_default_reason": "auto uses cached sentence-transformers with hash fallback.",
                         }
                     },
                 },
@@ -481,8 +486,8 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertTrue(payload["all_pass"])
         self.assertEqual(gate_statuses["installed_readme_flow"], "pass")
         self.assertEqual(gate_statuses["runtime_default_policy"], "pass")
-        self.assertEqual(payload["runtime_decision"]["default_backend"], "hash")
-        self.assertEqual(payload["scope"]["sentence_transformers"], "recommended_opt_in_only")
+        self.assertEqual(payload["runtime_decision"]["default_backend"], "auto")
+        self.assertEqual(payload["scope"]["sentence_transformers"], "default_when_cached")
         self.assertEqual(payload["public_smoke_quality"]["overall_status"], "pass")
 
     def test_answer_contract_health_and_quality_profile_are_readable(self) -> None:
@@ -750,14 +755,33 @@ class CliPublicSurfaceTests(unittest.TestCase):
             cli_module._assessment_profile(
                 {
                     **base_doc,
+                    "document_type": "financial_statement",
                     "extraction_summary": {
-                        "block_role_counts": {"table_like": 3},
-                        "layout_signal_counts": {"table_like": 1},
+                        "block_role_counts": {"key_value": 3},
+                        "layout_signal_counts": {},
                     },
                 },
                 {"taxonomy": ["table_or_form_heavy"]},
             ),
             "table_heavy_pdf",
+        )
+        support = cli_module._structure_support_summary(
+            {
+                **base_doc,
+                "document_type": "financial_statement",
+                "section_count": 4,
+                "extraction_summary": {"block_role_counts": {"key_value": 3}},
+            },
+            {"taxonomy": ["table_or_form_heavy"], "drilldown": {"chunk_count": 6}},
+        )
+        self.assertEqual(support["status"], "structured")
+        self.assertGreaterEqual(support["table_signal_count"], 3)
+
+    def test_real_pdf_modes_default_fast_and_all_explicit(self) -> None:
+        self.assertEqual(cli_module._real_pdf_modes_from_arg(None), ["default-auto"])
+        self.assertEqual(
+            cli_module._real_pdf_modes_from_arg("all"),
+            ["default-auto", "hash-baseline", "cross-encoder", "llm-synthesis"],
         )
 
     def test_corpus_profile_compare_reports_snapshot_deltas(self) -> None:
@@ -1015,7 +1039,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertTrue(result["document"]["inventory_summary"])
         self.assertIn("processing_diagnostics", result)
         self.assertTrue(result["processing_diagnostics"]["technical_processed"])
-        self.assertEqual(result["index"]["embedding"]["requested_backend"], "hash")
+        self.assertEqual(result["index"]["embedding"]["requested_backend"], "auto")
         self.assertEqual(result["index"]["embedding"]["effective_backend"], "hash-fallback")
         self.assertTrue(result["answer"]["answer"])
         self.assertIn("quality_profile_summary", result)
@@ -1150,7 +1174,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertTrue(smoke_payload["ok"])
         self.assertTrue(smoke_payload["result"]["all_pass"])
         self.assertIn("embedding", smoke_payload["result"]["index"])
-        self.assertEqual(smoke_payload["result"]["index"]["embedding"]["requested_backend"], "hash")
+        self.assertEqual(smoke_payload["result"]["index"]["embedding"]["requested_backend"], "auto")
         self.assertIsNotNone(smoke_payload["result"]["document"]["structure_confidence"])
         self.assertIsNotNone(smoke_payload["result"]["document"]["layout_confidence"])
         self.assertIsNotNone(smoke_payload["result"]["document"]["semantic_confidence"])
@@ -1916,7 +1940,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(report["selected_case_ids"], ["symptoms_case", "care_case"])
         self.assertIn("sentence-transformers", report["promotion_gates"])
         decision_gate = cli_module._model_decision_gate_from_runtime_report(report)
-        self.assertEqual(decision_gate["default_backend"], "hash")
+        self.assertEqual(decision_gate["default_backend"], "auto")
         self.assertFalse(decision_gate["default_change_allowed"])
         self.assertTrue(any(item["backend"] == "sentence-transformers" for item in decision_gate["decisions"]))
 

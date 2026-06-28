@@ -1580,6 +1580,36 @@ def select_evidence_sentences(
     seen_sentences: set[str] = set()
 
     for chunk in chunks:
+        metadata_candidates = []
+        if chunk.section_path:
+            metadata_candidates.append(" > ".join(chunk.section_path))
+        if chunk.section_summary:
+            metadata_candidates.append(chunk.section_summary)
+        for sentence in metadata_candidates:
+            normalized = sentence.lower()
+            if normalized in seen_sentences:
+                continue
+            score = _score_sentence(
+                sentence,
+                query_terms,
+                query_intent,
+                section_title=chunk.section_title,
+                chunk=chunk,
+            )
+            if score <= 0:
+                continue
+            seen_sentences.add(normalized)
+            candidates.append(
+                EvidenceSentence(
+                    chunk_id=chunk.chunk_id,
+                    page_start=chunk.page_start,
+                    page_end=chunk.page_end,
+                    section_title=chunk.section_title,
+                    sentence=sentence,
+                    score=score,
+                    matched_terms=_sentence_query_overlap(sentence, query_terms),
+                )
+            )
         for sentence in _split_sentences(chunk.text):
             normalized = sentence.lower()
             if normalized in seen_sentences:
