@@ -1,5 +1,5 @@
 {
-  "generated_at_utc": "2026-06-17T11:59:05.349228+00:00",
+  "generated_at_utc": "2026-06-29T10:51:29.658321+00:00",
   "source_report_path": "data/eval/runtime_mode_comparison.json",
   "case_count": 77,
   "baseline_pass_count": 77,
@@ -67,5 +67,5 @@
     "reasons": []
   },
   "recommended_default_change": false,
-  "recommendation": "Sentence-transformers is validated as an opt-in backend; keep hash as default until an explicit default-change decision is made."
+  "recommendation": "Sentence-transformers is validated as the preferred auto backend when cached locally; deterministic hash remains the offline fallback."
 }

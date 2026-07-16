@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from functools import lru_cache
-from pathlib import Path
 import re
 
 from .config import PATHS

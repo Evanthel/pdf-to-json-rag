@@ -7,7 +7,14 @@ from pydantic import BaseModel, Field, ConfigDict
 
 ChunkType = Literal["text", "table", "checklist", "figure", "header", "footer", "unknown"]
 ExtractionMethod = Literal["native", "ocr", "mixed"]
-ChunkStrategy = Literal["prose_recursive", "table_rows", "form_rows", "list_items", "appendix_structured"]
+ChunkStrategy = Literal[
+    "prose_recursive",
+    "table_rows",
+    "form_rows",
+    "list_items",
+    "appendix_structured",
+    "presentation_slide",
+]
 BlockRole = Literal[
     "heading",
     "paragraph",

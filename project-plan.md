@@ -53,7 +53,7 @@ The first working version stayed local-first and deliberately narrow:
 
 Current public version: `0.1.0-beta`
 Current package metadata version: `0.1.0`
-Current internal implementation level: `v4.8.0`
+Current internal implementation level: `v4.13.0`
 
 `0.1.0-beta` is the public release label. The package version remains PEP440-compatible `0.1.0` until the beta checkpoint is cut as a formal package release.
 
@@ -412,15 +412,37 @@ Detailed implementation history lives in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.
   - carried document titles into chunk `section_path` and used section paths as retrieval/evidence support
   - added exact section-path phrase scoring, short heading/title support, and presentation/program support boosts for real PDFs
   - current real-PDF baseline: strict `all_pass=false`, quality gate passes, `28/31`, `MRR=0.919`, `recall@5=1.000`, `evidence_keyword_coverage=0.919`
+- `v4.9.0`
+  - retained heading text for inspection-report chunks so site/person fields remain available as evidence
+  - normalized QIP-style acronym queries against `Quality Improvement Program` support text
+  - improved presentation-recipient support selection for early title/recipient slides without changing the default reranking backend
+  - current real-PDF baseline: strict `all_pass=true`, `31/31`, `MRR=0.952`, `recall@5=1.000`, `evidence_keyword_coverage=1.000`
+- `v4.10.0`
+  - added a generic extractive context-snippet fallback for real-world grounded-evidence questions where sentence-level evidence selection is too conservative
+  - prevented generic evidence answers from being prematurely narrowed by document-inventory selection when expanded context is available
+  - added compact `answer_quality` reporting to the real-PDF gate, separating weak synthesis cases from retrieval/evidence failures
+  - current real-PDF baseline: strict `all_pass=true`, `31/31`, `MRR=0.952`, `recall@5=1.000`, `answer_keyword_coverage=0.863`, `evidence_keyword_coverage=1.000`
+- `v4.11.0`
+  - added a compact weak-case workbench to the real-PDF gate with expected/missing keywords, selected docs, selected chunks, answer snippets, and suggested action
+  - improved anchor-window fallback extraction so compact form rows and short-document anchors are less likely to be clipped away
+  - current real-PDF baseline: strict `all_pass=true`, `31/31`, `MRR=0.952`, `recall@5=1.000`, `answer_keyword_coverage=0.917`, `evidence_keyword_coverage=1.000`
+- `v4.12.0`
+  - retained heading payload for very short heading-heavy documents so titles such as newsletters, notices, and coming-soon bulletins remain available in chunks
+  - improved compact field/program answer snippets for form-heavy real PDFs without changing the default embedding or reranking backend
+  - current real-PDF baseline: strict `all_pass=true`, `31/31`, `MRR=0.952`, `recall@5=1.000`, `answer_keyword_coverage=1.000`, `evidence_keyword_coverage=1.000`
+- `v4.13.0`
+  - added processing-level hard-case assertions for real-PDF form rows, table rows, heading payload, and QIP presentation slide roles
+  - added presentation slide role metadata (`presentation_title`, `presentation_outline`, `presentation_mission`) and a dedicated `presentation_slide` chunk strategy
+  - kept real-PDF baseline green: strict `all_pass=true`, `31/31`, `MRR=0.952`, `recall@5=1.000`, `answer_keyword_coverage=1.000`, `evidence_keyword_coverage=1.000`
 
 
 ### 6.2. Next Steps
 
-1. Fix the remaining inspection-site field extraction failure before adding more PDF cases.
-2. Improve QIP support selection so title-slide and mission/program chunks are selected together.
-3. If a local cross-encoder is actually available, rerun `real-ground-truth-check --modes all` and promote it only if it improves ranking without fallback.
-4. Compare extractive vs LLM synthesis only with a configured local command and only on the same evidence chunks used by the real-PDF gate.
-5. Keep public compact contracts stable while real-PDF evaluation and runtime reports evolve.
+1. Expand processing-level hard-case assertions from the current 4 PDFs to the next 3-5 hardest real PDFs, especially scanned/layout-heavy records.
+2. Use `weak_case_workbench` as the default triage surface before changing retrieval or adding model runs whenever new real PDFs are added.
+3. Compare document JSON before/after for sections, tables, form fields, slide roles, and reading order before adding more broad gates.
+4. Run `real-ground-truth-check --modes all` only when local cross-encoder / sentence-transformer assets are actually available, then promote a model only if it improves the real-PDF ranking without fallback.
+5. Compare extractive vs LLM synthesis only with a configured local command and only on the same evidence chunks used by the real-PDF gate.
 
 ## 7. Explicitly Deferred
 

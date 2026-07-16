@@ -2,6 +2,6 @@ PyMuPDF
 pytesseract
 Pillow
 pydantic
-chromadb
+chromadb<1.0.0
 sentence-transformers
 numpy

@@ -1214,7 +1214,6 @@ def _assessment_messages(
     semantic_status = str(statuses.get("semantic_confidence") or "unknown")
     answer_trust = str(statuses.get("answer_trust") or "unknown")
     taxonomy = set(_string_list(processing_diagnostics.get("taxonomy")))
-    document_type = str(document.get("document_type") or "")
     source_mix = answer.get("answer_source_mix", {}) if isinstance(answer.get("answer_source_mix"), dict) else {}
     chunk_evidence = source_mix.get("chunk_evidence", {}) if isinstance(source_mix.get("chunk_evidence"), dict) else {}
     document_semantics = source_mix.get("document_semantics", {}) if isinstance(source_mix.get("document_semantics"), dict) else {}
@@ -3768,6 +3767,7 @@ def _evaluate_real_pdf_mode(
             for chunk in answer.top_k_hits:
                 if chunk.doc_id not in retrieved_doc_ids:
                     retrieved_doc_ids.append(chunk.doc_id)
+            selected_chunk_ids = [chunk.chunk_id for chunk in answer.top_k_hits[:k]]
             rank = _rank_score(retrieved_doc_ids, expected_doc_id or "")
             support_text = "\n".join(
                 [
@@ -3814,6 +3814,7 @@ def _evaluate_real_pdf_mode(
                     "query": case.get("query"),
                     "expected_doc_id": expected_doc_id,
                     "retrieved_doc_ids": retrieved_doc_ids,
+                    "selected_chunk_ids": selected_chunk_ids,
                     "rank": rank["rank"],
                     "recall_at_k": rank["recall_at_k"],
                     "reciprocal_rank": rank["reciprocal_rank"],
@@ -3832,6 +3833,8 @@ def _evaluate_real_pdf_mode(
 
     grounded = case_results
     pass_count = sum(1 for item in grounded if item["passed"])
+    answer_quality = _real_pdf_answer_quality_summary(grounded)
+    weak_case_workbench = _real_pdf_weak_case_workbench(grounded)
     return {
         "mode": mode,
         "case_count": len(grounded),
@@ -3858,8 +3861,106 @@ def _evaluate_real_pdf_mode(
                 if item["runtime"]["synthesis_runtime"].get("used_for_final_answer")
             ),
         },
+        "answer_quality": answer_quality,
+        "weak_case_workbench": weak_case_workbench,
         "failed_case_ids": [str(item["case_id"]) for item in grounded if not item["passed"]],
         "case_results": grounded,
+    }
+
+
+def _real_pdf_answer_quality_summary(
+    case_results: list[dict[str, object]],
+    *,
+    threshold: float = 0.67,
+) -> dict[str, object]:
+    weak_cases = [
+        item
+        for item in case_results
+        if float(item.get("answer_keyword_coverage", {}).get("coverage") or 0.0) < threshold
+    ]
+    bucket_counts: dict[str, int] = {}
+    for item in weak_cases:
+        bucket = str(item.get("bucket") or "unknown")
+        bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+    abstained_case_ids = [
+        str(item.get("case_id"))
+        for item in case_results
+        if str(item.get("answer_preview") or "").startswith("No grounded answer")
+    ]
+    if not weak_cases:
+        recommended_next_action = "answer coverage is healthy for the current real-PDF set"
+    elif len(weak_cases) <= 3:
+        recommended_next_action = "review the remaining weak answer cases directly"
+    else:
+        recommended_next_action = "improve extractive synthesis for buckets with weak answer coverage"
+    return {
+        "threshold": threshold,
+        "weak_case_count": len(weak_cases),
+        "weak_case_ids": [str(item.get("case_id")) for item in weak_cases],
+        "abstained_case_count": len(abstained_case_ids),
+        "abstained_case_ids": abstained_case_ids,
+        "weak_buckets": [
+            {"bucket": bucket, "weak_case_count": count}
+            for bucket, count in sorted(bucket_counts.items(), key=lambda pair: (-pair[1], pair[0]))
+        ],
+        "recommended_next_action": recommended_next_action,
+    }
+
+
+def _real_pdf_weak_case_workbench(
+    case_results: list[dict[str, object]],
+    *,
+    threshold: float = 0.67,
+    limit: int = 12,
+) -> dict[str, object]:
+    weak_cases = [
+        item
+        for item in case_results
+        if float(item.get("answer_keyword_coverage", {}).get("coverage") or 0.0) < threshold
+    ]
+    weak_cases.sort(
+        key=lambda item: (
+            float(item.get("answer_keyword_coverage", {}).get("coverage") or 0.0),
+            str(item.get("bucket") or ""),
+            str(item.get("case_id") or ""),
+        )
+    )
+    items = []
+    for item in weak_cases[:limit]:
+        answer_eval = item.get("answer_keyword_coverage", {})
+        evidence_eval = item.get("evidence_keyword_coverage", {})
+        selected_docs = [str(doc_id) for doc_id in item.get("retrieved_doc_ids", [])]
+        selected_chunks = [str(chunk_id) for chunk_id in item.get("selected_chunk_ids", [])]
+        missing = [str(value) for value in answer_eval.get("missing", [])]
+        evidence_missing = [str(value) for value in evidence_eval.get("missing", [])]
+        if evidence_missing:
+            action = "fix retrieval/evidence support first"
+        elif str(item.get("answer_preview") or "").startswith("No grounded answer"):
+            action = "add or tune extractive fallback for this query/layout"
+        else:
+            action = "improve answer extraction around missing keywords"
+        items.append(
+            {
+                "case_id": str(item.get("case_id")),
+                "bucket": str(item.get("bucket")),
+                "query": str(item.get("query")),
+                "answer_coverage": answer_eval.get("coverage"),
+                "evidence_coverage": evidence_eval.get("coverage"),
+                "expected_keywords": [*answer_eval.get("matched", []), *missing],
+                "missing_keywords": missing,
+                "selected_docs": selected_docs,
+                "selected_chunks": selected_chunks,
+                "expected_doc_rank": item.get("rank"),
+                "answer_preview": str(item.get("answer_preview") or "")[:300],
+                "suggested_action": action,
+            }
+        )
+    return {
+        "threshold": threshold,
+        "limit": limit,
+        "weak_case_count": len(weak_cases),
+        "reported_case_count": len(items),
+        "cases": items,
     }
 
 
@@ -4636,7 +4737,7 @@ def main() -> None:
                 print("Available: no")
                 print(payload["recommendation"])
                 return
-            print(f"Available: yes")
+            print("Available: yes")
             print(f"Cases: {payload.get('case_count', 0)}")
             baseline = payload.get("baseline", {})
             candidate = payload.get("candidate", {})
@@ -4674,8 +4775,28 @@ def main() -> None:
                 f"pass={default_result['pass_count']}/{default_result['case_count']} "
                 f"mrr={default_result['summary']['mrr']:.3f} "
                 f"recall={default_result['summary']['avg_recall_at_k']:.3f} "
-                f"evidence={default_result['summary']['avg_evidence_keyword_coverage']:.3f}"
+                f"evidence={default_result['summary']['avg_evidence_keyword_coverage']:.3f} "
+                f"answer={default_result['summary']['avg_answer_keyword_coverage']:.3f}"
             )
+            answer_quality = default_result.get("answer_quality", {})
+            print(
+                "answer_quality: "
+                f"weak={answer_quality.get('weak_case_count', 0)} "
+                f"abstained={answer_quality.get('abstained_case_count', 0)} "
+                f"action={answer_quality.get('recommended_next_action')}"
+            )
+            workbench = default_result.get("weak_case_workbench", {})
+            weak_cases = workbench.get("cases", []) if isinstance(workbench, dict) else []
+            if weak_cases:
+                print("weak_cases:")
+                for item in weak_cases[:5]:
+                    missing = ", ".join(str(value) for value in item.get("missing_keywords", [])[:4])
+                    print(
+                        f"- {item.get('case_id')} "
+                        f"coverage={item.get('answer_coverage')} "
+                        f"missing={missing} "
+                        f"action={item.get('suggested_action')}"
+                    )
             for decision in payload["runtime_decisions"]["decisions"]:
                 print(f"{decision['backend']}: {decision['status']} - {decision['reason']}")
             return

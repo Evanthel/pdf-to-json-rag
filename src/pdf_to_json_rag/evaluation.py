@@ -1747,7 +1747,6 @@ def _deferred_feature_decisions(
 ) -> dict[str, Any]:
     table_adjacent_warnings = slices.get("table_adjacent", {}).get("warning_case_count", 0)
     table_heavy_warnings = slices.get("table_heavy", {}).get("warning_case_count", 0)
-    scanned_warnings = slices.get("ocr_derived", {}).get("warning_case_count", 0)
     source_review_warnings = slices.get("source_anchored_review", {}).get("warning_case_count", 0)
     source_technical_warnings = slices.get("source_anchored_technical", {}).get("warning_case_count", 0)
     return {
@@ -1900,7 +1899,6 @@ def run_mvp_evaluation(
             )
         )
 
-    warning_case_ids = [item["case_id"] for item in debug_cases if item.get("status") not in {"pass"}]
     all_slice_labels = sorted(
         {
             label

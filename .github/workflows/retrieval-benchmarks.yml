@@ -1,0 +1,149 @@
+name: Retrieval Benchmarks
+
+# Manual-only: the real-PDF benchmark corpus lives in the gitignored pdf/ directory.
+on:
+  workflow_dispatch:
+    inputs:
+      k:
+        description: Retrieval top-k.
+        required: false
+        default: "5"
+      modes:
+        description: Comma-separated modes for real-ground-truth-check.
+        required: false
+        default: default-auto,hash-baseline
+      require_benchmark_assets:
+        description: Fail instead of skipping when the repo-local pdf corpus is unavailable.
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: retrieval-benchmarks-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  real-pdf-ground-truth:
+    name: Real-PDF retrieval ground truth
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      BENCHMARK_K: ${{ github.event.inputs.k || '5' }}
+      BENCHMARK_MODES: ${{ github.event.inputs.modes || 'default-auto,hash-baseline' }}
+      REQUIRE_BENCHMARK_ASSETS: ${{ github.event.inputs.require_benchmark_assets || 'false' }}
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD: "0"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check benchmark assets
+        id: benchmark_assets
+        shell: bash
+        run: |
+          if [[ -f pdf/lcwa_gov_pdf_metadata.csv ]] && compgen -G "pdf/*.pdf" > /dev/null; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "Benchmark corpus found in pdf/." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "available=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "Repo-local benchmark corpus is not available on this runner."
+            echo ""
+            echo "The real-PDF retrieval benchmark requires:"
+            echo "- pdf/lcwa_gov_pdf_metadata.csv"
+            echo "- matching pdf/*.pdf files"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [[ "$REQUIRE_BENCHMARK_ASSETS" == "true" ]]; then
+            exit 1
+          fi
+
+      - name: Set up Python 3.13
+        if: steps.benchmark_assets.outputs.available == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Upgrade pip
+        if: steps.benchmark_assets.outputs.available == 'true'
+        run: python -m pip install --upgrade pip
+
+      - name: Install package
+        if: steps.benchmark_assets.outputs.available == 'true'
+        run: python -m pip install -e .
+
+      - name: Run real-PDF retrieval benchmark
+        if: steps.benchmark_assets.outputs.available == 'true'
+        run: |
+          mkdir -p benchmark-results
+          pdf-to-json-rag real-ground-truth-check \
+            --k "$BENCHMARK_K" \
+            --modes "$BENCHMARK_MODES" \
+            --json \
+            --output benchmark-results/real-ground-truth.json
+
+      - name: Enforce benchmark gate
+        if: steps.benchmark_assets.outputs.available == 'true'
+        run: |
+          python - <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path("benchmark-results/real-ground-truth.json").read_text())
+          result = payload["result"]
+          quality_gate = result.get("quality_gate", {})
+          mode_summaries = {
+              item["mode"]: {
+                  "pass_count": item.get("pass_count"),
+                  "case_count": item.get("case_count"),
+                  "summary": item.get("summary", {}),
+              }
+              for item in result.get("mode_results", [])
+          }
+
+          summary = [
+              "Real-PDF retrieval benchmark",
+              "",
+              f"- k: {result.get('k')}",
+              f"- modes: {', '.join(result.get('modes', []))}",
+              f"- PDFs: {result.get('pdf_count')}",
+              f"- cases: {result.get('case_count')}",
+              f"- all_pass: {result.get('all_pass')}",
+              f"- quality_gate.passed: {quality_gate.get('passed')}",
+              "",
+              "Mode summaries:",
+          ]
+          for mode, details in mode_summaries.items():
+              metrics = details["summary"]
+              summary.append(
+                  "- "
+                  f"{mode}: {details['pass_count']}/{details['case_count']} pass, "
+                  f"MRR={metrics.get('mrr')}, "
+                  f"recall@k={metrics.get('avg_recall_at_k')}, "
+                  f"evidence_keywords={metrics.get('avg_evidence_keyword_coverage')}"
+              )
+          Path("benchmark-results/summary.md").write_text("\n".join(summary) + "\n")
+
+          if not result.get("all_pass") or not quality_gate.get("passed"):
+              print("\n".join(summary))
+              sys.exit(1)
+          PY
+
+      - name: Publish benchmark summary
+        if: steps.benchmark_assets.outputs.available == 'true'
+        run: cat benchmark-results/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark results
+        if: always() && steps.benchmark_assets.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: real-pdf-retrieval-benchmark
+          path: benchmark-results/

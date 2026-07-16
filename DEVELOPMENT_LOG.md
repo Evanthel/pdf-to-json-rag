@@ -8,7 +8,7 @@ Internal development iterations in this file use `vN.x` labels. Public releases 
 
 ## Current State
 
-Current implementation level: `v4.8.0`
+Current implementation level: `v4.13.0`
 Current public version: `0.1.0-beta`
 Current package metadata version: `0.1.0`
 
@@ -127,6 +127,145 @@ Broad benchmark note after `v4.6.0`:
 - the current corpus direction is turning repo-local unknown-document sampling into a real `processing / semantics / trust` gate instead of a descriptive sanity report.
 - the current prompt-runtime direction is enforcing strict output parsing and provider boundaries before adding more model behavior.
 - the current faithfulness direction is exposing claim/evidence alignment status as diagnostic payload, not as a replacement for human review.
+
+## Current Status Detail
+
+This section preserves the longer status block that used to live in the public README.
+
+Current public version: `0.1.0-beta`
+
+Internal development iterations in this repo use `vN.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
+
+Current package metadata version: `0.1.0`
+
+Current internal milestone: `v4.13.0`
+
+The public release label is `0.1.0-beta`; package metadata remains PEP440-compatible `0.1.0` until the first non-beta public cut.
+
+The current baseline includes:
+
+- extraction-time block roles with per-block text provenance and quality signals
+- native/OCR page fusion that can merge or switch sources per page instead of one global fallback
+- extraction-time layout signals and per-page processing summaries
+- explicit multi-column reading-order normalization from extraction through chunking
+- relative font-size, bold-font, and TOC-backed heading signals during extraction
+- optional `pdfplumber` table probe metadata and supplemental `table_like` blocks when the `tables` extra is installed
+- extraction-time sections with `section_path` and `section_kind`
+- section roles, layout signals, text-source profiles, and source-block traces carried from extraction into inspection and chunking
+- structure-aware chunking and chunk metadata
+- chunk-level block provenance, block-role profiles, layout signals, and explicit chunk strategies
+- feature-based query planning and explicit `document_selection` traces
+- evidence-intent planning for treatment subquestions such as null-effect and subgroup-benefit queries
+- shared document-level mode renderers and shared answer finalization helpers
+- preserved document-root section context for inline and synthetic section splits
+- shared structured-form answer helpers and a dedicated structured-form maintenance gate
+- document and chunk `structure_confidence` / `layout_confidence` metadata
+- sanity gates for layout robustness and single-document random-PDF behavior
+- stronger table-like and form-heavy chunk splitting on unfamiliar layouts
+- dedicated table/form layout sanity gates in the maintainer release path
+- richer document typing and purpose inference for unfamiliar financial/admin forms
+- distinct document-level answers for type, purpose, audience, and overview queries
+- a semantic document-understanding gate for source-specific type/purpose/audience questions
+- semantic confidence signals and confidence-aware document classification answers
+- explicit classification-rationale and classification-limits answers for trust-aware document semantics
+- a local corpus sampler over repo-local `pdf/` artifacts and metadata for unknown-document sanity checks
+- stronger unknown-document typing for registration forms, court opinions, government bulletins, and inspection-style records
+- stronger public-record semantics for statistical tables, web job listings, environmental site records, and institutional correspondence found in unknown-PDF corpus buckets
+- corpus-level semantic pass metrics so unfamiliar PDFs are tracked as semantically understood vs only technically processable
+- a dedicated `processing_layer_core` maintainer gate for block typing, section roles, and chunk provenance
+- a dedicated `processing_strategy_core` maintainer gate for strategy-aware chunking on structure-heavy inputs
+- an explicit `retrieval_contract` split for single-document QA, document understanding, and cross-document discovery
+- optional cross-encoder reranking behind `PDF_TO_JSON_RAG_USE_CROSS_ENCODER=1`, with lightweight reranking as the stable fallback
+- runtime-mode comparison for baseline, sentence-transformers, cross-encoder, and opt-in LLM synthesis
+- full-suite runtime comparison with a green promotion gate for optional sentence-transformer embeddings
+- explicit `runtime-check` and `runtime-promotion-report` commands for backend selection and promotion readiness
+- explicit runtime decision output with `auto` default: cached local sentence-transformer embeddings when available, deterministic hash fallback otherwise
+- explicit embedding backend policy via `PDF_TO_JSON_RAG_EMBEDDING_BACKEND=hash|sentence-transformers|auto`
+- promotion snapshots saved after green full-suite runtime comparisons
+- installed-entrypoint verification for the public README flow through `readme-smoke-check`
+- aggregated public beta validation through `public-beta-check`
+- reranking of the neighbor-expanded context before answer synthesis, with `initial_retrieval_rank` and `expanded_context_rank` signals
+- an explicit grounded-only synthesis prompt contract with opt-in local-command LLM execution
+- strict local JSON/fence parsing for opt-in LLM outputs and judge diagnostics
+- an LLM-as-judge faithfulness prompt contract with opt-in local-command JSON judging
+- answer-claim/evidence alignment status in answer traces and faithfulness audit records
+- document-level claim alignment now uses support-trace fragments as evidence for metadata claims
+- provider abstraction over the current env-command prompt runtime
+- prompt/eval contract validation for sampled faithfulness gates
+- optional low-confidence semantic multipass behind an env flag, with no default-path change
+- a shared `document_synthesis` handoff so document selection, support scope, and answer chunks stay aligned
+- compact answer `contract_health` and workflow `quality_profile` blocks for unknown-PDF processing drilldown, retrieval readiness reasons, and answer trust
+- explicit quality-profile thresholds and public-smoke quality summary in `public-beta-check`
+- `quality_profile.overall_status` and `recommended_next_action` for random-PDF UX
+- compact `processing_diagnostics` with failure taxonomy for extraction/layout/chunking issues
+- retrieval/synthesis contract status with support coverage and answer source mix
+- `assess-pdf` as a compact public acceptance layer for unfamiliar PDFs
+- `unknown_document_semantics_core` as a maintainer shard for document type, purpose, audience, and confidence behavior on unfamiliar-document semantics
+- a layer-aware evaluation report that separates processing, retrieval, and answer-faithfulness signals
+- layer-stability and architecture-gate summaries on top of the layer-aware evaluation report
+- corpus-level `processing / semantics / trust` layers and an unknown-document architecture gate
+- bucket-level corpus diagnostics and follow-up actions for unknown-document sanity checks
+- corpus sample profiles, deterministic sample manifests, saved corpus snapshots, and a contract gate for bucket diagnostics
+- saved corpus snapshot comparison through `corpus-profile-compare`
+- corpus review workbench output with `pass/review/fail`, top review metrics, and opt-in model experiment scope
+- compact corpus snapshots and saved snapshot comparison without reprocessing PDFs
+- compact release `product_gate` summary over public path, benchmark, and corpus pass/review state
+- compact default workflow JSON output with richer debug state behind `--verbose`
+- frozen public compact JSON contracts for `run-workflow`, `smoke-check`, and `assess-pdf`
+- explicit backend policy: `auto` default, sentence-transformers used only when locally cached, hash fallback, cross-encoder experimental, LLM synthesis opt-in only
+- model decision gates for runtime comparisons and promotion reports, always with `default_change_allowed=false`
+- compact `release-check --json` summaries, with full release payloads behind `--verbose`
+- default `auto` embeddings that remain offline-safe by falling back to deterministic hash embeddings
+- real-PDF ground-truth evaluation over repo-local form, financial/table, scan/layout, legal, public-record, and occupational samples
+- `inspect-pdf-quality` for compact processing/structure/readiness inspection on unfamiliar PDFs
+
+Validation state:
+
+- public CLI tests rerun in the current milestone: green
+- public compact workflow contract tests rerun in the current milestone: green
+- unknown-document semantics shard rerun in the current milestone: green, `9/9`
+- balanced local corpus sanity rerun in the current milestone: green, `12/12` technical and semantic pass
+- quick local corpus sanity rerun in the current milestone: green, `4/4` technical and semantic pass
+- quick-latest vs balanced-latest corpus profile compare rerun in the current milestone: review due lower average structure confidence on the larger sample
+- corpus review and model-decision focused tests rerun in the current milestone: green
+- full-suite baseline vs local `all-MiniLM-L6-v2` runtime comparison: green, `77/77` for both modes, sentence-transformer promotion gate green
+- processing-layer maintainer shards rerun in the current milestone: green
+- retrieval-contract maintainer shard rerun in the current milestone: green
+- retrieval-synthesis maintainer shard rerun in the current milestone: green
+- evaluation-layer public/unit validation rerun in the current milestone: green
+- layer-gate validation rerun in the current milestone: green
+- corpus-gate validation rerun in the current milestone: green
+- bucket-diagnostics validation rerun in the current milestone: green
+- corpus snapshot/profile/contract validation rerun in the current milestone: green
+- latest saved full 77-case benchmark: green
+  - `precision@5 = 0.6031`
+  - `recall@5 = 1.0`
+  - `MRR = 1.0`
+  - `avg_keyword_coverage = 1.0`
+  - `negative_success_rate = 1.0`
+  - `warning_case_count = 0`
+  - `answer_faithfulness_failing_case_count = 0`
+  - `architecture_gates.all_pass = true`
+- sampled faithfulness audit: green
+  - `avg_supported_sentence_ratio = 1.0`
+  - `failing_case_count = 0`
+  - `llm_judge_prompt_contract = faithfulness_context_judge.v1`
+  - `contract_validation.all_pass = true`
+- real-PDF ground-truth quality gate: green, strict `all_pass=true`, `31/31`
+  - default backend in this environment: `auto` requested, `hash-fallback` effective because no local sentence-transformer model is cached
+  - default-auto metrics: `recall@5 = 1.000`, `MRR = 0.952`, `answer_keyword_coverage = 1.000`, `evidence_keyword_coverage = 1.000`
+  - the latest pass fixed inspection-report field support, QIP title-slide support selection, compact form-row answer fallback, and short heading-payload documents without enabling learned reranking by default
+  - hard real-PDF processing contracts now assert form rows, table rows, heading payload, and presentation title/outline/mission roles below the final answer layer
+  - `answer_quality` and `weak_case_workbench` now report weak answer cases, missing keywords, selected docs/chunks, and suggested actions separately from retrieval/evidence pass/fail
+  - run `pdf-to-json-rag real-ground-truth-check --modes all --json` for cross-encoder and LLM-synthesis decision reporting
+
+Current engineering direction:
+
+- keep strengthening the processing layer as the primary baseline for downstream retrieval behavior
+- keep retrieval behavior aligned to explicit answer-path contracts instead of one shared fallback path
+- keep improving unknown-document semantics on unfamiliar PDFs without hiding uncertainty
+- keep using the repo-local `pdf/` corpus as a local-only semantic stress test, not just a layout stress test
+- keep heavier reranking optional until it proves value over the structure-aware lightweight baseline
 
 ## Delivered Architecture
 
@@ -690,6 +829,40 @@ Representative validation that has already been completed:
 - Added exact section-path phrase scoring, short title/heading support, and presentation/program support boosts for real PDFs.
 - Improved the real-PDF ground-truth baseline to strict `all_pass=false`, quality gate passes, `28/31`, `MRR=0.919`, `recall@5=1.000`, `evidence_keyword_coverage=0.919`.
 - Remaining failures are now narrow: inspection-site field extraction and QIP support selection.
+
+### v4.9.0
+
+- Closed the remaining real-PDF ground-truth failures without changing the default backend.
+- Retained inspection-report heading text during chunking so site/person fields remain available as evidence.
+- Normalized QIP acronym queries to `Quality Improvement Program` support text in lightweight retrieval scoring.
+- Improved support selection for early presentation title/recipient slides such as `Joint Commission on Health Care` / `Terry Smith`.
+- Current real-PDF baseline: strict `all_pass=true`, `31/31`, `MRR=0.952`, `recall@5=1.000`, `evidence_keyword_coverage=1.000`.
+
+### v4.10.0
+
+- Added a grounded context-snippet fallback for generic real-world questions where the correct support chunk exists but sentence-level evidence selection is too conservative.
+- Kept the fallback extractive and local-only: no default LLM synthesis and no learned reranker promotion.
+- Stopped generic grounded-evidence answers from being narrowed by document-inventory selection before expanded context can be used.
+- Added compact `answer_quality` reporting to `real-ground-truth-check` with weak answer case ids, abstention counts, weak buckets, and next action.
+- Improved real-PDF answer coverage from `0.452` before this sprint to `0.863` while preserving strict `31/31`, `MRR=0.952`, `recall@5=1.000`, and `evidence_keyword_coverage=1.000`.
+
+### v4.11.0
+
+- Added `weak_case_workbench` to `real-ground-truth-check` so weak synthesis cases expose expected keywords, missing keywords, selected docs, selected chunks, answer preview, and suggested next action.
+- Improved anchor-window fallback extraction to preserve compact form rows and avoid clipping useful downstream fields from short support chunks.
+- Current real-PDF baseline: strict `all_pass=true`, `31/31`, `MRR=0.952`, `recall@5=1.000`, `answer_keyword_coverage=0.917`, `evidence_keyword_coverage=1.000`, with zero abstained real-PDF cases.
+
+### v4.12.0
+
+- Retained heading payload for very short heading-heavy documents so short notices and newsletter-like PDFs keep title/subtitle cues in chunks.
+- Improved compact field/program answer snippets for form-heavy real PDFs and preserved the local-only extractive default path.
+- Current real-PDF baseline: strict `all_pass=true`, `31/31`, `MRR=0.952`, `recall@5=1.000`, `answer_keyword_coverage=1.000`, `evidence_keyword_coverage=1.000`, with zero weak or abstained real-PDF cases.
+
+### v4.13.0
+
+- Added processing-level hard-case assertions for real PDFs covering ship form rows, voter transfer fields, farm-size table rows, and QIP title/outline/mission slides.
+- Added presentation slide role metadata and the `presentation_slide` chunk strategy so QIP recipient/topic support is represented in chunk metadata, not only retrieval scoring.
+- Kept the real-PDF baseline green: strict `all_pass=true`, `31/31`, `MRR=0.952`, `recall@5=1.000`, `answer_keyword_coverage=1.000`, `evidence_keyword_coverage=1.000`, with zero weak or abstained real-PDF cases.
 
 ### v0.1.1-v0.1.2
 

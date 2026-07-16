@@ -11,7 +11,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import chromadb
+from chromadb.config import Settings
+from chromadb.telemetry.product import ProductTelemetryClient, ProductTelemetryEvent
 import numpy as np
+from overrides import override
 
 from .content_metadata import derive_chunk_semantics
 from .schemas import ChunkRecord
@@ -25,6 +28,26 @@ SENTENCE_TRANSFORMERS_MODEL_ENV = "PDF_TO_JSON_RAG_SENTENCE_TRANSFORMERS_MODEL"
 USE_SENTENCE_TRANSFORMERS_ENV = "PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS"
 ALLOW_MODEL_DOWNLOAD_ENV = "PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD"
 SUPPORTED_EMBEDDING_BACKENDS = ("hash", "sentence-transformers", "auto")
+
+
+class NoopProductTelemetry(ProductTelemetryClient):
+    """Disable Chroma product telemetry for local embedded indexes."""
+
+    @override
+    def capture(self, event: ProductTelemetryEvent) -> None:
+        return None
+
+
+def local_chroma_client(index_dir: Path):
+    """Create an offline local Chroma client without telemetry noise."""
+    return chromadb.PersistentClient(
+        path=str(index_dir),
+        settings=Settings(
+            anonymized_telemetry=False,
+            chroma_product_telemetry_impl="pdf_to_json_rag.indexing.NoopProductTelemetry",
+            chroma_telemetry_impl="pdf_to_json_rag.indexing.NoopProductTelemetry",
+        ),
+    )
 
 
 def _hash_embedding(text: str, dim: int = FALLBACK_EMBEDDING_DIM) -> list[float]:
@@ -348,7 +371,7 @@ def build_local_index(
         raise ValueError("No chunks provided for indexing.")
 
     embed_texts, embedder_info = _load_embedder()
-    client = chromadb.PersistentClient(path=str(index_dir))
+    client = local_chroma_client(index_dir)
 
     if reset:
         try:

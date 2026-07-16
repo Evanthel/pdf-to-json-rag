@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from pdf_to_json_rag import cli as cli_module
 from pdf_to_json_rag import retrieval as retrieval_module
 from pdf_to_json_rag.answering import answer_from_chunks
-from pdf_to_json_rag.chunking import chunk_document, normalize_reading_order
+from pdf_to_json_rag.chunking import chunk_document, normalize_reading_order, process_saved_document_to_chunks
 from pdf_to_json_rag.content_metadata import classify_block_metadata, infer_layout_signals
 from pdf_to_json_rag.document_facets import derive_document_facets
 from pdf_to_json_rag.document_semantics import interpret_document_semantics
@@ -39,6 +39,7 @@ from pdf_to_json_rag.extraction import (
     _build_extracted_block,
     _sort_page_blocks_reading_order,
     extract_pdfplumber_table_blocks,
+    process_native_pdf_to_json,
     probe_pdfplumber_tables,
 )
 from pdf_to_json_rag.llm_output import parse_strict_json_output
@@ -77,6 +78,26 @@ class CliPublicSurfaceTests(unittest.TestCase):
         )
         doc.save(path)
         doc.close()
+
+    def _create_text_pdf(
+        self,
+        path: Path,
+        *,
+        title: str,
+        pages: list[list[tuple[str, float]]],
+    ) -> None:
+        doc = fitz.open()
+        doc.set_metadata({"title": title})
+        try:
+            for page_lines in pages:
+                page = doc.new_page()
+                y = 72.0
+                for text, font_size in page_lines:
+                    page.insert_text((72, y), text, fontsize=font_size)
+                    y += font_size + 24.0
+            doc.save(path)
+        finally:
+            doc.close()
 
     def _assert_public_workflow_contract(self, result: dict[str, object], *, smoke: bool = False) -> None:
         expected_keys = (
@@ -784,6 +805,61 @@ class CliPublicSurfaceTests(unittest.TestCase):
             ["default-auto", "hash-baseline", "cross-encoder", "llm-synthesis"],
         )
 
+    def test_real_pdf_answer_quality_summary_reports_weak_cases(self) -> None:
+        summary = cli_module._real_pdf_answer_quality_summary(
+            [
+                {
+                    "case_id": "strong",
+                    "bucket": "form_like",
+                    "answer_keyword_coverage": {"coverage": 1.0},
+                    "answer_preview": "Ship Name and Home Port are listed.",
+                },
+                {
+                    "case_id": "weak",
+                    "bucket": "form_like",
+                    "answer_keyword_coverage": {"coverage": 0.0},
+                    "answer_preview": "No grounded answer could be assembled from the retrieved context.",
+                },
+            ]
+        )
+
+        self.assertEqual(summary["weak_case_count"], 1)
+        self.assertEqual(summary["abstained_case_count"], 1)
+        self.assertEqual(summary["weak_case_ids"], ["weak"])
+        self.assertEqual(summary["weak_buckets"][0]["bucket"], "form_like")
+
+    def test_real_pdf_weak_case_workbench_reports_missing_keywords_and_chunks(self) -> None:
+        workbench = cli_module._real_pdf_weak_case_workbench(
+            [
+                {
+                    "case_id": "weak-form",
+                    "bucket": "form_like",
+                    "query": "What fields are requested?",
+                    "rank": 1,
+                    "retrieved_doc_ids": ["form-doc"],
+                    "selected_chunk_ids": ["form-doc-chunk-0001"],
+                    "answer_keyword_coverage": {
+                        "coverage": 0.25,
+                        "matched": ["Old Address"],
+                        "missing": ["New Address", "Social Security"],
+                    },
+                    "evidence_keyword_coverage": {
+                        "coverage": 1.0,
+                        "matched": ["Old Address", "New Address", "Social Security"],
+                        "missing": [],
+                    },
+                    "answer_preview": "Old Address is visible.",
+                }
+            ]
+        )
+
+        self.assertEqual(workbench["weak_case_count"], 1)
+        item = workbench["cases"][0]
+        self.assertEqual(item["case_id"], "weak-form")
+        self.assertEqual(item["missing_keywords"], ["New Address", "Social Security"])
+        self.assertEqual(item["selected_chunks"], ["form-doc-chunk-0001"])
+        self.assertEqual(item["suggested_action"], "improve answer extraction around missing keywords")
+
     def test_corpus_profile_compare_reports_snapshot_deltas(self) -> None:
         baseline_path = self.workspace / "quick.json"
         candidate_path = self.workspace / "balanced.json"
@@ -1293,6 +1369,130 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertTrue(synthesis_runtime["used_for_final_answer"])
         self.assertEqual(result.answer_trace["synthesis_prompt_contract"]["runtime"], "local_command")
 
+    def test_generic_form_question_uses_context_snippet_fallback(self) -> None:
+        chunk = ChunkRecord(
+            doc_id="ship-application",
+            chunk_id="ship-fields",
+            source_pdf="ship.pdf",
+            text="SHIP INFORMATION Ship Name: Example Star Ship Type: Cargo Type of Cargo: Grain Home Port: Baltimore",
+            page_start=1,
+            page_end=1,
+            reading_order_index=1,
+            section_title="SHIP INFORMATION",
+            section_path=["Application for Ship Participation", "SHIP INFORMATION"],
+            quality_score=1.0,
+        )
+
+        result = answer_from_chunks("What ship information fields are requested?", [chunk])
+
+        self.assertNotIn("No grounded answer could be assembled", result.answer)
+        self.assertIn("Ship Name", result.answer)
+        self.assertIn("Home Port", result.answer)
+        self.assertEqual(
+            result.answer_trace["template_id"],
+            "grounded_evidence.context_snippet_fallback",
+        )
+
+    def test_context_snippet_fallback_preserves_compact_form_rows(self) -> None:
+        chunk = ChunkRecord(
+            doc_id="ship-application",
+            chunk_id="ship-fields",
+            source_pdf="ship.pdf",
+            text=(
+                "Name of Company: Adopt-A-Ship Company Point of Contact: Telephone Number: "
+                "Email: Fax: Ship Name: Ship Type/Length: Type of Cargo: Home Port/Sailing Routes:"
+            ),
+            page_start=1,
+            page_end=1,
+            reading_order_index=1,
+            section_title="SHIP INFORMATION",
+            section_path=["Application for Ship Participation", "SHIP INFORMATION"],
+            quality_score=1.0,
+        )
+
+        result = answer_from_chunks("What ship information fields are requested?", [chunk])
+
+        self.assertIn("Ship Name", result.answer)
+        self.assertIn("Type of Cargo", result.answer)
+        self.assertIn("Home Port", result.answer)
+
+    def test_context_snippet_fallback_extracts_parenthetical_form_fields(self) -> None:
+        chunk = ChunkRecord(
+            doc_id="voter-transfer",
+            chunk_id="voter-fields",
+            source_pdf="voter.pdf",
+            text=(
+                "Voter Registration Transfer Form Voter's Name (Please Print)________________ "
+                "Old Address________________ New Address________________ "
+                "Social Security No (last 4 digits).____"
+            ),
+            page_start=1,
+            page_end=1,
+            reading_order_index=1,
+            section_title="Voter Registration Transfer Form",
+            section_path=["Voter Registration Transfer Form"],
+            quality_score=1.0,
+        )
+
+        result = answer_from_chunks("What voter registration transfer fields are requested?", [chunk])
+
+        self.assertIn("Voter's Name", result.answer)
+        self.assertIn("Old Address", result.answer)
+        self.assertIn("New Address", result.answer)
+        self.assertIn("Social Security", result.answer)
+
+    def test_context_snippet_fallback_extracts_hyphenated_program_name(self) -> None:
+        chunk = ChunkRecord(
+            doc_id="ship-application",
+            chunk_id="ship-program",
+            source_pdf="ship.pdf",
+            text="Application for Ship Participation in the Adopt-A-Ship Program.",
+            page_start=1,
+            page_end=1,
+            reading_order_index=1,
+            section_title="Application for Ship Participation",
+            section_path=["Application for Ship Participation"],
+            quality_score=1.0,
+        )
+
+        result = answer_from_chunks("What program is mentioned in the application?", [chunk])
+
+        self.assertIn("Adopt-A-Ship Program", result.answer)
+
+    def test_context_snippet_fallback_prefers_claimant_caption_name(self) -> None:
+        respondent_chunk = ChunkRecord(
+            doc_id="court-opinion",
+            chunk_id="respondent-caption",
+            source_pdf="court.pdf",
+            text="Claimant-Appellant, v. JAMES B. PEAKE, M.D., Respondent-Appellee.",
+            page_start=1,
+            page_end=1,
+            reading_order_index=1,
+            section_title="Caption",
+            section_path=["Caption"],
+            quality_score=1.0,
+        )
+        claimant_chunk = ChunkRecord(
+            doc_id="court-opinion",
+            chunk_id="claimant-caption",
+            source_pdf="court.pdf",
+            text="FORTUNATA CAPELLAN, Claimant-Appellant.",
+            page_start=1,
+            page_end=1,
+            reading_order_index=2,
+            section_title="Caption",
+            section_path=["Caption"],
+            quality_score=1.0,
+        )
+
+        result = answer_from_chunks(
+            "Who is the claimant-appellant in the court opinion?",
+            [respondent_chunk, claimant_chunk],
+        )
+
+        self.assertIn("FORTUNATA CAPELLAN", result.answer)
+        self.assertNotIn("JAMES B. PEAKE", result.answer)
+
     def test_plan_query_distinguishes_type_purpose_audience_confidence_rationale_and_limits(self) -> None:
         type_payload = json.loads(
             self._run(
@@ -1487,6 +1687,98 @@ class CliPublicSurfaceTests(unittest.TestCase):
             retrieval_module.RERANK_BACKEND_LIGHTWEIGHT,
         )
         self.assertEqual(reranked[0].retrieval_signals["cross_encoder_fallback"], 1.0)
+
+    def test_qip_recipient_query_prefers_title_recipient_slide(self) -> None:
+        recipient_slide = ChunkRecord(
+            doc_id="microsoft-powerpoint-copy-of-v-quality-improvement-program",
+            chunk_id="qip-title",
+            source_pdf="Microsoft PowerPoint - Copy of V - Quality Improvement Program.pdf",
+            text="Terry Smith Division Director Division of Long-Term Care Department of Medical Assistance Services",
+            page_start=1,
+            page_end=1,
+            reading_order_index=3,
+            section_title="The Joint Commission on Health Care",
+            section_path=[
+                "Microsoft PowerPoint - Copy of V - Quality Improvement Program",
+                "The Joint Commission on Health Care",
+            ],
+            quality_score=0.7,
+            noise_labels=["title_fragment"],
+        )
+        outline_slide = ChunkRecord(
+            doc_id="microsoft-powerpoint-copy-of-v-quality-improvement-program",
+            chunk_id="qip-outline",
+            source_pdf="Microsoft PowerPoint - Copy of V - Quality Improvement Program.pdf",
+            text="Background Civil Money Penalty Funds QIP Advisory Committee Committee Discussions",
+            page_start=2,
+            page_end=2,
+            reading_order_index=6,
+            section_title="Presentation Outline",
+            section_path=[
+                "Microsoft PowerPoint - Copy of V - Quality Improvement Program",
+                "Presentation Outline",
+            ],
+            quality_score=1.0,
+        )
+        off_topic = ChunkRecord(
+            doc_id="court-opinion",
+            chunk_id="court",
+            source_pdf="court.pdf",
+            text="The affidavit was presented to the regional office and reviewed by the court.",
+            page_start=8,
+            page_end=8,
+            reading_order_index=50,
+            section_title="Court Proceedings",
+            quality_score=1.0,
+        )
+
+        reranked = retrieval_module._rerank_hits(
+            [off_topic, outline_slide, recipient_slide],
+            "Who was the QIP presentation presented to?",
+            rank_prior_weight=0.0,
+        )
+
+        self.assertEqual(reranked[0].chunk_id, "qip-title")
+        self.assertGreater(
+            reranked[0].retrieval_signals["total"],
+            reranked[1].retrieval_signals["total"],
+        )
+
+    def test_presentation_slide_chunks_carry_role_metadata(self) -> None:
+        document = DocumentRecord(
+            doc_id="qip-demo",
+            source_pdf="Microsoft PowerPoint - Copy of V - Quality Improvement Program.pdf",
+            page_count=1,
+            title="Microsoft PowerPoint - Copy of V - Quality Improvement Program",
+            detected_language="en",
+        )
+        blocks = [
+            ExtractedBlock(
+                block_id="qip-title",
+                page_num=0,
+                text="The Joint Commission on Health Care",
+                bbox=None,
+                reading_order_index=1,
+                block_kind="heading",
+                block_role="heading",
+            ),
+            ExtractedBlock(
+                block_id="qip-presenter",
+                page_num=0,
+                text="Terry Smith Division Director Division of Long-Term Care Department of Medical Assistance Services",
+                bbox=None,
+                reading_order_index=2,
+                block_kind="text",
+                block_role="paragraph",
+            ),
+        ]
+
+        chunks = chunk_document(document, blocks, target_chars=400, min_chunk_chars=40)
+
+        self.assertEqual(len(chunks), 1)
+        self.assertEqual(chunks[0].section_role, "presentation_title")
+        self.assertEqual(chunks[0].chunk_strategy, "presentation_slide")
+        self.assertIn("presentation_title", chunks[0].content_hints)
 
     def test_expanded_context_is_reranked_after_neighbor_expansion(self) -> None:
         class FakeCrossEncoder:
@@ -2057,6 +2349,251 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertGreaterEqual(len(chunks), 3)
         self.assertTrue(all(chunk.chunk_type in {"table", "checklist"} for chunk in chunks))
         self.assertTrue(any("informed consent obtained" in chunk.text for chunk in chunks))
+
+    def test_inspection_report_chunks_keep_heading_field_text(self) -> None:
+        document = DocumentRecord(
+            doc_id="demo-inspection",
+            source_pdf="demo-inspection.pdf",
+            page_count=1,
+            title="Annual Inspection Report",
+            detected_language="en",
+            document_type="inspection_report",
+            structure_confidence=0.68,
+            layout_confidence=0.8,
+        )
+        blocks = [
+            ExtractedBlock(
+                block_id="inspection-heading-owner",
+                page_num=0,
+                text="SHARON GRAVES",
+                bbox=None,
+                reading_order_index=0,
+                block_kind="heading",
+                block_role="heading",
+            ),
+            ExtractedBlock(
+                block_id="inspection-site",
+                page_num=0,
+                text="ROCK CREEK KENNEL on-site inspection record with attending veterinarian notes.",
+                bbox=None,
+                reading_order_index=1,
+                block_kind="text",
+                block_role="form_field",
+            ),
+        ]
+
+        chunks = chunk_document(document, blocks, target_chars=300, min_chunk_chars=20)
+        chunk_text = " ".join(chunk.text for chunk in chunks)
+
+        self.assertIn("SHARON GRAVES", chunk_text)
+        self.assertIn("ROCK CREEK KENNEL", chunk_text)
+
+    def test_short_heading_payload_document_keeps_heading_text_in_chunk(self) -> None:
+        document = DocumentRecord(
+            doc_id="demo-bulletin",
+            source_pdf="demo-bulletin.pdf",
+            page_count=1,
+            title="The Online Office of Congressman Danny K. Davis",
+            detected_language="en",
+            document_type="government_bulletin",
+            document_purpose="public_notice",
+        )
+        blocks = [
+            ExtractedBlock(
+                block_id="bulletin-title",
+                page_num=0,
+                text="The Online Office of Congressman Danny K. Davis",
+                bbox=None,
+                reading_order_index=0,
+                block_kind="heading",
+                block_role="heading",
+            ),
+            ExtractedBlock(
+                block_id="bulletin-newsletter",
+                page_num=0,
+                text="ENewsletter",
+                bbox=None,
+                reading_order_index=1,
+                block_kind="heading",
+                block_role="heading",
+            ),
+            ExtractedBlock(
+                block_id="bulletin-coming-soon",
+                page_num=0,
+                text="Coming Soon!",
+                bbox=None,
+                reading_order_index=2,
+                block_kind="heading",
+                block_role="heading",
+            ),
+            ExtractedBlock(
+                block_id="bulletin-footer",
+                page_num=0,
+                text="http://www.davis.house.gov Powered by Joomla! Generated: 29 January, 2009, 21:18",
+                bbox=None,
+                reading_order_index=3,
+                block_kind="text",
+                block_role="key_value",
+            ),
+        ]
+
+        chunks = chunk_document(document, blocks, target_chars=300, min_chunk_chars=20)
+        chunk_text = " ".join(chunk.text for chunk in chunks)
+
+        self.assertEqual(len(chunks), 1)
+        self.assertIn("The Online Office of Congressman Danny K. Davis", chunk_text)
+        self.assertIn("ENewsletter", chunk_text)
+        self.assertIn("Coming Soon", chunk_text)
+
+    def test_generated_pdf_hard_cases_have_processing_level_support_contracts(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir)
+            source_dir = output_dir / "source-pdfs"
+            source_dir.mkdir()
+            cases: dict[str, tuple[str, list[list[tuple[str, float]]]]] = {
+                "ship": (
+                    "Adopt-A-Ship Application Form",
+                    [
+                        [
+                            ("Adopt-A-Ship Application Form", 16.0),
+                            (
+                                "Ship Name: Liberty Star\n"
+                                "Home Port: Baltimore\n"
+                                "Sponsor: International Propeller Club\n"
+                                "Email: adopt@propellerclubhq.com",
+                                11.0,
+                            ),
+                        ]
+                    ],
+                ),
+                "voter": (
+                    "Voter Registration Address Change Form",
+                    [
+                        [
+                            ("Voter Registration Address Change Form", 16.0),
+                            (
+                                "Voter's Name: Jane Citizen\n"
+                                "Old Address: 1 First Street\n"
+                                "New Address: 2 Second Street\n"
+                                "Social Security: optional last four",
+                                11.0,
+                            ),
+                        ]
+                    ],
+                ),
+                "farm": (
+                    "Farm Table Row Summary",
+                    [
+                        [
+                            ("Table 1 County Row Summary", 16.0),
+                            ("Table row State Acres Farms", 11.0),
+                            ("Colorado State 200 60", 11.0),
+                            ("Baca 1120 336", 11.0),
+                        ]
+                    ],
+                ),
+                "qip": (
+                    "QIP Presentation",
+                    [
+                        [
+                            ("Joint Commission on Health Care", 18.0),
+                            (
+                                "Terry Smith, Division Director. Presented to the Joint Commission on Health Care.",
+                                11.0,
+                            )
+                        ],
+                        [
+                            ("Presentation Outline", 18.0),
+                            (
+                                "Program Overview\n"
+                                "Quality indicators\n"
+                                "Reporting schedule\n"
+                                "Implementation milestones for health care quality reporting.",
+                                11.0,
+                            ),
+                        ],
+                        [
+                            ("Mission", 18.0),
+                            (
+                                "The Mission of the Virginia Quality Improvement Program is to improve care "
+                                "and sustain reliable nursing support across facilities.",
+                                11.0,
+                            ),
+                        ],
+                    ],
+                ),
+            }
+            processed: dict[str, list[ChunkRecord]] = {}
+            for name, (title, pages) in cases.items():
+                pdf_path = source_dir / f"{name}.pdf"
+                self._create_text_pdf(pdf_path, title=title, pages=pages)
+                extraction, document, native_path, document_path = process_native_pdf_to_json(
+                    pdf_path,
+                    output_dir / name,
+                )
+                self.assertGreater(len(extraction.blocks), 0)
+                _document, chunks, _saved_paths = process_saved_document_to_chunks(
+                    native_path=native_path,
+                    document_path=document_path,
+                    output_dir=output_dir / name,
+                )
+                self.assertGreater(len(chunks), 0)
+                processed[name] = chunks
+
+        ship_support = " ".join(
+            chunk.text
+            for chunk in processed["ship"]
+            if chunk.section_role == "form" and chunk.chunk_strategy == "form_rows"
+        )
+        self.assertIn("Ship Name", ship_support)
+        self.assertIn("Home Port", ship_support)
+        self.assertIn("International Propeller Club", ship_support)
+        self.assertIn("adopt@propellerclubhq.com", ship_support)
+
+        voter_support = " ".join(
+            chunk.text
+            for chunk in processed["voter"]
+            if chunk.section_role == "form" and chunk.chunk_strategy == "form_rows"
+        )
+        self.assertIn("Old Address", voter_support)
+        self.assertIn("New Address", voter_support)
+        self.assertIn("Voter's Name", voter_support)
+        self.assertIn("Social Security", voter_support)
+
+        farm_table_chunks = [
+            chunk
+            for chunk in processed["farm"]
+            if chunk.chunk_type == "table" and chunk.chunk_strategy == "table_rows"
+        ]
+        farm_support = " ".join(chunk.text for chunk in farm_table_chunks)
+        self.assertIn("Colorado State 200 60", farm_support)
+        self.assertIn("Baca 1120 336", farm_support)
+
+        qip_chunks = processed["qip"]
+        self.assertTrue(
+            any(
+                chunk.section_role == "presentation_title"
+                and "presentation_title" in chunk.content_hints
+                and "Joint Commission on Health Care" in chunk.section_title
+                and "Terry Smith" in chunk.text
+                for chunk in qip_chunks
+            )
+        )
+        self.assertTrue(
+            any(
+                chunk.section_role == "presentation_outline"
+                and "presentation_outline" in chunk.content_hints
+                for chunk in qip_chunks
+            )
+        )
+        self.assertTrue(
+            any(
+                chunk.section_role == "presentation_mission"
+                and "presentation_mission" in chunk.content_hints
+                and "Virginia Quality Improvement Program" in chunk.text
+                for chunk in qip_chunks
+            )
+        )
 
     def test_block_metadata_distinguishes_form_field_and_heading(self) -> None:
         form_field = classify_block_metadata("Date of Birth: 12/12/1980")
