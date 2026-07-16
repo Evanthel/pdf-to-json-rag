@@ -629,7 +629,8 @@ def matching_source_doc_ids(query: str, allow_topical: bool = False) -> list[str
             if profile
             else set()
         )
-        title_terms = _filtered_terms(str(meta.get("title", "")), min_len=3)
+        title = str(meta.get("title", "")) or (profile.label if profile else "")
+        title_terms = _filtered_terms(title, min_len=3)
         cue_terms = {
             token
             for cue in meta.get("summary_cues", [])[:6]

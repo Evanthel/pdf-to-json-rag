@@ -18,6 +18,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from pdf_to_json_rag import cli as cli_module
+from pdf_to_json_rag import document_inventory as document_inventory_module
+from pdf_to_json_rag import intent_config as intent_config_module
 from pdf_to_json_rag import retrieval as retrieval_module
 from pdf_to_json_rag.answering import answer_from_chunks
 from pdf_to_json_rag.chunking import chunk_document, normalize_reading_order, process_saved_document_to_chunks
@@ -1562,9 +1564,13 @@ class CliPublicSurfaceTests(unittest.TestCase):
             "Which sources discuss prevention or procedural guidance?",
             plan=plan_query("Which sources discuss prevention or procedural guidance?"),
         )
-        nonmedical_listing_plan = plan_query(
-            "Which sources in the benchmark discuss deep learning or data incident response?"
-        )
+        with (
+            mock.patch.object(intent_config_module, "_document_metadata_index", return_value={}),
+            mock.patch.object(document_inventory_module, "load_document_inventory", return_value=()),
+        ):
+            nonmedical_listing_plan = plan_query(
+                "Which sources in the benchmark discuss deep learning or data incident response?"
+            )
         vitamin_null_plan = plan_query("Does vitamin C prevent the common cold in normal populations?")
         vitamin_stress_plan = plan_query("Does vitamin C help people under cold stress?")
         cmaj_prevention_plan = plan_query(
