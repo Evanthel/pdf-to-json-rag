@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#f4f3ef">
+    <title>PDF RAG — local document analysis</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/app.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#workspace">Skip to document</a>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="wordmark" href="/" aria-label="PDF RAG — home">
+          <span class="wordmark-mark" aria-hidden="true">
+            <svg viewBox="0 0 28 28" role="img"><path d="M5 4.5h11l7 7V23.5H5z"/><path d="M16 4.5v7h7M9 16h10M9 20h7"/></svg>
+          </span>
+          <span>PDF <strong>RAG</strong></span>
+        </a>
+        <div class="local-status" title="Files and indexes stay on this device">
+          <span class="status-dot" aria-hidden="true"></span>
+          Local processing
+        </div>
+      </header>
+
+      <aside class="library" aria-label="Document library">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">Library</p>
+            <h1>Documents</h1>
+          </div>
+          <label class="icon-button" for="pdf-input" title="Add PDF" aria-label="Add PDF">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>
+          </label>
+        </div>
+        <input id="pdf-input" type="file" accept="application/pdf,.pdf" hidden>
+        <div id="document-list" class="document-list" aria-live="polite"></div>
+        <div class="library-foot">
+          <span id="document-count">0 documents</span>
+          <button id="refresh-documents" class="text-button" type="button">Refresh</button>
+        </div>
+      </aside>
+
+      <main id="workspace" class="workspace" tabindex="-1">
+        <section id="empty-state" class="empty-state">
+          <div class="empty-copy">
+            <p class="eyebrow">New analysis</p>
+            <h2>Ask your PDF.<br>Verify every answer.</h2>
+            <p>Add a document and the local pipeline will extract its content, build an index, and show the sources behind every answer.</p>
+          </div>
+          <label id="drop-zone" class="drop-zone" for="pdf-input">
+            <span class="drop-icon" aria-hidden="true">
+              <svg viewBox="0 0 32 32"><path d="M7 3.5h12l7 7v18H7z"/><path d="M19 3.5v7h7M16 23V13M12 17l4-4 4 4"/></svg>
+            </span>
+            <span class="drop-title">Drop a PDF here</span>
+            <span class="drop-note">or choose one from disk · up to 100 MB</span>
+          </label>
+          <p class="privacy-note">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 7h10v7H3zM5.5 7V4.5a2.5 2.5 0 0 1 5 0V7"/></svg>
+            By default, your document stays on this device.
+          </p>
+        </section>
+
+        <section id="document-workspace" class="document-workspace" hidden>
+          <div class="document-header">
+            <div>
+              <p id="document-kicker" class="eyebrow">Active document</p>
+              <h2 id="document-title"></h2>
+              <p id="document-summary" class="document-summary"></p>
+            </div>
+            <button id="replace-document" class="secondary-button" type="button">
+              <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>
+              Add PDF
+            </button>
+          </div>
+
+          <form id="question-form" class="question-form">
+            <label for="question">Question for this document</label>
+            <div class="question-control">
+              <textarea id="question" name="question" rows="2" maxlength="4000" placeholder="e.g. What are the key findings?" required></textarea>
+              <button id="ask-button" class="ask-button" type="submit" aria-label="Send question">
+                <svg viewBox="0 0 22 22" aria-hidden="true"><path d="M4 11h13M12 6l5 5-5 5"/></svg>
+              </button>
+            </div>
+            <div class="prompt-row" aria-label="Suggested questions">
+              <button type="button" data-prompt="Summarize the key findings.">Key findings</button>
+              <button type="button" data-prompt="Which data or numbers are essential?">Key data</button>
+              <button type="button" data-prompt="What limitations does the document describe?">Limitations</button>
+            </div>
+          </form>
+
+          <div id="answer-area" class="answer-area" aria-live="polite">
+            <div class="answer-placeholder">
+              <span class="answer-rule"></span>
+              <p>Your answer and its sources will appear here.</p>
+            </div>
+          </div>
+        </section>
+
+        <section id="processing-state" class="processing-state" hidden aria-live="assertive">
+          <div class="processing-symbol" aria-hidden="true">
+            <svg viewBox="0 0 52 52"><path d="M12 5h20l9 9v33H12z"/><path d="M32 5v9h9"/><circle cx="26" cy="29" r="8"/></svg>
+          </div>
+          <p class="eyebrow">Processing document</p>
+          <h2 id="processing-label">Checking the PDF structure…</h2>
+          <p>Extraction, OCR, and indexing run locally.</p>
+          <div class="progress-line" aria-hidden="true"><span></span></div>
+        </section>
+      </main>
+
+      <aside id="inspector" class="inspector" aria-label="Document diagnostics">
+        <div class="panel-heading inspector-heading">
+          <div>
+            <p class="eyebrow">Inspector</p>
+            <h2>Data quality</h2>
+          </div>
+          <span id="quality-badge" class="quality-badge is-muted">No document</span>
+        </div>
+        <div id="inspector-empty" class="inspector-empty">
+          <svg viewBox="0 0 36 36" aria-hidden="true"><path d="M7 4h15l7 7v21H7z"/><path d="M22 4v7h7M12 17h12M12 22h9M12 27h7"/></svg>
+          <p>After adding a PDF, you will see page, chunk, OCR, and table signals here.</p>
+        </div>
+        <div id="inspector-content" class="inspector-content" hidden>
+          <dl class="metric-grid">
+            <div><dt>Pages</dt><dd id="metric-pages">—</dd></div>
+            <div><dt>Chunks</dt><dd id="metric-chunks">—</dd></div>
+            <div><dt>Sections</dt><dd id="metric-sections">—</dd></div>
+            <div><dt>Language</dt><dd id="metric-language">—</dd></div>
+          </dl>
+          <div class="confidence-list">
+            <div>
+              <span>Structure</span><strong id="structure-value">—</strong>
+              <span class="meter"><i id="structure-meter"></i></span>
+            </div>
+            <div>
+              <span>Page layout</span><strong id="layout-value">—</strong>
+              <span class="meter"><i id="layout-meter"></i></span>
+            </div>
+          </div>
+          <div class="signal-section">
+            <h3>Extraction signals</h3>
+            <ul id="signal-list" class="signal-list"></ul>
+          </div>
+          <details class="engine-details">
+            <summary>pdf-inspector</summary>
+            <dl>
+              <div><dt>Mode</dt><dd id="inspector-mode">—</dd></div>
+              <div><dt>Status</dt><dd id="inspector-status">—</dd></div>
+              <div><dt>Confidence</dt><dd id="inspector-confidence">—</dd></div>
+              <div><dt>Version</dt><dd id="inspector-version">—</dd></div>
+            </dl>
+          </details>
+        </div>
+      </aside>
+    </div>
+
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  </body>
+</html>

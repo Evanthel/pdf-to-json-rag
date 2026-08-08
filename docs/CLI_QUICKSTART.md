@@ -20,6 +20,27 @@ For local development without installing the console script:
 PYTHONPATH=src python -m pdf_to_json_rag doctor --json
 ```
 
+## Local web workspace
+
+To use the same pipeline through a small browser interface:
+
+```bash
+pdf-to-json-rag-web --open
+```
+
+From a source checkout without reinstalling:
+
+```bash
+PYTHONPATH=src python -m pdf_to_json_rag.web --open
+```
+
+The web server listens only on `127.0.0.1:8765` by default. It reuses the configured `PDF_TO_JSON_RAG_DATA_DIR` and does not require Node.js.
+
+PDF inspection defaults to the safe assistant mode. PyMuPDF remains canonical, while
+`pdf-inspector` supplies diagnostics, corroborated OCR routing, and validated missing tables.
+Use `PDF_TO_JSON_RAG_PDF_INSPECTOR_MODE=shadow` for diagnostics only or `off` for the previous
+extraction path.
+
 Optional stronger local embeddings:
 
 ```bash
