@@ -1,27 +1,104 @@
-# PDF-to-JSON RAG
+<div align="center">
+  <h1>PDF-to-JSON RAG</h1>
+  <p><strong>Local-first document intelligence with inspectable extraction, retrieval, and citations.</strong></p>
+  <p>Turn unfamiliar PDFs into structured JSON, ask grounded questions, and see exactly which pages and chunks support each answer — without requiring a hosted model or sending documents to a cloud service.</p>
+  <p>
+    <a href="#two-minute-demo">Try it</a> ·
+    <a href="#architecture">Architecture</a> ·
+    <a href="#quality-snapshot">Evaluation</a> ·
+    <a href="./docs/WEB_INTERFACE.md">Web API</a>
+  </p>
+  <p><code>Python 3.10–3.13</code> · <code>PyMuPDF</code> · <code>pdf-inspector</code> · <code>ChromaDB</code> · <code>local-first</code></p>
+</div>
 
-Local-first, domain-agnostic PDF-to-JSON RAG tool for turning PDFs into structured JSON, routing queries across documents, and returning grounded CLI answers.
+![PDF RAG web workspace with a grounded answer and extraction diagnostics](./docs/images/web-workspace.png)
 
-## One Command
+## Two-minute demo
+
+Start the local web workspace:
+
+```bash
+python -m pip install .
+pdf-to-json-rag-web --open
+```
+
+Or run the complete CLI workflow in one command:
 
 ```bash
 pdf-to-json-rag run-workflow --pdf /path/to/file.pdf --query "What does this file cover?" --json
 ```
 
-Example grounded answer:
+The web interface and CLI share the same extraction, chunking, indexing, retrieval, and answering pipeline. The browser adds a focused document library and quality inspector; it is not a separate implementation.
 
-> This file is a procedural safety guide for operations staff. It covers preparation, incident response, reporting steps, and follow-up work. Citations: `pdf-to-json-rag-demo`, p. 1, chunks `0001` and `0002`.
+## Architecture
 
-Example retrieval snapshot:
+```mermaid
+flowchart LR
+    PDF["PDF input"] --> Native["PyMuPDF<br/>canonical text, blocks, coordinates"]
+    Inspector["pdf-inspector<br/>assist · shadow · off"] -. diagnostic signals .-> Route{"Extraction routing"}
+    Native --> Route
+    Route -->|native text| Document["Structured document JSON"]
+    Route -->|suspicious text| OCR["Targeted OCR"]
+    OCR --> Document
+    Inspector -. validated missing tables .-> Document
+    Document --> Chunks["Section-aware chunks"]
+    Chunks --> Index["Local ChromaDB index"]
+    Index --> Retrieval["Query planning + retrieval"]
+    Retrieval --> Answer["Grounded answer"]
+    Answer --> Evidence["Pages, chunks + diagnostics"]
+```
 
-| Rank | Source | Pages | Retrieval path | Evidence |
-| --- | --- | --- | --- | --- |
-| 1 | `pdf-to-json-rag-demo` | 1 | `document_understanding` | safety checks, incident response, reporting steps |
-| 2 | `pdf-to-json-rag-demo` | 1 | `single_document_qa` | preparation, response, follow-up |
+PyMuPDF remains the canonical source for reading order, coordinates, and citations. `pdf-inspector` contributes fail-open diagnostics, cautious OCR routing, and only validated missing tables; an inspector failure never blocks the existing extraction path.
 
-The longer implementation status and maintainer notes live in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.md).
+## Quality snapshot
 
-![Public CLI readiness check](./pdf_json_gh_repo.png)
+| Gate | Result | Scope |
+| --- | ---: | --- |
+| Python test suite | **100 / 100 passed** | Unit, integration, CLI, packaging, extraction, retrieval, and web contracts |
+| Web HTTP/UI contract | **12 / 12 passed** | Static app, security headers, same-origin controls, upload, document routes, querying, and safe errors |
+| Broad benchmark | **77 / 77 retrieval** and **77 / 77 answer faithfulness** | Maintained repository evaluation suite |
+| Broad retrieval quality | **Recall@5 1.000 · MRR 1.000** | Latest checked-in `mvp_eval_report.json` |
+| Real-PDF hard-case gate | **31 / 31 passed** | Scanned, table-heavy, form-heavy, presentation, and irregular-layout PDFs |
+| Real-PDF retrieval quality | **Recall@5 1.000 · MRR 0.952** | Maintained real-document ground-truth suite |
+| Real-PDF answer/evidence coverage | **1.000 / 1.000** | Expected answer keywords / supporting evidence keywords |
+
+These are reproducible regression results on the repository's maintained fixtures and local real-PDF set, not a claim of universal PDF performance. The tracked sources are [data/eval/mvp_eval_report.json](./data/eval/mvp_eval_report.json) and the latest real-PDF milestones in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.md#v4130).
+
+## Example grounded answer
+
+**Question**
+
+> What does this file cover?
+
+**Answer**
+
+> This file is a procedural safety guide for operations staff. It covers preparation, incident response, reporting steps, and follow-up work.
+
+| Source | Page | Chunk | Supporting evidence |
+| --- | ---: | --- | --- |
+| `Demo Safety Guide` | 1 | `pdf-to-json-rag-web-demo-chunk-0001` | Safety checks, incident reporting, evidence collection, supervisor notification, review, and lessons learned |
+
+The answer stays connected to inspectable page and chunk identifiers. If the available evidence is weak or unsupported, the answer contract lowers trust or abstains instead of presenting an ungrounded response as certain.
+
+## Web workspace
+
+The server binds to `127.0.0.1:8765` by default. Add a PDF in the browser, wait for the document to become ready, then ask a question and inspect its cited chunks and extraction signals. It uses the same data directory as the CLI and requires neither Node.js nor a separate frontend build.
+
+Run the web-specific tests from a source checkout:
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -p 'test_web_app.py'
+python -m ruff check src tests
+```
+
+For the complete test suite and installed-package gate, run:
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py'
+pdf-to-json-rag package-check --json
+```
+
+See [docs/WEB_INTERFACE.md](./docs/WEB_INTERFACE.md) for development startup, local storage behavior, and the HTTP API. The longer implementation history and maintainer notes live in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.md).
 
 ## Lineage
 
@@ -88,6 +165,13 @@ pdf-to-json-rag smoke-check --pdf /tmp/pdf-to-json-rag-demo.pdf --query "What do
 ```
 
 Use a fresh `PDF_TO_JSON_RAG_DATA_DIR` for quickstart and release-check runs so old local artifacts do not make `doctor` or `release-check` look greener than the current session really is.
+
+`pdf-inspector` runs as a safe extraction assistant by default. PyMuPDF remains the canonical
+source for text, coordinates, reading order, and citations; the assistant can corroborate OCR
+routing and add only validated missing Markdown tables. Set
+`PDF_TO_JSON_RAG_PDF_INSPECTOR_MODE=shadow` to record diagnostics without changing extracted
+content, or `PDF_TO_JSON_RAG_PDF_INSPECTOR_MODE=off` to use the previous extraction path. Any
+loading or processing error falls back to PyMuPDF and is reported in `extraction_summary`.
 
 The current baseline is still heuristic-first. It now behaves more sanely on unfamiliar financial/admin forms, carries richer extraction-time block structure into chunking and inspection, and can separate type, purpose, audience, and overview answers, but unfamiliar layouts can still degrade section recovery and answer confidence.
 

@@ -175,8 +175,16 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIn("package_metadata_present", check_names)
         self.assertIn("example_assets_present", check_names)
         self.assertIn("demo_pdf_generation_available", check_names)
+        self.assertIn("pdf_inspector_available", check_names)
         self.assertIn("pdfplumber_available", check_names)
         self.assertIn("embedding_backend_configured", check_names)
+        inspector_check = next(
+            item for item in result["checks"] if item["name"] == "pdf_inspector_available"
+        )
+        self.assertTrue(inspector_check["passed"])
+        self.assertEqual(inspector_check["details"]["version"], "0.2.6")
+        self.assertEqual(inspector_check["details"]["requested_mode"], "assist")
+        self.assertEqual(inspector_check["details"]["effective_mode"], "assist")
         self.assertEqual(result["runtime"]["embedding"]["requested_backend"], "auto")
         self.assertEqual(result["runtime"]["embedding"]["effective_backend"], "hash-fallback")
 
@@ -1233,6 +1241,11 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertIn("text_source_counts", inspect_payload["result"]["extraction_summary"])
         self.assertIn("layout_signal_counts", inspect_payload["result"]["extraction_summary"])
         self.assertIn("table_probe", inspect_payload["result"]["extraction_summary"])
+        self.assertIn("pdf_inspector", inspect_payload["result"]["extraction_summary"])
+        self.assertEqual(
+            inspect_payload["result"]["extraction_summary"]["pdf_inspector"]["version"],
+            "0.2.6",
+        )
         self.assertIn("processing_diagnostics", inspect_payload["result"])
         self.assertFalse(inspect_payload["result"]["processing_diagnostics"]["technical_processed"])
         self.assertIn("low_text_coverage", inspect_payload["result"]["processing_diagnostics"]["taxonomy"])

@@ -18,7 +18,10 @@ import sys
 import tempfile
 from urllib.parse import unquote, urlparse
 
-import fitz
+try:
+    import pymupdf as fitz
+except ImportError:  # pragma: no cover - compatibility with older PyMuPDF releases
+    import fitz
 
 from . import __version__
 from .answering import answer_query_with_retrieval, format_grounded_answer
@@ -41,6 +44,7 @@ from .evaluation import (
 )
 from .extraction import process_native_pdf_to_json
 from .indexing import build_local_index, embedding_runtime_diagnostics, load_chunk_records
+from .pdf_inspector_adapter import pdf_inspector_runtime_status
 from .query_planning import plan_query
 from .retrieval import retrieve_top_k, retrieve_top_k_with_neighbors
 
@@ -761,6 +765,7 @@ def _processing_drilldown(document: dict[str, object], index: dict[str, object])
     block_role_counts = extraction_summary.get("block_role_counts", {})
     text_source_counts = extraction_summary.get("text_source_counts", {})
     layout_signal_counts = extraction_summary.get("layout_signal_counts", {})
+    pdf_inspector = extraction_summary.get("pdf_inspector", {})
     ocr_used = bool(extraction_summary.get("ocr_used") or pages_processed_with_ocr)
     table_or_form_signal_count = 0
     if isinstance(block_role_counts, dict):
@@ -786,6 +791,7 @@ def _processing_drilldown(document: dict[str, object], index: dict[str, object])
         "block_role_counts": block_role_counts if isinstance(block_role_counts, dict) else {},
         "layout_signal_counts": layout_signal_counts if isinstance(layout_signal_counts, dict) else {},
         "table_or_form_signal_count": table_or_form_signal_count,
+        "pdf_inspector": pdf_inspector if isinstance(pdf_inspector, dict) else {},
     }
 
 
@@ -800,6 +806,11 @@ def _processing_diagnostics(document: dict[str, object], index: dict[str, object
     text_extraction_coverage = drilldown.get("text_extraction_coverage")
     structure_confidence = document.get("structure_confidence")
     layout_confidence = document.get("layout_confidence")
+    pdf_inspector = (
+        drilldown.get("pdf_inspector", {})
+        if isinstance(drilldown.get("pdf_inspector"), dict)
+        else {}
+    )
     taxonomy: list[str] = []
     if native_block_count is None or int(native_block_count or 0) <= 0:
         taxonomy.append("native_text_low")
@@ -811,6 +822,11 @@ def _processing_diagnostics(document: dict[str, object], index: dict[str, object
         taxonomy.append("table_or_form_heavy")
     if layout_confidence is None or (isinstance(layout_confidence, (int, float)) and float(layout_confidence) < 0.55):
         taxonomy.append("layout_uncertain")
+    if bool(pdf_inspector.get("has_encoding_issues")):
+        taxonomy.append("encoding_uncertain")
+    disagreements = pdf_inspector.get("disagreements", [])
+    if isinstance(disagreements, list) and disagreements:
+        taxonomy.append("extraction_engine_disagreement")
     if (
         chunk_count <= 0
         or (
@@ -833,7 +849,15 @@ def _processing_diagnostics(document: dict[str, object], index: dict[str, object
     elif not structurally_reliable:
         status = "review"
         recommended_next_action = "inspect_document_structure"
-    elif any(item in taxonomy for item in {"ocr_required", "table_or_form_heavy"}):
+    elif any(
+        item in taxonomy
+        for item in {
+            "ocr_required",
+            "table_or_form_heavy",
+            "encoding_uncertain",
+            "extraction_engine_disagreement",
+        }
+    ):
         status = "warn"
         recommended_next_action = "review_processing_diagnostics"
     else:
@@ -855,6 +879,7 @@ def _processing_diagnostics(document: dict[str, object], index: dict[str, object
             "structure_confidence": structure_confidence,
             "layout_confidence": layout_confidence,
             "table_or_form_signal_count": table_or_form_signal_count,
+            "pdf_inspector": pdf_inspector,
         },
     }
 
@@ -4396,6 +4421,7 @@ def _doctor_checks() -> dict[str, object]:
     package_metadata_present, package_metadata_details = _project_metadata_available()
     examples_dir = _available_examples_dir()
     runtime = _runtime_check_payload()
+    pdf_inspector_runtime = pdf_inspector_runtime_status()
     manifest_candidates = [
         PATHS.data_index / "index_manifest.json",
         PATHS.data_index / "workflow_smoke" / "index_manifest.json",
@@ -4432,6 +4458,12 @@ def _doctor_checks() -> dict[str, object]:
             "passed": shutil.which("tesseract") is not None,
             "category": "optional_capability",
             "details": {"which": shutil.which("tesseract")},
+        },
+        {
+            "name": "pdf_inspector_available",
+            "passed": bool(pdf_inspector_runtime["available"]),
+            "category": "required_public_tool",
+            "details": pdf_inspector_runtime,
         },
         {
             "name": "pdfplumber_available",
@@ -4523,6 +4555,7 @@ def _doctor_checks() -> dict[str, object]:
         "data_root": str(PATHS.data_dir),
         "project_root": str((_discover_project_root(PATHS.root) or _discover_project_root(Path.cwd()) or PATHS.root)),
         "runtime": runtime,
+        "pdf_inspector": pdf_inspector_runtime,
         "next_steps": next_steps,
     }
 

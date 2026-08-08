@@ -12,6 +12,17 @@ Optional table support:
 python -m pip install '.[tables]'
 ```
 
+`pdf-inspector` is installed as a core dependency and defaults to safe assist mode. To compare
+its diagnostics without using its OCR/table signals, or to disable it completely:
+
+```bash
+export PDF_TO_JSON_RAG_PDF_INSPECTOR_MODE=shadow
+export PDF_TO_JSON_RAG_PDF_INSPECTOR_MODE=off
+```
+
+`doctor --json` reports the installed version, requested mode, effective mode, and any fallback
+reason. Invalid modes and runtime failures fail open to the existing PyMuPDF path.
+
 For local development without installing the console script:
 
 ```bash
@@ -157,7 +168,7 @@ pdf-to-json-rag answer-query --query "What does this file cover?" --format json
 
 `layout-sanity-check` returns compact overview, type, purpose, audience, and confidence answers for each unfamiliar PDF in addition to structure/layout confidence, semantic confidence, and smoke-style checks.
 
-`inspect-document --json` now also exposes compact `processing_diagnostics` plus processing-layer details such as `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, `extraction_summary.layout_signal_counts`, and per-section `section_role` / `source_block_roles`. Processing taxonomy codes include `native_text_low`, `ocr_required`, `weak_sections`, `table_or_form_heavy`, `layout_uncertain`, and `low_text_coverage`.
+`inspect-document --json` now also exposes compact `processing_diagnostics` plus processing-layer details such as `extraction_summary.block_role_counts`, `extraction_summary.text_source_counts`, `extraction_summary.layout_signal_counts`, `extraction_summary.pdf_inspector`, and per-section `section_role` / `source_block_roles`. Processing taxonomy codes include `native_text_low`, `ocr_required`, `weak_sections`, `table_or_form_heavy`, `layout_uncertain`, `encoding_uncertain`, `extraction_engine_disagreement`, and `low_text_coverage`.
 
 `assess-pdf --json` is the compact public acceptance layer for unfamiliar PDFs. `inspect-pdf-quality --json` uses the same processing path but emphasizes `structure_support` for table/form/scan readiness. These commands return `overall_status`, `processing_status`, `semantic_status`, `retrieval_status`, `answer_trust`, `recommended_next_action`, `acceptance_profile`, `structure_support`, and short diagnostic `messages`. Use `--verbose` to include the full workflow payload behind the assessment.
 

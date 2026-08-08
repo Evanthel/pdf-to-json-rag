@@ -7,16 +7,23 @@ import importlib.util
 from pathlib import Path
 import re
 import shutil
-import tempfile
 from collections import defaultdict
 
-import fitz
+try:
+    import pymupdf as fitz
+except ImportError:  # pragma: no cover - compatibility with older PyMuPDF releases
+    import fitz
 from PIL import Image
 import pytesseract
 
 from .content_metadata import classify_block_metadata, infer_layout_signals
 from .document_structure import build_document_structure_analysis
 from .document_semantics import interpret_document_semantics
+from .pdf_inspector_adapter import (
+    PdfInspectorResult,
+    extract_candidate_page_markdown,
+    inspect_pdf_with_pdf_inspector,
+)
 from .schemas import DocumentRecord
 
 
@@ -70,6 +77,10 @@ class ExtractedPage:
     block_count: int
     needs_ocr: bool
     ocr_used: bool
+    pdf_inspector_signals: list[str] = field(default_factory=list)
+    pdf_inspector_ocr_reasons: list[str] = field(default_factory=list)
+    pdf_inspector_content_used: bool = False
+    extraction_engine_disagreement: bool = False
 
 
 @dataclass
@@ -83,6 +94,7 @@ class NativePdfExtraction:
     pages: list[ExtractedPage]
     blocks: list[ExtractedBlock]
     table_probe: dict[str, object] = field(default_factory=dict)
+    pdf_inspector: dict[str, object] = field(default_factory=dict)
 
 
 def _slugify_doc_id(value: str) -> str:
@@ -629,7 +641,12 @@ def _page_text_score(blocks: list[ExtractedBlock]) -> float:
     return (text_chars * 0.01) + (avg_quality * 10.0) + min(structural_bonus, 4) * 0.9
 
 
-def _page_layout_profile(blocks: list[ExtractedBlock]) -> dict[str, object]:
+def _page_layout_profile(
+    blocks: list[ExtractedBlock],
+    *,
+    pdf_inspector_signals: list[str] | tuple[str, ...] = (),
+    pdf_inspector_confidence: float | None = None,
+) -> dict[str, object]:
     role_counts: dict[str, int] = {}
     text_source_counts: dict[str, int] = {}
     for block in blocks:
@@ -639,17 +656,150 @@ def _page_layout_profile(blocks: list[ExtractedBlock]) -> dict[str, object]:
         sum(block.text_quality_score for block in blocks) / max(len(blocks), 1),
         3,
     ) if blocks else 0.0
+    layout_signals = infer_layout_signals(
+        block_roles=[block.block_role for block in blocks],
+        structural_flags=[flag for block in blocks for flag in block.structural_flags],
+        bboxes=[block.bbox for block in blocks],
+    )
+    inspector_layout_signals = sorted(
+        signal
+        for signal in set(pdf_inspector_signals)
+        if signal in {"pdf_inspector_table", "pdf_inspector_columns"}
+    )
     return {
         "block_count": len(blocks),
         "role_counts": role_counts,
         "text_source_counts": text_source_counts,
         "avg_text_quality_score": avg_text_quality,
-        "layout_signals": infer_layout_signals(
-            block_roles=[block.block_role for block in blocks],
-            structural_flags=[flag for block in blocks for flag in block.structural_flags],
-            bboxes=[block.bbox for block in blocks],
-        ),
+        "layout_signals": sorted(set([*layout_signals, *inspector_layout_signals])),
+        "pdf_inspector_signals": list(pdf_inspector_signals),
+        "pdf_inspector_confidence": pdf_inspector_confidence,
     }
+
+
+def _native_text_suspicion_reasons(page_text: str) -> list[str]:
+    """Return conservative PyMuPDF-side corroboration for an inspector OCR signal."""
+    reasons: list[str] = []
+    stripped = page_text.strip()
+    if len(stripped) < 80:
+        reasons.append("under_80_chars")
+    if "\x00" in page_text or "\ufffd" in page_text:
+        reasons.append("invalid_unicode_marker")
+    if page_text:
+        printable_count = sum(character.isprintable() or character.isspace() for character in page_text)
+        if printable_count / len(page_text) < 0.95:
+            reasons.append("low_printable_ratio")
+    tokens = re.findall(r"\S+", page_text)
+    if tokens:
+        non_lexical = sum(not any(character.isalnum() for character in token) for token in tokens)
+        if non_lexical / len(tokens) >= 0.25:
+            reasons.append("non_lexical_tokens")
+    return reasons
+
+
+def _has_reliable_table_like_block(blocks: list[ExtractedBlock]) -> bool:
+    for block in blocks:
+        if block.block_role != "table_like" and block.block_kind != "table_like":
+            continue
+        if "pdfplumber_table" in block.structural_flags:
+            return True
+        alphanumeric_count = sum(character.isalnum() for character in block.text)
+        if block.line_count >= 2 and block.token_count >= 4 and alphanumeric_count >= 20:
+            return True
+    return False
+
+
+def _markdown_cells(line: str) -> list[str]:
+    cells = [cell.strip() for cell in line.strip().split("|")]
+    if cells and not cells[0]:
+        cells = cells[1:]
+    if cells and not cells[-1]:
+        cells = cells[:-1]
+    return cells
+
+
+def _extract_valid_markdown_tables(markdown: str) -> list[str]:
+    """Extract strict Markdown tables suitable for supplemental RAG blocks."""
+    lines = markdown.splitlines()
+    tables: list[str] = []
+    index = 0
+    while index + 2 < len(lines):
+        header = _markdown_cells(lines[index])
+        separator = _markdown_cells(lines[index + 1])
+        valid_separator = (
+            len(header) >= 2
+            and len(separator) == len(header)
+            and all(re.fullmatch(r":?-{3,}:?", cell) for cell in separator)
+        )
+        if not valid_separator:
+            index += 1
+            continue
+
+        data_lines: list[str] = []
+        cursor = index + 2
+        while cursor < len(lines):
+            cells = _markdown_cells(lines[cursor])
+            if len(cells) != len(header) or "|" not in lines[cursor]:
+                break
+            if any(cell.strip() for cell in cells):
+                data_lines.append(lines[cursor])
+            cursor += 1
+        candidate_lines = [lines[index], lines[index + 1], *data_lines]
+        candidate = "\n".join(line.strip() for line in candidate_lines).strip()
+        if data_lines and sum(character.isalnum() for character in candidate) >= 40:
+            tables.append(candidate)
+        index = max(cursor, index + 1)
+    return tables
+
+
+def _normalized_table_signature(text: str) -> str:
+    return " ".join(re.findall(r"[\w]+", text.lower(), flags=re.UNICODE))
+
+
+def _is_duplicate_table(table_text: str, blocks: list[ExtractedBlock]) -> bool:
+    signature = _normalized_table_signature(table_text)
+    if not signature:
+        return True
+    table_tokens = set(signature.split())
+    for block in blocks:
+        if block.block_role != "table_like" and block.block_kind != "table_like":
+            continue
+        existing_signature = _normalized_table_signature(block.text)
+        if signature == existing_signature:
+            return True
+        existing_tokens = set(existing_signature.split())
+        if table_tokens and existing_tokens:
+            overlap = len(table_tokens & existing_tokens) / min(len(table_tokens), len(existing_tokens))
+            if overlap >= 0.9:
+                return True
+    return False
+
+
+def _insert_supplemental_table(
+    blocks: list[ExtractedBlock],
+    table_block: ExtractedBlock,
+) -> list[ExtractedBlock]:
+    """Insert after the closest lexical match while preserving all existing block order."""
+    table_tokens = {
+        token
+        for token in re.findall(r"[\w]+", table_block.text.lower(), flags=re.UNICODE)
+        if len(token) >= 3
+    }
+    best_index: int | None = None
+    best_score = 0
+    for index, block in enumerate(blocks):
+        block_tokens = {
+            token
+            for token in re.findall(r"[\w]+", block.text.lower(), flags=re.UNICODE)
+            if len(token) >= 3
+        }
+        score = len(table_tokens & block_tokens)
+        if score > best_score:
+            best_index = index
+            best_score = score
+    if best_index is None:
+        return [*blocks, table_block]
+    return [*blocks[: best_index + 1], table_block, *blocks[best_index + 1 :]]
 
 
 def _fuse_page_blocks(
@@ -720,9 +870,13 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
 
     blocks: list[ExtractedBlock] = []
     pages: list[ExtractedPage] = []
-    reading_order_index = 0
+    page_blocks_by_page: dict[int, list[ExtractedBlock]] = {}
 
     with fitz.open(pdf_path) as pdf_doc:
+        inspector_result: PdfInspectorResult = inspect_pdf_with_pdf_inspector(
+            pdf_path,
+            expected_page_count=len(pdf_doc),
+        )
         metadata = {
             key: value
             for key, value in (pdf_doc.metadata or {}).items()
@@ -790,11 +944,40 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
                 )
 
             page_text = "\n\n".join(page_text_parts)
-            needs_ocr = page_needs_ocr(page_text)
+            native_needs_ocr = page_needs_ocr(page_text)
+            suspicion_reasons = _native_text_suspicion_reasons(page_text)
+            inspector_recommends_ocr = (
+                inspector_result.active
+                and page_num in inspector_result.pages_needing_ocr
+            )
+            inspector_routes_ocr = (
+                inspector_result.effective_mode == "assist"
+                and inspector_recommends_ocr
+                and bool(suspicion_reasons)
+            )
+            needs_ocr = native_needs_ocr or inspector_routes_ocr
+            engine_disagreement = (
+                inspector_result.active
+                and inspector_recommends_ocr != native_needs_ocr
+            )
+            if engine_disagreement:
+                inspector_result.disagreements.append(
+                    {
+                        "page_num": page_num + 1,
+                        "pymupdf_needs_ocr": native_needs_ocr,
+                        "pdf_inspector_needs_ocr": inspector_recommends_ocr,
+                        "native_suspicion_reasons": suspicion_reasons,
+                        "action": "ocr_requested" if needs_ocr else "native_text_preserved",
+                    }
+                )
             final_page_blocks = candidate_blocks
             ocr_used = False
             if needs_ocr:
-                ocr_blocks = extract_page_with_ocr(pdf_path=pdf_path, page_num=page_num)
+                ocr_blocks = extract_page_with_ocr(
+                    pdf_path=pdf_path,
+                    page_num=page_num,
+                    render_scale=1.5 if inspector_routes_ocr and not native_needs_ocr else 2.0,
+                )
                 if ocr_blocks:
                     final_page_blocks, ocr_used = _fuse_page_blocks(candidate_blocks, ocr_blocks)
                     page_text = "\n\n".join(block.text for block in final_page_blocks)
@@ -804,16 +987,24 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
                 )
                 page_text = "\n\n".join(block.text for block in final_page_blocks)
 
-            for final_block in final_page_blocks:
-                blocks.append(
-                    _clone_extracted_block(
-                        final_block,
-                        reading_order_index=reading_order_index,
-                        extraction_method="mixed" if ocr_used and final_block.extraction_method == "native" else final_block.extraction_method,
-                        text_source="merged" if ocr_used and final_block.extraction_method == "native" else final_block.text_source,
-                    )
-                )
-                reading_order_index += 1
+            inspector_signals: list[str] = []
+            if inspector_result.active:
+                if page_num in inspector_result.pages_needing_ocr:
+                    inspector_signals.append("pdf_inspector_ocr_recommended")
+                if page_num in inspector_result.pages_with_tables:
+                    inspector_signals.append("pdf_inspector_table")
+                if page_num in inspector_result.pages_with_columns:
+                    inspector_signals.append("pdf_inspector_columns")
+                page_ocr_reasons = inspector_result.ocr_reasons_by_page.get(page_num, [])
+                if inspector_result.has_encoding_issues and any(
+                    "encod" in reason.lower() or "font" in reason.lower()
+                    for reason in page_ocr_reasons
+                ):
+                    inspector_signals.append("pdf_inspector_encoding_issue")
+            else:
+                page_ocr_reasons = []
+
+            page_blocks_by_page[page_num] = final_page_blocks
 
             pages.append(
                 ExtractedPage(
@@ -823,8 +1014,98 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
                     block_count=len(final_page_blocks),
                     needs_ocr=needs_ocr,
                     ocr_used=ocr_used,
+                    pdf_inspector_signals=sorted(inspector_signals),
+                    pdf_inspector_ocr_reasons=list(page_ocr_reasons),
+                    extraction_engine_disagreement=engine_disagreement,
                 )
             )
+
+        if inspector_result.active and inspector_result.effective_mode == "shadow":
+            inspector_result.table_markdown_status = "shadow"
+        elif inspector_result.active and inspector_result.effective_mode == "assist":
+            table_candidate_pages = [
+                page_num
+                for page_num in inspector_result.pages_with_tables
+                if not pages[page_num].needs_ocr
+                and not _has_reliable_table_like_block(page_blocks_by_page.get(page_num, []))
+            ]
+            markdown_by_page, markdown_error = extract_candidate_page_markdown(
+                pdf_path,
+                table_candidate_pages,
+            )
+            if markdown_error:
+                inspector_result.table_markdown_status = "fallback"
+                inspector_result.fallback_reason = f"table_markdown:{markdown_error}"
+            elif table_candidate_pages:
+                inspector_result.table_markdown_status = "processed"
+            else:
+                inspector_result.table_markdown_status = "not_needed"
+
+            for page_num in table_candidate_pages:
+                existing_page_blocks = page_blocks_by_page.get(page_num, [])
+                valid_tables = _extract_valid_markdown_tables(markdown_by_page.get(page_num, ""))
+                added_on_page = 0
+                for table_text in valid_tables:
+                    if _is_duplicate_table(table_text, existing_page_blocks):
+                        continue
+                    added_on_page += 1
+                    table_block = ExtractedBlock(
+                        block_id=(
+                            f"{doc_id}-p{page_num + 1:03d}-"
+                            f"pdf-inspector-table-{added_on_page:03d}"
+                        ),
+                        page_num=page_num,
+                        text=table_text,
+                        bbox=None,
+                        reading_order_index=0,
+                        extraction_method="native",
+                        text_source="native",
+                        block_kind="table_like",
+                        block_role="table_like",
+                        line_count=len([line for line in table_text.splitlines() if line.strip()]),
+                        token_count=len(re.findall(r"\w+", table_text, flags=re.UNICODE)),
+                        text_quality_score=0.9,
+                        block_labels=["table_like"],
+                        structural_flags=[
+                            "pdf_inspector_table",
+                            "structured_signal",
+                            "table_like",
+                        ],
+                    )
+                    existing_page_blocks = _insert_supplemental_table(
+                        existing_page_blocks,
+                        table_block,
+                    )
+                    inspector_result.tables_added += 1
+                if added_on_page:
+                    page_blocks_by_page[page_num] = existing_page_blocks
+                    pages[page_num].pdf_inspector_content_used = True
+                    pages[page_num].text = "\n\n".join(
+                        block.text for block in existing_page_blocks
+                    )
+                    pages[page_num].char_count = len(pages[page_num].text)
+                    pages[page_num].block_count = len(existing_page_blocks)
+
+        reading_order_index = 0
+        for page in pages:
+            for final_block in page_blocks_by_page.get(page.page_num, []):
+                blocks.append(
+                    _clone_extracted_block(
+                        final_block,
+                        reading_order_index=reading_order_index,
+                        extraction_method=(
+                            "mixed"
+                            if page.ocr_used and final_block.extraction_method == "native"
+                            else final_block.extraction_method
+                        ),
+                        text_source=(
+                            "merged"
+                            if page.ocr_used and final_block.extraction_method == "native"
+                            else final_block.text_source
+                        ),
+                    )
+                )
+                reading_order_index += 1
 
         title = metadata.get("title") or _guess_title_from_blocks(blocks)
 
@@ -838,6 +1119,7 @@ def extract_native_pdf(pdf_path: Path) -> NativePdfExtraction:
             pages=pages,
             blocks=blocks,
             table_probe=table_probe,
+            pdf_inspector=inspector_result.to_summary(),
         )
 
 
@@ -895,7 +1177,15 @@ def build_document_record_from_native_extraction(
     page_layout_profiles = [
         {
             "page_num": page.page_num + 1,
-            **_page_layout_profile([block for block in extraction.blocks if block.page_num == page.page_num]),
+            **_page_layout_profile(
+                [block for block in extraction.blocks if block.page_num == page.page_num],
+                pdf_inspector_signals=page.pdf_inspector_signals,
+                pdf_inspector_confidence=(
+                    extraction.pdf_inspector.get("confidence")
+                    if isinstance(extraction.pdf_inspector.get("confidence"), (int, float))
+                    else None
+                ),
+            ),
         }
         for page in extraction.pages
     ]
@@ -942,6 +1232,7 @@ def build_document_record_from_native_extraction(
             "layout_signal_counts": dict(layout_signal_counts),
             "page_layout_profiles": page_layout_profiles,
             "table_probe": extraction.table_probe,
+            "pdf_inspector": extraction.pdf_inspector,
         },
         sections=sections,
     )
@@ -957,6 +1248,7 @@ def native_extraction_to_dict(extraction: NativePdfExtraction) -> dict:
         "toc": extraction.toc,
         "metadata": extraction.metadata,
         "table_probe": extraction.table_probe,
+        "pdf_inspector": extraction.pdf_inspector,
         "pages": [
             {
                 "page_num": page.page_num,
@@ -965,6 +1257,10 @@ def native_extraction_to_dict(extraction: NativePdfExtraction) -> dict:
                 "block_count": page.block_count,
                 "needs_ocr": page.needs_ocr,
                 "ocr_used": page.ocr_used,
+                "pdf_inspector_signals": page.pdf_inspector_signals,
+                "pdf_inspector_ocr_reasons": page.pdf_inspector_ocr_reasons,
+                "pdf_inspector_content_used": page.pdf_inspector_content_used,
+                "extraction_engine_disagreement": page.extraction_engine_disagreement,
             }
             for page in extraction.pages
         ],
@@ -1323,7 +1619,12 @@ def _build_ocr_blocks_from_image(image: Image.Image, page_num: int) -> list[Extr
     return sorted(blocks, key=lambda block: (block.bbox[1], block.bbox[0]) if block.bbox else (0, 0))
 
 
-def extract_page_with_ocr(pdf_path: Path, page_num: int) -> list[ExtractedBlock]:
+def extract_page_with_ocr(
+    pdf_path: Path,
+    page_num: int,
+    *,
+    render_scale: float = 2.0,
+) -> list[ExtractedBlock]:
     """OCR fallback for pages with poor native text extraction."""
     tesseract_path = shutil.which("tesseract")
     if not tesseract_path:
@@ -1334,46 +1635,45 @@ def extract_page_with_ocr(pdf_path: Path, page_num: int) -> list[ExtractedBlock]
     pdf_path = pdf_path.expanduser().resolve()
     with fitz.open(pdf_path) as pdf_doc:
         page = pdf_doc[page_num]
-        matrix = fitz.Matrix(2, 2)
+        matrix = fitz.Matrix(render_scale, render_scale)
         pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+        try:
+            image = Image.frombytes(
+                "RGB",
+                (pixmap.width, pixmap.height),
+                pixmap.samples,
+            )
+            ocr_blocks = _build_ocr_blocks_from_image(image=image, page_num=page_num)
+        except Exception:
+            return []
+        if ocr_blocks:
+            return ocr_blocks
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmpdir_path = Path(tmpdir)
-            image_path = tmpdir_path / f"page-{page_num + 1}.png"
-            pixmap.save(str(image_path))
-            try:
-                image = Image.open(image_path)
-                ocr_blocks = _build_ocr_blocks_from_image(image=image, page_num=page_num)
-            except Exception:
-                return []
-            if ocr_blocks:
-                return ocr_blocks
+        try:
+            ocr_text = pytesseract.image_to_string(image)
+        except Exception:
+            return []
 
-            try:
-                ocr_text = pytesseract.image_to_string(image)
-            except Exception:
-                return []
+        ocr_text = re.sub(r"\s+", " ", ocr_text).strip()
+        if not ocr_text:
+            return []
 
-            ocr_text = re.sub(r"\s+", " ", ocr_text).strip()
-            if not ocr_text:
-                return []
-
-            image_width, image_height = image.size
-            return [
-                _build_extracted_block(
-                    block_id=f"ocr-page-{page_num + 1:03d}-fallback-001",
-                    page_num=page_num,
-                    text=ocr_text,
-                    bbox=_normalize_bbox(
-                        0.0,
-                        0.0,
-                        float(image_width),
-                        float(image_height),
-                        float(image_width),
-                        float(image_height),
-                    ),
-                    reading_order_index=0,
-                    extraction_method="ocr",
-                    text_source="ocr",
-                )
-            ]
+        image_width, image_height = image.size
+        return [
+            _build_extracted_block(
+                block_id=f"ocr-page-{page_num + 1:03d}-fallback-001",
+                page_num=page_num,
+                text=ocr_text,
+                bbox=_normalize_bbox(
+                    0.0,
+                    0.0,
+                    float(image_width),
+                    float(image_height),
+                    float(image_width),
+                    float(image_height),
+                ),
+                reading_order_index=0,
+                extraction_method="ocr",
+                text_source="ocr",
+            )
+        ]
