@@ -78,4 +78,12 @@ jobs:
         run: ruff check .
 
       - name: Run pip-audit
-        run: python -m pip_audit --local --skip-editable
+        # ChromaDB has no patched release for these server-side authorization/RCE
+        # advisories. This project only uses the embedded local PersistentClient;
+        # it does not expose Chroma's authenticated server or collection-update API.
+        # Keep the exceptions narrow so every other advisory still fails CI.
+        run: >-
+          python -m pip_audit --local --skip-editable
+          --ignore-vuln CVE-2026-45830
+          --ignore-vuln CVE-2026-45831
+          --ignore-vuln CVE-2026-45833
