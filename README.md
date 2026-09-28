@@ -11,7 +11,9 @@
   <p><code>Python 3.10–3.13</code> · <code>PyMuPDF</code> · <code>pdf-inspector</code> · <code>ChromaDB</code> · <code>local-first</code></p>
 </div>
 
-![PDF to structured JSON to a grounded answer with a page and chunk citation](./docs/images/pdf-to-json-rag-flow.png)
+![Local PDF RAG web workspace showing a processed document, grounded answer, and extraction diagnostics](./docs/images/web-workspace.png)
+
+The local workspace keeps the document library, grounded answer, retrieved chunks, and extraction-quality signals in one inspectable view.
 
 ## Two-minute demo
 
@@ -31,6 +33,8 @@ pdf-to-json-rag run-workflow --pdf /path/to/file.pdf --query "What does this fil
 The web interface and CLI share the same extraction, chunking, indexing, retrieval, and answering pipeline. The browser adds a focused document library and quality inspector; it is not a separate implementation.
 
 ## Architecture
+
+![PDF to structured JSON to a grounded answer with a page and chunk citation](./docs/images/pdf-to-json-rag-flow.png)
 
 ```mermaid
 flowchart LR
@@ -59,21 +63,41 @@ PyMuPDF remains the canonical source for reading order, coordinates, and citatio
 
 These are reproducible regression results, not a claim of universal PDF performance. The tracked sources are [data/eval/mvp_eval_report.json](./data/eval/mvp_eval_report.json) and the [public-PDF benchmark snapshot](./data/eval/public_pdf_benchmark_snapshot.json); methodology and additional gates are documented in [docs/PROJECT_DETAILS.md](./docs/PROJECT_DETAILS.md#evaluation-and-release-gates).
 
-## Example grounded answer
+## Reproducible generated output
 
-**Question**
+This is not a hand-written example. The fields below were copied from the actual JSON produced by the public demo workflow with model downloads disabled:
 
-> What does this file cover?
+```bash
+pdf-to-json-rag create-demo-pdf --path /tmp/demo-safety-guide.pdf --json
+pdf-to-json-rag run-workflow \
+  --pdf /tmp/demo-safety-guide.pdf \
+  --query "What does this file cover?" \
+  --json
+```
 
-**Answer**
+```json
+{
+  "doc_id": "demo-safety-guide",
+  "document": {
+    "page_count": 1
+  },
+  "index": {
+    "chunk_count": 1,
+    "embedding": {
+      "effective_backend": "hash-fallback"
+    }
+  },
+  "answer": {
+    "query": "What does this file cover?",
+    "answer": "Demo Safety Guide is a guidance note. Its main purpose is procedural guidance. It is aimed at practitioners. It covers demo, safety, purpose, provide."
+  },
+  "quality_profile_summary": {
+    "overall_status": "pass"
+  }
+}
+```
 
-> This file is a procedural safety guide for operations staff. It covers preparation, incident response, reporting steps, and follow-up work.
-
-| Source | Page | Chunk | Supporting evidence |
-| --- | ---: | --- | --- |
-| `Demo Safety Guide` | 1 | `pdf-to-json-rag-web-demo-chunk-0001` | Safety checks, incident reporting, evidence collection, supervisor notification, review, and lessons learned |
-
-The answer stays connected to inspectable page and chunk identifiers. If the available evidence is weak or unsupported, the answer contract lowers trust or abstains instead of presenting an ungrounded response as certain.
+The full response also includes the retrieval contract, selected document and chunks, processing diagnostics, and answer-quality signals. If support is weak or unsupported, the answer contract lowers trust or abstains instead of presenting an ungrounded response as certain.
 
 ## Web workspace
 
