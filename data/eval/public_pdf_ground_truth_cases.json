@@ -1,0 +1,90 @@
+[
+  {
+    "case_id": "psmi_checklist_limitations",
+    "pdf_digest": "psmi-checklist-2025",
+    "bucket": "guideline_checklist",
+    "query": "Which shortcomings, limitations, and weaknesses can the PSMI checklist help authors identify?",
+    "expected_keywords": [
+      "shortcomings",
+      "limitations",
+      "weaknesses"
+    ],
+    "evidence_keywords": [
+      "shortcomings",
+      "limitations",
+      "weaknesses"
+    ]
+  },
+  {
+    "case_id": "psmi_checklist_size",
+    "pdf_digest": "psmi-checklist-2025",
+    "bucket": "guideline_checklist",
+    "query": "How many sections and items are in the PSMI checklist?",
+    "expected_keywords": [
+      "13 sections",
+      "25 items"
+    ],
+    "evidence_keywords": [
+      "13 sections",
+      "25 items"
+    ]
+  },
+  {
+    "case_id": "open_data_canvas_comparison",
+    "pdf_digest": "open-data-canvas-questionnaire-2023",
+    "bucket": "questionnaire",
+    "query": "Which two canvas tools does Part 4 compare?",
+    "expected_keywords": [
+      "Business Model Canvas",
+      "Open Data Canvas"
+    ],
+    "evidence_keywords": [
+      "Business Model Canvas",
+      "Open Data Canvas"
+    ]
+  },
+  {
+    "case_id": "open_data_canvas_scale",
+    "pdf_digest": "open-data-canvas-questionnaire-2023",
+    "bucket": "questionnaire",
+    "query": "Which agreement-scale abbreviations are defined in the questionnaire?",
+    "expected_keywords": [
+      "Totally Disagree",
+      "Neutral",
+      "Totally Agree"
+    ],
+    "evidence_keywords": [
+      "Totally Disagree",
+      "Neutral",
+      "Totally Agree"
+    ]
+  },
+  {
+    "case_id": "w9_delivery_instruction",
+    "pdf_digest": "irs-form-w9-2024",
+    "bucket": "interactive_form",
+    "query": "Should a completed Form W-9 be sent to the IRS or given to the requester?",
+    "expected_keywords": [
+      "requester",
+      "Do not send to the IRS"
+    ],
+    "evidence_keywords": [
+      "requester",
+      "Do not send to the IRS"
+    ]
+  },
+  {
+    "case_id": "w9_foreign_person_alternative",
+    "pdf_digest": "irs-form-w9-2024",
+    "bucket": "interactive_form",
+    "query": "Which forms should a foreign person use instead of Form W-9?",
+    "expected_keywords": [
+      "Form W-8",
+      "Form 8233"
+    ],
+    "evidence_keywords": [
+      "Form W-8",
+      "Form 8233"
+    ]
+  }
+]

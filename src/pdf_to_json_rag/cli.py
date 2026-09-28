@@ -16,6 +16,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from urllib.parse import unquote, urlparse
 
 try:
@@ -3665,8 +3666,16 @@ def _load_real_pdf_ground_truth_cases(eval_path: Path | None = None) -> list[dic
 
 
 def _keyword_coverage(text: str, keywords: list[str]) -> dict[str, object]:
-    normalized = text.lower()
-    matches = [keyword for keyword in keywords if keyword.lower() in normalized]
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    compact_text = re.sub(r"[^a-z0-9]+", "", normalized)
+    matches = []
+    for keyword in keywords:
+        normalized_keyword = unicodedata.normalize("NFKC", keyword).casefold()
+        compact_keyword = re.sub(r"[^a-z0-9]+", "", normalized_keyword)
+        if normalized_keyword in normalized or (
+            len(compact_keyword) >= 4 and compact_keyword in compact_text
+        ):
+            matches.append(keyword)
     return {
         "coverage": round(len(matches) / max(len(keywords), 1), 3),
         "matched": matches,
@@ -3686,15 +3695,25 @@ def _prepare_real_pdf_ground_truth_workspace(
     cases: list[dict[str, object]],
     workspace: Path,
     env_updates: dict[str, str | None],
+    corpus_dir: Path | None = None,
 ) -> tuple[dict[str, str], dict[str, object], dict[str, object]]:
-    corpus_paths = _local_pdf_corpus_paths(None)
-    if corpus_paths is None:
-        raise CliError(
-            "missing_local_pdf_corpus",
-            "The repo-local pdf/ corpus is required for real-ground-truth-check.",
-            {"corpus_dir": "pdf"},
-        )
-    pdf_dir, _metadata_path = corpus_paths
+    if corpus_dir is not None:
+        pdf_dir = corpus_dir.expanduser().resolve()
+        if not pdf_dir.is_dir():
+            raise CliError(
+                "missing_local_pdf_corpus",
+                f"The requested real-PDF corpus directory was not found: {pdf_dir}",
+                {"corpus_dir": str(pdf_dir)},
+            )
+    else:
+        corpus_paths = _local_pdf_corpus_paths(None)
+        if corpus_paths is None:
+            raise CliError(
+                "missing_local_pdf_corpus",
+                "The repo-local pdf/ corpus is required for real-ground-truth-check.",
+                {"corpus_dir": "pdf"},
+            )
+        pdf_dir, _metadata_path = corpus_paths
     document_dir = workspace / "documents"
     chunk_root = workspace / "chunks"
     index_dir = workspace / "index"
@@ -4080,6 +4099,7 @@ def _run_real_pdf_ground_truth_check(
     k: int,
     eval_path: Path | None = None,
     modes: list[str] | None = None,
+    corpus_dir: Path | None = None,
 ) -> dict[str, object]:
     cases = _load_real_pdf_ground_truth_cases(eval_path)
     selected_modes = modes or ["default-auto", "hash-baseline", "cross-encoder", "llm-synthesis"]
@@ -4095,6 +4115,7 @@ def _run_real_pdf_ground_truth_check(
             cases=cases,
             workspace=workspace_path / "default_auto",
             env_updates=default_env,
+            corpus_dir=corpus_dir,
         )
         default_index_dir = Path(str(processing["index_dir"]))
         default_chunk_root = Path(str(processing["chunk_root"]))
@@ -4106,6 +4127,7 @@ def _run_real_pdf_ground_truth_check(
                 cases=cases,
                 workspace=workspace_path / "hash",
                 env_updates=hash_env,
+                corpus_dir=corpus_dir,
             )
             hash_index_dir = Path(str(hash_processing["index_dir"]))
             hash_chunk_root = Path(str(hash_processing["chunk_root"]))
@@ -4582,7 +4604,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--corpus-dir",
-        help="Optional local corpus directory override for corpus-sanity-check.",
+        help="Optional local corpus directory override for corpus-sanity-check or real-ground-truth-check.",
     )
     parser.add_argument(
         "--path",
@@ -4785,10 +4807,12 @@ def main() -> None:
 
         if command == "real-ground-truth-check":
             eval_path = Path(args.eval_file).expanduser().resolve() if args.eval_file else None
+            corpus_dir = Path(args.corpus_dir).expanduser().resolve() if args.corpus_dir else None
             payload = _run_real_pdf_ground_truth_check(
                 k=args.k,
                 eval_path=eval_path,
                 modes=_real_pdf_modes_from_arg(args.modes),
+                corpus_dir=corpus_dir,
             )
             if json_output:
                 _emit_json("real-ground-truth-check", payload, output_path=output_path)

@@ -1,7 +1,10 @@
 name: Retrieval Benchmarks
 
-# Manual-only: the real-PDF benchmark corpus lives in the gitignored pdf/ directory.
 on:
+  pull_request:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       k:
@@ -11,12 +14,7 @@ on:
       modes:
         description: Comma-separated modes for real-ground-truth-check.
         required: false
-        default: default-auto,hash-baseline
-      require_benchmark_assets:
-        description: Fail instead of skipping when the repo-local pdf corpus is unavailable.
-        type: boolean
-        required: false
-        default: false
+        default: default-auto
 
 permissions:
   contents: read
@@ -27,13 +25,12 @@ concurrency:
 
 jobs:
   real-pdf-ground-truth:
-    name: Real-PDF retrieval ground truth
+    name: Public-PDF retrieval ground truth
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
       BENCHMARK_K: ${{ github.event.inputs.k || '5' }}
-      BENCHMARK_MODES: ${{ github.event.inputs.modes || 'default-auto,hash-baseline' }}
-      REQUIRE_BENCHMARK_ASSETS: ${{ github.event.inputs.require_benchmark_assets || 'false' }}
+      BENCHMARK_MODES: ${{ github.event.inputs.modes || 'default-auto' }}
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD: "0"
@@ -41,56 +38,46 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Check benchmark assets
-        id: benchmark_assets
-        shell: bash
-        run: |
-          if [[ -f pdf/lcwa_gov_pdf_metadata.csv ]] && compgen -G "pdf/*.pdf" > /dev/null; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-            echo "Benchmark corpus found in pdf/." >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-
-          echo "available=false" >> "$GITHUB_OUTPUT"
-          {
-            echo "Repo-local benchmark corpus is not available on this runner."
-            echo ""
-            echo "The real-PDF retrieval benchmark requires:"
-            echo "- pdf/lcwa_gov_pdf_metadata.csv"
-            echo "- matching pdf/*.pdf files"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          if [[ "$REQUIRE_BENCHMARK_ASSETS" == "true" ]]; then
-            exit 1
-          fi
-
       - name: Set up Python 3.13
-        if: steps.benchmark_assets.outputs.available == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
           cache: pip
 
       - name: Upgrade pip
-        if: steps.benchmark_assets.outputs.available == 'true'
         run: python -m pip install --upgrade pip
 
       - name: Install package
-        if: steps.benchmark_assets.outputs.available == 'true'
         run: python -m pip install -e .
 
+      - name: Cache public PDF shard
+        uses: actions/cache@v4
+        with:
+          path: pdf/public-corpus
+          key: public-pdf-shard-${{ hashFiles('data/eval/public_pdf_corpus_manifest.json') }}
+
+      - name: Download and verify required public PDF shard
+        run: >-
+          python scripts/download_public_corpus.py
+          --ids
+          psmi-checklist-2025
+          open-data-canvas-questionnaire-2023
+          irs-form-w9-2024
+          --output-dir pdf/public-corpus
+          --json
+
       - name: Run real-PDF retrieval benchmark
-        if: steps.benchmark_assets.outputs.available == 'true'
         run: |
           mkdir -p benchmark-results
           pdf-to-json-rag real-ground-truth-check \
             --k "$BENCHMARK_K" \
             --modes "$BENCHMARK_MODES" \
+            --corpus-dir pdf/public-corpus \
+            --eval-file data/eval/public_pdf_ground_truth_cases.json \
             --json \
             --output benchmark-results/real-ground-truth.json
 
       - name: Enforce benchmark gate
-        if: steps.benchmark_assets.outputs.available == 'true'
         run: |
           python - <<'PY'
           import json
@@ -110,7 +97,7 @@ jobs:
           }
 
           summary = [
-              "Real-PDF retrieval benchmark",
+              "Public-PDF retrieval benchmark",
               "",
               f"- k: {result.get('k')}",
               f"- modes: {', '.join(result.get('modes', []))}",
@@ -138,12 +125,11 @@ jobs:
           PY
 
       - name: Publish benchmark summary
-        if: steps.benchmark_assets.outputs.available == 'true'
         run: cat benchmark-results/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload benchmark results
-        if: always() && steps.benchmark_assets.outputs.available == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-pdf-retrieval-benchmark
+          name: public-pdf-retrieval-benchmark
           path: benchmark-results/

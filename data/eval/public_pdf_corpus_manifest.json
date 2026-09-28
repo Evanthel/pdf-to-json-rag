@@ -1,0 +1,387 @@
+{
+  "schema_version": 1,
+  "selected_at": "2026-09-28",
+  "status": "candidate_selection_complete",
+  "ground_truth_status": "pending",
+  "purpose": "Publicly reproducible PDF corpus candidates for extraction, layout, retrieval, and answer-grounding evaluation.",
+  "distribution_policy": {
+    "pdfs_committed_to_git": false,
+    "download_at_runtime": true,
+    "download_directory": "pdf/public-corpus",
+    "integrity": "Every download must match the recorded SHA-256 before it is used.",
+    "attribution": "Retain the source, creator, DOI, and license metadata below when publishing results or derived fixtures."
+  },
+  "coverage": {
+    "native_text": true,
+    "mixed_column_layout": true,
+    "dense_tables": true,
+    "questionnaire": true,
+    "interactive_form": true,
+    "long_document": true,
+    "figures_and_branding": true,
+    "scan_ocr": false,
+    "remaining_gap": "Add a synthetic rasterized scan fixture derived from project-owned content; do not source an ambiguously licensed scan."
+  },
+  "initial_baseline": {
+    "checked_at": "2026-09-28",
+    "command": "pdf-to-json-rag layout-sanity-check",
+    "document_count": 8,
+    "technical_processing_pass_count": 8,
+    "clearly_incorrect_semantic_classification_count": 5,
+    "interpretation": "The corpus passes the current extraction and layout smoke checks, but the top-level all_pass result does not establish that document type and purpose are semantically correct.",
+    "semantic_review": [
+      {
+        "id": "psmi-checklist-2025",
+        "expected_type": "guideline_or_position_paper",
+        "expected_purpose": "recommendations_and_reporting_checklist",
+        "observed_type": "empirical_study",
+        "observed_purpose": "empirical_reporting",
+        "observed_confidence": "high",
+        "review": "incorrect"
+      },
+      {
+        "id": "pediatric-osteomyelitis-review-2025",
+        "expected_type": "systematic_review",
+        "expected_purpose": "evidence_synthesis",
+        "observed_type": "agency_report",
+        "observed_confidence": "high",
+        "review": "incorrect"
+      },
+      {
+        "id": "asthma-self-knowledge-questionnaire-2025",
+        "expected_type": "research_article",
+        "expected_purpose": "questionnaire_development_and_validation",
+        "observed_type": "questionnaire",
+        "observed_purpose": "empirical_reporting",
+        "review": "partially_acceptable"
+      },
+      {
+        "id": "apostel-as-study-protocol-2025",
+        "expected_type": "study_protocol",
+        "expected_purpose": "reporting_guideline_development",
+        "observed_type": "court_opinion",
+        "observed_purpose": "legal_record",
+        "observed_confidence": "high",
+        "review": "incorrect"
+      },
+      {
+        "id": "tourisme-best-practices-2021",
+        "expected_type": "best_practices_compendium",
+        "expected_purpose": "reference_and_guidance",
+        "observed_type": "report",
+        "observed_purpose": "reference_lookup",
+        "observed_confidence": "low",
+        "review": "acceptable_but_uncertain"
+      },
+      {
+        "id": "open-data-canvas-questionnaire-2023",
+        "expected_type": "questionnaire",
+        "expected_purpose": "data_collection_instrument",
+        "observed_type": "court_opinion",
+        "observed_purpose": "legal_record",
+        "observed_confidence": "high",
+        "review": "incorrect"
+      },
+      {
+        "id": "brazilian-dark-matter-report-2019",
+        "expected_type": "community_report",
+        "expected_purpose": "research_landscape_summary",
+        "observed_type": "report",
+        "observed_purpose": "teaching_reference",
+        "observed_confidence": "moderate",
+        "review": "acceptable_type_purpose_debatable"
+      },
+      {
+        "id": "irs-form-w9-2024",
+        "expected_type": "government_tax_form",
+        "expected_purpose": "taxpayer_identification_and_certification",
+        "observed_type": "legislative_amendment",
+        "observed_purpose": "legislative_markup",
+        "observed_confidence": "high",
+        "review": "incorrect"
+      }
+    ]
+  },
+  "documents": [
+    {
+      "id": "psmi-checklist-2025",
+      "filename": "psmi-checklist-2025.pdf",
+      "title": "Phantom studies in medical imaging (PSMI): a guide with recommendations and checklist",
+      "authors": [
+        "Gisella Gennaro",
+        "Moreno Zanardo",
+        "Federico Ambrogi",
+        "Francesco Sardanelli"
+      ],
+      "year": 2025,
+      "doi": "10.1186/s41747-025-00641-7",
+      "discovery_source": "Europe PMC",
+      "record_url": "https://europepmc.org/articles/PMC12583249",
+      "download_url": "https://link.springer.com/content/pdf/10.1186/s41747-025-00641-7.pdf",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/",
+        "evidence": "Europe PMC metadata reports CC BY; the PDF embeds the CC BY 4.0 license link on page 1."
+      },
+      "sha256": "93701e1f934d6cd90d348719138e8b4e4f7bb0894b68418c4a548d94e8fea119",
+      "bytes": 855212,
+      "pages": 16,
+      "layout_tags": [
+        "guideline",
+        "checklist",
+        "mixed-single-and-double-column",
+        "tables",
+        "figures",
+        "footnotes"
+      ],
+      "benchmark_roles": [
+        "reading_order",
+        "table_detection",
+        "section_recovery",
+        "checklist_question_answering"
+      ]
+    },
+    {
+      "id": "pediatric-osteomyelitis-review-2025",
+      "filename": "pediatric-osteomyelitis-review-2025.pdf",
+      "title": "The epidemiology and management of chronic osteomyelitis in pediatrics - A systematic review",
+      "authors": [
+        "Joan L. Robinson",
+        "Deema Gashgarey",
+        "Nourah Alruqaie",
+        "Liz Dennett",
+        "M. Elizabeth Pedersen"
+      ],
+      "year": 2025,
+      "doi": "10.1371/journal.pone.0337516",
+      "discovery_source": "Europe PMC",
+      "record_url": "https://europepmc.org/articles/PMC12671803",
+      "download_url": "https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0337516&type=printable",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/",
+        "evidence": "Europe PMC metadata reports CC BY; the PDF embeds the CC BY 4.0 license link on page 1."
+      },
+      "sha256": "9840167f79b79e893d77d9eb42136c5f22141bb4ac565a9e90bfb0c0f44f8846",
+      "bytes": 1308684,
+      "pages": 21,
+      "layout_tags": [
+        "systematic-review",
+        "large-tables",
+        "multi-page-tables",
+        "citations",
+        "footnotes"
+      ],
+      "benchmark_roles": [
+        "large_table_extraction",
+        "cross-page_evidence",
+        "systematic_review_question_answering"
+      ]
+    },
+    {
+      "id": "asthma-self-knowledge-questionnaire-2025",
+      "filename": "asthma-self-knowledge-questionnaire-2025.pdf",
+      "title": "Development and validation of an asthma self-knowledge questionnaire",
+      "authors": [
+        "Adalberto Fernandes Dos Santos",
+        "Renata Costa",
+        "Henrique Pereira",
+        "Ana Rita Pedro",
+        "Luis Taborda-Barata"
+      ],
+      "year": 2025,
+      "doi": "10.1371/journal.pone.0333760",
+      "discovery_source": "Europe PMC",
+      "record_url": "https://europepmc.org/articles/PMC12578227",
+      "download_url": "https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0333760&type=printable",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/",
+        "evidence": "Europe PMC metadata reports CC BY; the PDF embeds the CC BY 4.0 license link on page 1."
+      },
+      "sha256": "0ba15a655b7a60f2f7f3dc91b46be523bf13a2aeb8ce71f668e0b13a6df2dcb3",
+      "bytes": 876313,
+      "pages": 17,
+      "layout_tags": [
+        "questionnaire-study",
+        "statistical-tables",
+        "correlation-matrix",
+        "single-column"
+      ],
+      "benchmark_roles": [
+        "statistical_table_extraction",
+        "numeric_question_answering",
+        "document_purpose_classification"
+      ]
+    },
+    {
+      "id": "apostel-as-study-protocol-2025",
+      "filename": "apostel-as-study-protocol-2025.pdf",
+      "title": "Development of the advised protocol for OCT study terminology and elements anterior segment OCT extension reporting guidelines (APOSTEL-AS): Study protocol",
+      "authors": [
+        "Ameenat Lola Solebo et al."
+      ],
+      "year": 2025,
+      "doi": "10.1371/journal.pone.0331272",
+      "discovery_source": "Europe PMC",
+      "record_url": "https://europepmc.org/articles/PMC12629414",
+      "download_url": "https://journals.plos.org/plosone/article/file?id=10.1371/journal.pone.0331272&type=printable",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/",
+        "evidence": "Europe PMC metadata reports CC BY; the PDF embeds the CC BY 4.0 license link on page 1."
+      },
+      "sha256": "ef8ef52207941bba1cc951e47228e7f321a452408ea6bdc6c0a0833b809324e5",
+      "bytes": 450852,
+      "pages": 8,
+      "layout_tags": [
+        "study-protocol",
+        "long-author-list",
+        "structured-sections",
+        "single-column"
+      ],
+      "benchmark_roles": [
+        "metadata_extraction",
+        "section_recovery",
+        "document_type_classification"
+      ]
+    },
+    {
+      "id": "tourisme-best-practices-2021",
+      "filename": "tourisme-best-practices-2021.pdf",
+      "title": "Compendium of Best Practices",
+      "authors": [
+        "Tiberio Daddi",
+        "Owais Khan",
+        "Nicola Bellini"
+      ],
+      "year": 2021,
+      "doi": "10.5281/zenodo.5163356",
+      "discovery_source": "Zenodo",
+      "record_url": "https://zenodo.org/records/5163356",
+      "download_url": "https://zenodo.org/api/records/5163356/files/D2.3%20Compendium%20of%20Best%20Practices.pdf/content",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/",
+        "evidence": "The Zenodo record declares CC BY 4.0 for this file."
+      },
+      "sha256": "b9614b49fe27bcdcb512454dbf2e8ba2cab5f67e63c70a42589ee7662105104b",
+      "bytes": 2398387,
+      "pages": 238,
+      "layout_tags": [
+        "long-report",
+        "branded-layout",
+        "table-of-contents",
+        "colored-tables",
+        "repeated-template-pages",
+        "internal-links"
+      ],
+      "benchmark_roles": [
+        "long_document_processing",
+        "repeated_header_footer_handling",
+        "document_navigation",
+        "cross-section_retrieval"
+      ]
+    },
+    {
+      "id": "open-data-canvas-questionnaire-2023",
+      "filename": "open-data-canvas-questionnaire-2023.pdf",
+      "title": "Formulating Open Data-Based Value Propositions: Supplementary material - Full questionnaire",
+      "authors": [
+        "Antoine Clarinval"
+      ],
+      "year": 2023,
+      "doi": "10.5281/zenodo.7555963",
+      "discovery_source": "Zenodo",
+      "record_url": "https://zenodo.org/records/7555963",
+      "download_url": "https://zenodo.org/api/records/7555963/files/Formulating%20Open%20Data-Based%20Value%20Propositions%20An%20Evaluation%20and%20Comparison%20of%20Two%20Canvas%20Tools%20-%20Supplementary%20material.pdf/content",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/",
+        "evidence": "The Zenodo record declares CC BY 4.0 for this file."
+      },
+      "sha256": "ff32435d2457eb213a682d464a495462d89afc7fbd9296cecfdd4c01fe3ee779",
+      "bytes": 161339,
+      "pages": 2,
+      "layout_tags": [
+        "questionnaire",
+        "form-like",
+        "radio-button-grid",
+        "dense-tables"
+      ],
+      "benchmark_roles": [
+        "form_structure_recovery",
+        "checkbox_and_scale_extraction",
+        "short_document_processing"
+      ]
+    },
+    {
+      "id": "brazilian-dark-matter-report-2019",
+      "filename": "brazilian-dark-matter-report-2019.pdf",
+      "title": "Brazilian Community Report on Dark Matter",
+      "authors": [
+        "E. Abdalla et al."
+      ],
+      "year": 2019,
+      "doi": "10.5281/zenodo.4035233",
+      "discovery_source": "Zenodo",
+      "record_url": "https://zenodo.org/records/4035233",
+      "download_url": "https://zenodo.org/api/records/4035233/files/Community_Report_on_Dark_Matter2019.pdf/content",
+      "license": {
+        "id": "CC-BY-4.0",
+        "url": "https://creativecommons.org/licenses/by/4.0/",
+        "evidence": "The Zenodo record declares CC BY 4.0 for this file."
+      },
+      "sha256": "f02293930ab38c01a6e90ea81968ce0d9c7655bffc3d919f959d5b48253ab24d",
+      "bytes": 322436,
+      "pages": 10,
+      "layout_tags": [
+        "technical-report",
+        "very-long-author-list",
+        "equations",
+        "dense-citations",
+        "section-numbering"
+      ],
+      "benchmark_roles": [
+        "author_metadata_stress",
+        "technical_section_recovery",
+        "citation_noise_handling"
+      ]
+    },
+    {
+      "id": "irs-form-w9-2024",
+      "filename": "irs-form-w9-2024.pdf",
+      "title": "Form W-9: Request for Taxpayer Identification Number and Certification",
+      "authors": [
+        "Internal Revenue Service"
+      ],
+      "year": 2024,
+      "doi": null,
+      "discovery_source": "Internal Revenue Service",
+      "record_url": "https://www.irs.gov/forms-pubs/about-form-w-9",
+      "download_url": "https://www.irs.gov/pub/irs-prior/fw9--2024.pdf",
+      "license": {
+        "id": "US-FEDERAL-PUBLIC-DOMAIN",
+        "url": "https://uscode.house.gov/view.xhtml?req=granuleid:USC-prelim-title17-section105&num=0&edition=prelim",
+        "evidence": "Unmodified work of the United States federal government; 17 U.S.C. 105 excludes U.S. Government works from U.S. copyright protection."
+      },
+      "sha256": "2d420cbb4123dcf1fb82595b2359cfbb5d81f00b9df9d359fcc7af361d093f53",
+      "bytes": 140815,
+      "pages": 6,
+      "layout_tags": [
+        "government-form",
+        "interactive-acroform",
+        "checkboxes",
+        "instructions",
+        "multi-column",
+        "dense-lines"
+      ],
+      "benchmark_roles": [
+        "form_field_detection",
+        "reading_order",
+        "instruction_vs_field_separation"
+      ],
+      "reuse_note": "Keep the form unmodified and do not imply IRS endorsement."
+    }
+  ]
+}

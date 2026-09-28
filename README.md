@@ -111,6 +111,7 @@ Extraction, OCR routing, chunking, retrieval, and answer contracts are shared by
 - [CLI quickstart](./docs/CLI_QUICKSTART.md) — installation and the shortest end-to-end path
 - [CLI reference](./docs/CLI_REFERENCE.md) — commands, output contracts, runtime options, and maintainer checks
 - [Web interface](./docs/WEB_INTERFACE.md) — local server, storage, user flow, and HTTP API
+- [Public benchmark corpus](./docs/PUBLIC_CORPUS.md) — reviewed, licensed PDFs and the required CI shard
 - [Project details](./docs/PROJECT_DETAILS.md) — complete capabilities, workflow, evaluation gates, and limitations
 
 ## Lineage

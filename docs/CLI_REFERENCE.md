@@ -163,6 +163,7 @@ pdf-to-json-rag compare-runtime-modes --modes baseline,sentence-transformers --a
 pdf-to-json-rag runtime-promotion-report --json
 pdf-to-json-rag real-ground-truth-check --json
 pdf-to-json-rag real-ground-truth-check --modes all --json
+pdf-to-json-rag real-ground-truth-check --corpus-dir pdf/public-corpus --eval-file data/eval/public_pdf_ground_truth_cases.json --json
 pdf-to-json-rag answer-query --query "What does this file cover?" --format json
 ```
 
@@ -196,7 +197,7 @@ pdf-to-json-rag corpus-sanity-check --profile quick --json
 
 `compare-runtime-modes --json` writes `data/eval/runtime_mode_comparison.json` and compares the same cases across `baseline`, `sentence-transformers`, `cross-encoder`, and `llm-synthesis`. Add `--all-cases` to run the full evaluation suite. Optional models remain offline-safe: if a model or `PDF_TO_JSON_RAG_LLM_COMMAND` is not locally available, the report shows the effective fallback/runtime state instead of treating it as a hidden success. The compact JSON also includes `model_decision_gate`, which can mark a model as recommended or experimental opt-in but keeps `default_change_allowed=false`.
 
-`real-ground-truth-check --json` runs a hand-built product gate over real repo-local PDFs from the `pdf/` corpus. It checks expected document retrieval, evidence keyword support, processing quality for form/table/scan/legal/public-record samples, and emits both strict `all_pass` and threshold-based `quality_gate`. Default mode runs `default-auto`; use `--modes hash-baseline`, `--modes cross-encoder`, `--modes llm-synthesis`, or `--modes all` for comparison/decision reporting.
+`real-ground-truth-check --json` runs a hand-built product gate over real PDFs. By default it uses the repo-local `pdf/` corpus; `--corpus-dir` and `--eval-file` select a reproducible public corpus instead. It checks expected document retrieval, evidence keyword support, processing quality for form/table/scan/legal/public-record samples, and emits both strict `all_pass` and threshold-based `quality_gate`. Default mode runs `default-auto`; use `--modes hash-baseline`, `--modes cross-encoder`, `--modes llm-synthesis`, or `--modes all` for comparison/decision reporting.
 
 `runtime-check --json` reports install context, the requested embedding backend, effective backend/model, local sentence-transformer availability, fallback reason, runtime decision, cross-encoder opt-in state, LLM synthesis opt-in state, and a unified `backend_policy`. The public default is `auto`: cached local sentence-transformer embeddings when available, deterministic hash fallback otherwise.
 

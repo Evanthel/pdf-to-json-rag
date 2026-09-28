@@ -2934,6 +2934,91 @@ class CliPublicSurfaceTests(unittest.TestCase):
             self.assertTrue(item["classification_status"])
             self.assertTrue(item["trust_policy"])
 
+    def test_real_ground_truth_check_accepts_explicit_public_corpus_directory(self) -> None:
+        corpus_dir = self.workspace / "public-corpus"
+        corpus_dir.mkdir()
+        public_pdf = corpus_dir / "public-sample.pdf"
+        self._create_demo_pdf(public_pdf)
+        eval_path = self.workspace / "public-ground-truth.json"
+        eval_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "case_id": "public_safety_guide",
+                        "pdf_digest": "public-sample",
+                        "bucket": "public_ci",
+                        "query": "What does the guide cover?",
+                        "expected_keywords": ["safety checks", "incident response"],
+                        "evidence_keywords": ["safety checks", "incident response"],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        process = self._run(
+            "real-ground-truth-check",
+            "--corpus-dir",
+            str(corpus_dir),
+            "--eval-file",
+            str(eval_path),
+            "--modes",
+            "default-auto",
+            "--json",
+        )
+
+        result = json.loads(process.stdout)["result"]
+        self.assertTrue(result["all_pass"])
+        self.assertTrue(result["quality_gate"]["passed"])
+        self.assertTrue(result["processing_quality"]["all_pass"])
+        self.assertEqual(result["pdf_count"], 1)
+        self.assertEqual(result["case_count"], 1)
+        self.assertGreater(result["default_index_manifest"]["chunk_count"], 0)
+
+    def test_real_ground_truth_keyword_coverage_tolerates_pdf_spacing_loss(self) -> None:
+        result = cli_module._keyword_coverage(
+            "The checklist is composedof13sectionsand25items.",
+            ["13 sections", "25 items"],
+        )
+
+        self.assertEqual(result["coverage"], 1.0)
+        self.assertEqual(result["missing"], [])
+
+    def test_real_ground_truth_check_fails_when_explicit_corpus_is_missing(self) -> None:
+        eval_path = self.workspace / "missing-corpus-ground-truth.json"
+        eval_path.write_text(
+            json.dumps(
+                [
+                    {
+                        "case_id": "missing_public_pdf",
+                        "pdf_digest": "missing-public-pdf",
+                        "bucket": "public_ci",
+                        "query": "What does this file cover?",
+                        "expected_keywords": ["missing"],
+                        "evidence_keywords": ["missing"],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        process = self._run(
+            "real-ground-truth-check",
+            "--corpus-dir",
+            str(self.workspace / "missing-corpus"),
+            "--eval-file",
+            str(eval_path),
+            "--modes",
+            "default-auto",
+            "--json",
+            expect_ok=False,
+        )
+
+        self.assertNotEqual(process.returncode, 0)
+        payload = json.loads(process.stdout)
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["error"]["code"], "missing_local_pdf_corpus")
+
     def test_corpus_sanity_check_with_local_override(self) -> None:
         corpus_dir = self.workspace / "pdf-corpus"
         corpus_dir.mkdir(parents=True, exist_ok=True)
