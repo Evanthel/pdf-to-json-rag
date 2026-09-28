@@ -19,6 +19,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from pdf_to_json_rag import cli as cli_module
 from pdf_to_json_rag import document_inventory as document_inventory_module
+from pdf_to_json_rag import indexing as indexing_module
 from pdf_to_json_rag import intent_config as intent_config_module
 from pdf_to_json_rag import retrieval as retrieval_module
 from pdf_to_json_rag.answering import EvidenceSentence, _should_abstain, answer_from_chunks
@@ -105,6 +106,81 @@ class CliPublicSurfaceTests(unittest.TestCase):
         query = "Do monoclonal antibodies prevent the common cold?"
         self.assertTrue(_should_abstain(query, [cell_culture_evidence]))
         self.assertFalse(_should_abstain(query, [direct_clinical_evidence]))
+
+    def test_build_local_index_closes_chroma_client_on_failure(self) -> None:
+        chunk = ChunkRecord(
+            doc_id="doc",
+            chunk_id="chunk-1",
+            source_pdf="demo.pdf",
+            text="Grounded content.",
+            page_start=1,
+            page_end=1,
+            reading_order_index=1,
+        )
+        client = mock.Mock()
+        client.get_or_create_collection.return_value.add.side_effect = RuntimeError("add failed")
+
+        def embedder(texts: list[str]) -> list[list[float]]:
+            return [[0.0] * 384 for _ in texts]
+
+        with (
+            mock.patch.object(indexing_module, "local_chroma_client", return_value=client),
+            mock.patch.object(
+                indexing_module,
+                "_load_embedder",
+                return_value=(
+                    embedder,
+                    {"embedding_backend": "hash-fallback", "embedding_model": "hash-384"},
+                ),
+            ),
+            self.assertRaisesRegex(RuntimeError, "add failed"),
+        ):
+            build_local_index([chunk], index_dir=self.workspace / "failing-index")
+
+        client.close.assert_called_once_with()
+
+    def test_retrieval_query_closes_chroma_client_on_failure(self) -> None:
+        client = mock.Mock()
+        client.get_collection.return_value.query.side_effect = RuntimeError("query failed")
+
+        with (
+            mock.patch.object(retrieval_module, "local_chroma_client", return_value=client),
+            self.assertRaisesRegex(RuntimeError, "query failed"),
+        ):
+            retrieval_module._query_local_collection(
+                index_dir=self.workspace / "index",
+                collection_name="collection",
+                query_embedding=[0.0] * 384,
+                candidate_k=5,
+            )
+
+        client.close.assert_called_once_with()
+
+    def test_close_chroma_client_stops_pre_1_0_system(self) -> None:
+        class LegacyClient:
+            def __init__(self) -> None:
+                self._identifier = "legacy-index"
+                self._system = mock.Mock()
+                self._identifier_to_system = {self._identifier: self._system}
+
+        client = LegacyClient()
+        indexing_module.close_chroma_client(client)
+
+        client._system.stop.assert_called_once_with()
+        self.assertEqual(client._identifier_to_system, {})
+
+    def test_cleanup_unused_segments_closes_sqlite_connection(self) -> None:
+        index_dir = self.workspace / "cleanup-index"
+        index_dir.mkdir()
+        (index_dir / "chroma.sqlite3").touch()
+        connection = mock.Mock()
+        connection.execute.return_value.fetchall.return_value = []
+
+        with mock.patch.object(indexing_module.sqlite3, "connect", return_value=connection):
+            removed = indexing_module.cleanup_unused_segment_dirs(index_dir)
+
+        self.assertEqual(removed, [])
+        connection.close.assert_called_once_with()
 
     def _create_text_pdf(
         self,

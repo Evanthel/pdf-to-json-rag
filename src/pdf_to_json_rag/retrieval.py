@@ -11,6 +11,7 @@ import re
 from .content_metadata import derive_chunk_semantics
 from .indexing import (
     DEFAULT_COLLECTION_NAME,
+    close_chroma_client,
     load_embedder_from_manifest,
     load_index_manifest,
     local_chroma_client,
@@ -1950,6 +1951,34 @@ def _diversify_hits_by_doc(
     return selected
 
 
+def _query_local_collection(
+    *,
+    index_dir: Path,
+    collection_name: str,
+    query_embedding: list[float],
+    candidate_k: int,
+    doc_id: str | None = None,
+) -> dict:
+    """Query a persisted collection and always release its SQLite resources."""
+    client = local_chroma_client(index_dir)
+    try:
+        collection = client.get_collection(name=collection_name)
+        if doc_id is not None:
+            return collection.query(
+                query_embeddings=[query_embedding],
+                n_results=candidate_k,
+                where={"doc_id": doc_id},
+                include=["documents", "metadatas", "distances"],
+            )
+        return collection.query(
+            query_embeddings=[query_embedding],
+            n_results=candidate_k,
+            include=["documents", "metadatas", "distances"],
+        )
+    finally:
+        close_chroma_client(client)
+
+
 def retrieve_top_k(
     query: str,
     index_dir: Path,
@@ -1967,9 +1996,6 @@ def retrieve_top_k(
     embed_texts, _ = load_embedder_from_manifest(manifest)
     query_embedding = embed_texts([_augment_query(query)])[0]
     candidate_k = contract.candidate_pool_k
-
-    client = local_chroma_client(index_dir)
-    collection = client.get_collection(name=collection_name)
 
     def hydrate(result: dict) -> list[ChunkRecord]:
         ids = result.get("ids", [[]])[0]
@@ -2071,10 +2097,11 @@ def retrieve_top_k(
             )
         return hydrated
 
-    result = collection.query(
-        query_embeddings=[query_embedding],
-        n_results=candidate_k,
-        include=["documents", "metadatas", "distances"],
+    result = _query_local_collection(
+        index_dir=index_dir,
+        collection_name=collection_name,
+        query_embedding=query_embedding,
+        candidate_k=candidate_k,
     )
 
     hits = hydrate(result)
@@ -2095,11 +2122,12 @@ def retrieve_top_k(
         present_doc_ids = {chunk.doc_id for chunk in existing_hits}
         missing_doc_ids = [doc_id for doc_id in doc_ids if doc_id not in present_doc_ids]
         for doc_id in missing_doc_ids:
-            doc_result = collection.query(
-                query_embeddings=[query_embedding],
-                n_results=candidate_k,
-                where={"doc_id": doc_id},
-                include=["documents", "metadatas", "distances"],
+            doc_result = _query_local_collection(
+                index_dir=index_dir,
+                collection_name=collection_name,
+                query_embedding=query_embedding,
+                candidate_k=candidate_k,
+                doc_id=doc_id,
             )
             for chunk in hydrate(doc_result):
                 labels, score = classify_chunk_quality(

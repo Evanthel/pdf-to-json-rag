@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -48,6 +49,29 @@ def local_chroma_client(index_dir: Path):
             chroma_telemetry_impl="pdf_to_json_rag.indexing.NoopProductTelemetry",
         ),
     )
+
+
+def close_chroma_client(client) -> None:
+    """Close a Chroma client across supported pre-1.0 and newer APIs."""
+    close = getattr(client, "close", None)
+    if callable(close):
+        close()
+        return
+
+    # Chroma 0.6.x has no public close(), but its System owns the SQLite
+    # connection and exposes stop(). Remove only this stopped system from the
+    # shared cache so a later client for the same index starts cleanly.
+    system = getattr(client, "_system", None)
+    if system is not None:
+        system.stop()
+    identifier = getattr(client, "_identifier", None)
+    system_cache = getattr(client, "_identifier_to_system", None)
+    if identifier is not None and isinstance(system_cache, dict):
+        system_cache.pop(identifier, None)
+        return
+    clear_system_cache = getattr(client, "clear_system_cache", None)
+    if callable(clear_system_cache):
+        clear_system_cache()
 
 
 def _hash_embedding(text: str, dim: int = FALLBACK_EMBEDDING_DIM) -> list[float]:
@@ -334,7 +358,7 @@ def cleanup_unused_segment_dirs(index_dir: Path) -> list[Path]:
     if not sqlite_path.exists():
         return []
 
-    with sqlite3.connect(sqlite_path) as connection:
+    with closing(sqlite3.connect(sqlite_path)) as connection:
         rows = connection.execute(
             "select id from segments where scope = 'VECTOR'"
         ).fetchall()
@@ -372,29 +396,31 @@ def build_local_index(
 
     embed_texts, embedder_info = _load_embedder()
     client = local_chroma_client(index_dir)
+    try:
+        if reset:
+            try:
+                client.delete_collection(collection_name)
+            except Exception:
+                pass
 
-    if reset:
-        try:
-            client.delete_collection(collection_name)
-        except Exception:
-            pass
+        collection = client.get_or_create_collection(
+            name=collection_name,
+            metadata={"hnsw:space": "cosine"},
+        )
 
-    collection = client.get_or_create_collection(
-        name=collection_name,
-        metadata={"hnsw:space": "cosine"},
-    )
+        texts = [_chunk_retrieval_text(chunk) for chunk in chunks]
+        embeddings = embed_texts(texts)
+        ids = [chunk.chunk_id for chunk in chunks]
+        metadatas = [_chunk_metadata(chunk) for chunk in chunks]
 
-    texts = [_chunk_retrieval_text(chunk) for chunk in chunks]
-    embeddings = embed_texts(texts)
-    ids = [chunk.chunk_id for chunk in chunks]
-    metadatas = [_chunk_metadata(chunk) for chunk in chunks]
-
-    collection.add(
-        ids=ids,
-        documents=texts,
-        embeddings=embeddings,
-        metadatas=metadatas,
-    )
+        collection.add(
+            ids=ids,
+            documents=texts,
+            embeddings=embeddings,
+            metadatas=metadatas,
+        )
+    finally:
+        close_chroma_client(client)
 
     manifest = {
         "collection_name": collection_name,
