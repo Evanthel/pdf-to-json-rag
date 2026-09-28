@@ -9,8 +9,8 @@ Internal development iterations in this file use `vN.x` labels. Public releases 
 ## Current State
 
 Current implementation level: `v4.13.0`
-Current public version: `0.1.0-beta`
-Current package metadata version: `0.1.0`
+Current public version: `0.2.0`
+Current package metadata version: `0.2.0`
 
 The project now behaves as a local-first, domain-agnostic `PDF -> JSON -> retrieval -> grounded answer` pipeline with explicit document-intelligence behavior on top of chunk retrieval.
 
@@ -104,7 +104,7 @@ Broad benchmark note after `v4.6.0`:
 - `release-check` now includes `document_pipeline_core`, `structure_chunking_core`, `section_reconstruction_core`, `document_selection_core`, `document_maintenance_core`, and `evidence_anchor_core` in the maintainer regression gate.
 - `release-check` now also includes `structured_form_maintenance_core`, `layout_robustness_core`, and `single_doc_random_pdf_core`.
 - `release-check` now also includes `table_layout_robustness_core` and `form_layout_robustness_core`.
-- `release-check` now recommends the current public beta tag: `v0.1.0-beta`.
+- `release-check` now recommends the current public tag: `v0.2.0`.
 - the current decision is to keep learned reranking optional; the stronger structure-aware baseline remains the default, while cross-encoder reranking can now be tested locally behind an env flag.
 - the new maintenance direction is preserving document-root section context and shrinking the structured-form / document-level branching surface rather than adding heavier retrieval machinery.
 - the new robustness direction is exposing simple structure/layout confidence signals and testing single-document behavior on a more diverse sanity slice before considering a heavier learned retrieval layer.
@@ -132,15 +132,15 @@ Broad benchmark note after `v4.6.0`:
 
 This section preserves the longer status block that used to live in the public README.
 
-Current public version: `0.1.0-beta`
+Current public version: `0.2.0`
 
 Internal development iterations in this repo use `vN.x` labels. Public releases follow semantic versioning starting at `0.1.0-beta`.
 
-Current package metadata version: `0.1.0`
+Current package metadata version: `0.2.0`
 
 Current internal milestone: `v4.13.0`
 
-The public release label is `0.1.0-beta`; package metadata remains PEP440-compatible `0.1.0` until the first non-beta public cut.
+The public release label and PEP 440 package metadata are aligned at `0.2.0`.
 
 The current baseline includes:
 

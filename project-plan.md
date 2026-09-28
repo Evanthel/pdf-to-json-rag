@@ -51,11 +51,11 @@ The first working version stayed local-first and deliberately narrow:
 
 ## 5. Current Baseline
 
-Current public version: `0.1.0-beta`
-Current package metadata version: `0.1.0`
+Current public version: `0.2.0`
+Current package metadata version: `0.2.0`
 Current internal implementation level: `v4.13.0`
 
-`0.1.0-beta` is the public release label. The package version remains PEP440-compatible `0.1.0` until the beta checkpoint is cut as a formal package release.
+`0.2.0` is the current public release and package version. It packages the Document AI pipeline, local web workspace, and reproducible public-PDF benchmark as one portfolio-ready checkpoint.
 
 What the repo now has:
 

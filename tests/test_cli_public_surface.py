@@ -194,7 +194,7 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertTrue(payload["ok"])
         embedding = payload["result"]["embedding"]
         decision = payload["result"]["runtime_decision"]
-        self.assertEqual(payload["result"]["install_context"]["version"], "0.1.0")
+        self.assertEqual(payload["result"]["install_context"]["version"], "0.2.0")
         self.assertTrue(payload["result"]["install_context"]["module_path"].endswith("cli.py"))
         self.assertEqual(embedding["requested_backend"], "auto")
         self.assertEqual(embedding["effective_backend"], "hash-fallback")

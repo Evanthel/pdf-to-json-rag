@@ -138,6 +138,7 @@ Extraction, OCR routing, chunking, retrieval, and answer contracts are shared by
 - [Web interface](./docs/WEB_INTERFACE.md) — local server, storage, user flow, and HTTP API
 - [Public benchmark corpus](./docs/PUBLIC_CORPUS.md) — reviewed, licensed PDFs and the required CI shard
 - [Project details](./docs/PROJECT_DETAILS.md) — complete capabilities, workflow, evaluation gates, and limitations
+- [Changelog](./CHANGELOG.md) — public release highlights and validation snapshots
 
 ## Lineage
 

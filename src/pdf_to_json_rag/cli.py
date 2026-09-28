@@ -282,7 +282,7 @@ def _release_channel_recommendation(
         reasons.append("known limitations are documented and do not block the current public release path")
         return {
             "release_ready": True,
-            "suggested_tag": "v0.1.0-beta",
+            "suggested_tag": "v0.2.0",
             "why": reasons,
         }
     reasons: list[str] = []
