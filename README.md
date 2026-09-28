@@ -55,8 +55,9 @@ PyMuPDF remains the canonical source for reading order, coordinates, and citatio
 | Benchmark | Result | Scope |
 | --- | ---: | --- |
 | Maintained evaluation suite | **77 / 77 retrieval · 77 / 77 answer faithfulness · Recall@5 1.000 · MRR 1.000** | Checked-in regression cases for retrieval and grounded answers |
+| Required public-PDF CI shard | **6 / 6 cases · Recall@5 1.000 · MRR 1.000 · evidence coverage 1.000** | Three downloaded and SHA-256-verified public PDFs processed through extraction, chunking, indexing, and retrieval |
 
-These are reproducible regression results on maintained fixtures, not a claim of universal PDF performance. The tracked source is [data/eval/mvp_eval_report.json](./data/eval/mvp_eval_report.json); methodology and additional gates are documented in [docs/PROJECT_DETAILS.md](./docs/PROJECT_DETAILS.md#evaluation-and-release-gates).
+These are reproducible regression results, not a claim of universal PDF performance. The tracked sources are [data/eval/mvp_eval_report.json](./data/eval/mvp_eval_report.json) and the [public-PDF benchmark snapshot](./data/eval/public_pdf_benchmark_snapshot.json); methodology and additional gates are documented in [docs/PROJECT_DETAILS.md](./docs/PROJECT_DETAILS.md#evaluation-and-release-gates).
 
 ## Example grounded answer
 
@@ -116,6 +117,6 @@ Extraction, OCR routing, chunking, retrieval, and answer contracts are shared by
 
 ## Lineage
 
-This is a separate, local-first implementation inspired by the [Document AI: From OCR to Agentic Doc Extraction](https://learn.deeplearning.ai/courses/document-ai-from-ocr-to-agentic-doc-extraction/information) course, its [upstream repository](https://github.com/https-deeplearning-ai/sc-landingai), and selected architecture ideas from Google's LangExtract project.
+This is a separate, local-first implementation inspired by the [Document AI: From OCR to Agentic Doc Extraction](https://learn.deeplearning.ai/courses/document-ai-from-ocr-to-agentic-doc-extraction/information) course, its [official course materials repository](https://github.com/https-deeplearning-ai/sc-landingai), and selected architecture ideas from Google's LangExtract project.
 
 The course reproduction and AWS-side learning path remain in [Evanthel/sc-landingai](https://github.com/Evanthel/sc-landingai). This repository is JSON-first and independently controls extraction, chunking, retrieval, grounding, and evaluation; additional reference notes are in [docs/PROJECT_DETAILS.md](./docs/PROJECT_DETAILS.md#reference-material).

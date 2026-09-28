@@ -5,6 +5,7 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+/:memory:.ses
 
 # Python
 __pycache__/

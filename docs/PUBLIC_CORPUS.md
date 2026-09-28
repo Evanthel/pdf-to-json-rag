@@ -64,6 +64,8 @@ The `Retrieval Benchmarks` workflow runs automatically for every pull request an
 
 The six tracked cases in [`data/eval/public_pdf_ground_truth_cases.json`](../data/eval/public_pdf_ground_truth_cases.json) exercise PDF extraction, JSON document creation, chunking, index construction, retrieval, and evidence-keyword support. The workflow has no missing-assets skip path: a missing download, integrity mismatch, processing failure, absent index, or failed benchmark gate makes the job fail.
 
+The full JSON report and Markdown summary are uploaded by every run as the `public-pdf-retrieval-benchmark` artifact. A small, reviewed result from the latest accepted `main` run is tracked in [`data/eval/public_pdf_benchmark_snapshot.json`](../data/eval/public_pdf_benchmark_snapshot.json) so the core metrics and their exact input hashes remain visible after CI artifacts expire.
+
 Run the same required gate locally:
 
 ```bash
