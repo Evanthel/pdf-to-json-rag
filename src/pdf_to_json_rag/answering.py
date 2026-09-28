@@ -93,6 +93,19 @@ UNSUPPORTED_ENTITY_TERMS = {
     "monoclonal",
     "vaccine",
 }
+MONOCLONAL_DIRECT_SUPPORT_TERMS = {
+    "cure",
+    "cured",
+    "cures",
+    "prevent",
+    "prevented",
+    "prevention",
+    "prevents",
+    "treat",
+    "treated",
+    "treatment",
+    "treats",
+}
 
 NO_GROUNDED_ANSWER = "No grounded answer could be assembled from the retrieved context."
 GROUNDED_SYNTHESIS_PROMPT_TEMPLATE_ID = "grounded_context_only.v1"
@@ -4199,11 +4212,22 @@ def _should_abstain(query: str, evidence: list[EvidenceSentence]) -> bool:
     query_terms = _query_terms(query)
     specific_terms = _specific_query_terms(query_terms)
     query_intent = _detect_query_intent(query, query_terms)
+    unsupported_entities = query_terms.intersection(UNSUPPORTED_ENTITY_TERMS)
+    if "monoclonal" in unsupported_entities:
+        has_direct_monoclonal_support = any(
+            "monoclonal" in sentence_terms
+            and bool(sentence_terms.intersection(MONOCLONAL_DIRECT_SUPPORT_TERMS))
+            for sentence_terms in (
+                set(re.findall(r"[a-zA-Z]{2,}", item.sentence.lower()))
+                for item in evidence
+            )
+        )
+        if not has_direct_monoclonal_support:
+            return True
     if query_intent in {"source_listing", "cross_document_compare", "document_routing"} | DOCUMENT_SEMANTIC_INTENTS:
         evidence_text = " ".join(item.sentence.lower() for item in evidence)
         if query_intent in {"source_listing", "document_routing"} and not _matching_source_doc_ids(query):
             return True
-        unsupported_entities = query_terms.intersection(UNSUPPORTED_ENTITY_TERMS)
         if unsupported_entities and not any(term in evidence_text for term in unsupported_entities):
             return True
         if len(evidence) < 1:
@@ -4238,7 +4262,6 @@ def _should_abstain(query: str, evidence: list[EvidenceSentence]) -> bool:
     if structured_profile:
         intent_support_terms = set(structured_profile.support_terms)
     evidence_text = " ".join(item.sentence.lower() for item in evidence)
-    unsupported_entities = query_terms.intersection(UNSUPPORTED_ENTITY_TERMS)
     if "influenza" in query_terms and query_terms.intersection(TREATMENT_ENTITY_HINTS):
         return True
     if unsupported_entities and not any(term in evidence_text for term in unsupported_entities):

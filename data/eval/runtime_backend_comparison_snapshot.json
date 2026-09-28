@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "snapshot_kind": "runtime_backend_comparison",
+  "generated_at_utc": "2026-09-28T20:09:16.935069+00:00",
+  "source": {
+    "report_generated_at_utc": "2026-09-28T20:09:06.055857+00:00",
+    "report_path": "data/eval/runtime_mode_comparison.json",
+    "command": "pdf-to-json-rag compare-runtime-modes --modes baseline,sentence-transformers,cross-encoder --all-cases --json",
+    "case_count": 77,
+    "k": 5,
+    "all_pass": true,
+    "comparison_index_policy": "fresh hash and sentence-transformer indexes built from the same chunks",
+    "comparison_chunk_count": 2071
+  },
+  "benchmark_environment": {
+    "system": "Darwin",
+    "machine": "arm64",
+    "python": "3.13.9",
+    "latency_note": "Host-specific single-process measurement; includes first-use model loading and should be compared directionally."
+  },
+  "modes": [
+    {
+      "mode": "baseline",
+      "pipeline": "hash-384 retrieval + lightweight reranking",
+      "cpu": "required",
+      "gpu": "not required",
+      "local_model": "none",
+      "fit": "lowest-dependency offline fallback",
+      "active": true,
+      "quality": {
+        "pass_count": 77,
+        "case_count": 77,
+        "avg_precision_at_k": 0.6133333333333333,
+        "avg_recall_at_k": 0.9807692307692307,
+        "mrr": 1.0,
+        "avg_keyword_coverage": 1.0,
+        "warning_case_count": 3
+      },
+      "latency": {
+        "avg_query_latency_ms": 164.597,
+        "median_query_latency_ms": 125.255,
+        "p95_query_latency_ms": 449.968,
+        "mode_wall_seconds": 12.676,
+        "scope": "answer_query_with_retrieval; includes first-use model load in this process"
+      },
+      "runtime": {
+        "embedding_backend": "hash-fallback",
+        "embedding_model": "hash-384",
+        "index_build_seconds": 1.258,
+        "rerank_backend_counts": {
+          "lightweight": 1059
+        },
+        "cross_encoder_fallback_chunk_count": 0
+      },
+      "model_artifact": {
+        "primary_weight_path": null,
+        "primary_weight_bytes": 0,
+        "primary_weight_mib": 0.0
+      }
+    },
+    {
+      "mode": "sentence-transformers",
+      "pipeline": "all-MiniLM-L6-v2 retrieval + lightweight reranking",
+      "cpu": "supported",
+      "gpu": "optional",
+      "local_model": "embedding model required",
+      "fit": "preferred local semantic retrieval when the model is cached",
+      "active": true,
+      "quality": {
+        "pass_count": 77,
+        "case_count": 77,
+        "avg_precision_at_k": 0.6133333333333333,
+        "avg_recall_at_k": 0.9807692307692307,
+        "mrr": 1.0,
+        "avg_keyword_coverage": 1.0,
+        "warning_case_count": 3
+      },
+      "latency": {
+        "avg_query_latency_ms": 181.997,
+        "median_query_latency_ms": 142.62,
+        "p95_query_latency_ms": 460.11,
+        "mode_wall_seconds": 14.016,
+        "scope": "answer_query_with_retrieval; includes first-use model load in this process"
+      },
+      "runtime": {
+        "embedding_backend": "sentence-transformers",
+        "embedding_model": ".cache/models/all-MiniLM-L6-v2",
+        "index_build_seconds": 19.175,
+        "rerank_backend_counts": {
+          "lightweight": 1059
+        },
+        "cross_encoder_fallback_chunk_count": 0
+      },
+      "model_artifact": {
+        "primary_weight_path": ".cache/models/all-MiniLM-L6-v2/model.safetensors",
+        "primary_weight_bytes": 90868376,
+        "primary_weight_mib": 86.7
+      }
+    },
+    {
+      "mode": "cross-encoder",
+      "pipeline": "hash-384 retrieval + ms-marco-MiniLM-L-6-v2 reranking",
+      "cpu": "supported",
+      "gpu": "optional; useful at higher query volume",
+      "local_model": "reranker model required",
+      "fit": "opt-in reranking experiment",
+      "active": true,
+      "quality": {
+        "pass_count": 77,
+        "case_count": 77,
+        "avg_precision_at_k": 0.6133333333333333,
+        "avg_recall_at_k": 0.9807692307692307,
+        "mrr": 1.0,
+        "avg_keyword_coverage": 1.0,
+        "warning_case_count": 3
+      },
+      "latency": {
+        "avg_query_latency_ms": 402.132,
+        "median_query_latency_ms": 330.553,
+        "p95_query_latency_ms": 877.091,
+        "mode_wall_seconds": 30.967,
+        "scope": "answer_query_with_retrieval; includes first-use model load in this process"
+      },
+      "runtime": {
+        "embedding_backend": "hash-fallback",
+        "embedding_model": "hash-384",
+        "index_build_seconds": 1.258,
+        "rerank_backend_counts": {
+          "cross_encoder": 1059
+        },
+        "cross_encoder_fallback_chunk_count": 0
+      },
+      "model_artifact": {
+        "primary_weight_path": ".cache/models/ms-marco-MiniLM-L-6-v2/model.safetensors",
+        "primary_weight_bytes": 90870598,
+        "primary_weight_mib": 86.7
+      }
+    }
+  ],
+  "decision": {
+    "default_backend": "auto",
+    "preferred_when_cached": "sentence-transformers",
+    "offline_fallback": "baseline",
+    "experimental_opt_in": "cross-encoder",
+    "default_change_allowed": false
+  }
+}

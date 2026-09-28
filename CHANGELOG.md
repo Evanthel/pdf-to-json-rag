@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added controlled hash vs sentence-transformer vs cross-encoder comparisons with fresh indexes, per-query latency statistics, model activation checks, and a compact tracked snapshot.
+- Documented measured quality, latency, model-weight, CPU, and optional-GPU trade-offs in the README.
+- Tightened abstention so cell-culture monoclonal-antibody evidence is not presented as clinical prevention or treatment evidence.
+
 ## v0.2.0 — 2026-09-28
 
 `v0.2.0` is the first non-beta portfolio release of the project: a local-first Document AI workflow that turns PDFs into structured JSON and grounded, cited answers.

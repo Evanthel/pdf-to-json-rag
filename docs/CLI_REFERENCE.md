@@ -37,7 +37,7 @@ export PDF_TO_JSON_RAG_SENTENCE_TRANSFORMERS_MODEL=/path/to/local/all-MiniLM-L6-
 pdf-to-json-rag runtime-check --json
 ```
 
-The default remains deterministic `hash`. `PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1` remains a legacy alias; `PDF_TO_JSON_RAG_EMBEDDING_BACKEND=auto` uses sentence-transformers only when the local model is ready.
+The default is `auto`: use sentence-transformers only when the local model is ready, otherwise fall back to deterministic `hash` without downloading a model. `PDF_TO_JSON_RAG_USE_SENTENCE_TRANSFORMERS=1` remains a legacy alias.
 
 `runtime-check --json` also returns `runtime_decision`, including the default backend, recommended opt-in backend when a promotion snapshot is available, and the reason the opt-in backend is not the default.
 
@@ -195,7 +195,9 @@ pdf-to-json-rag corpus-sanity-check --profile quick --json
 
 `evaluate-mvp --json` now also returns `layer_summary`, `layer_stability`, `architecture_gates`, and sampled faithfulness `contract_validation` blocks so you can separate `processing`, `retrieval`, and `answer_faithfulness` health from the broader benchmark summary and still get an explicit gate decision.
 
-`compare-runtime-modes --json` writes `data/eval/runtime_mode_comparison.json` and compares the same cases across `baseline`, `sentence-transformers`, `cross-encoder`, and `llm-synthesis`. Add `--all-cases` to run the full evaluation suite. Optional models remain offline-safe: if a model or `PDF_TO_JSON_RAG_LLM_COMMAND` is not locally available, the report shows the effective fallback/runtime state instead of treating it as a hidden success. The compact JSON also includes `model_decision_gate`, which can mark a model as recommended or experimental opt-in but keeps `default_change_allowed=false`.
+`compare-runtime-modes --json` writes `data/eval/runtime_mode_comparison.json` and compares the same cases across `baseline`, `sentence-transformers`, `cross-encoder`, and `llm-synthesis`. It builds fresh hash and sentence-transformer indexes from the same chunks, records index-build time, and reports mean, median, and p95 end-to-end query latency; the first-use model load is included. Add `--all-cases` to run the full evaluation suite. Optional models remain offline-safe: if a model or `PDF_TO_JSON_RAG_LLM_COMMAND` is not locally available, the report shows the effective fallback/runtime state instead of treating it as a hidden success. The compact JSON also includes `model_decision_gate`, which can mark a model as recommended or experimental opt-in but keeps `default_change_allowed=false`.
+
+After a full three-mode run, `scripts/build_runtime_comparison_snapshot.py` reduces the ignored per-case report to the tracked `data/eval/runtime_backend_comparison_snapshot.json`. It verifies that all three modes were active and records quality, latency, primary model-weight sizes, runtime requirements, and the current backend decision.
 
 `real-ground-truth-check --json` runs a hand-built product gate over real PDFs. By default it uses the repo-local `pdf/` corpus; `--corpus-dir` and `--eval-file` select a reproducible public corpus instead. It checks expected document retrieval, evidence keyword support, processing quality for form/table/scan/legal/public-record samples, and emits both strict `all_pass` and threshold-based `quality_gate`. Default mode runs `default-auto`; use `--modes hash-baseline`, `--modes cross-encoder`, `--modes llm-synthesis`, or `--modes all` for comparison/decision reporting.
 

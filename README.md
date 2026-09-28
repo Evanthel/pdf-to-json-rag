@@ -63,6 +63,20 @@ PyMuPDF remains the canonical source for reading order, coordinates, and citatio
 
 These are reproducible regression results, not a claim of universal PDF performance. The tracked sources are [data/eval/mvp_eval_report.json](./data/eval/mvp_eval_report.json) and the [public-PDF benchmark snapshot](./data/eval/public_pdf_benchmark_snapshot.json); methodology and additional gates are documented in [docs/PROJECT_DETAILS.md](./docs/PROJECT_DETAILS.md#evaluation-and-release-gates).
 
+## Runtime trade-offs
+
+The three local retrieval paths were measured on the same 77 cases, `k=5`, and 2,071 chunks. Each embedding backend received a fresh index built from the same chunks; both local models were active and the cross-encoder had zero fallbacks.
+
+| Mode | Quality | Query latency: mean / p50 / p95 | Index and hardware cost | Current role |
+| --- | --- | ---: | --- | --- |
+| Hash baseline + lightweight reranker | **77/77 · Recall@5 0.981 · MRR 1.000** | **165 / 125 / 450 ms** | 1.3 s index build · CPU · no model weights | Lowest-cost offline fallback |
+| `all-MiniLM-L6-v2` + lightweight reranker | **77/77 · Recall@5 0.981 · MRR 1.000** | **182 / 143 / 460 ms** | 19.2 s index build · CPU, optional GPU · 86.7 MiB primary weights | Preferred semantic backend when already cached |
+| Hash baseline + `ms-marco-MiniLM-L-6-v2` cross-encoder | **77/77 · Recall@5 0.981 · MRR 1.000** | **402 / 331 / 877 ms** | Reuses hash index · CPU, optional GPU · 86.7 MiB primary weights | Experimental opt-in reranker |
+
+On this benchmark, neither learned path improved quality. The sentence-transformer path added about 11% mean query latency, while the cross-encoder was about 2.4× slower than baseline. That supports keeping `auto` offline-safe — use the sentence transformer only when it is already cached, fall back to hash otherwise, and keep the cross-encoder opt-in until it wins on a broader corpus.
+
+Latency was measured in one local process on Darwin arm64 with Python 3.13.9 and includes first-use model loading; absolute values are machine-specific. Weight sizes refer only to the primary `safetensors` files, not total Python runtime memory or every cached model format. The compact, reviewable source is [data/eval/runtime_backend_comparison_snapshot.json](./data/eval/runtime_backend_comparison_snapshot.json); the full per-case report is generated locally and ignored by Git.
+
 ## Reproducible generated output
 
 This is not a hand-written example. The fields below were copied from the actual JSON produced by the public demo workflow with model downloads disabled:

@@ -21,7 +21,7 @@ from pdf_to_json_rag import cli as cli_module
 from pdf_to_json_rag import document_inventory as document_inventory_module
 from pdf_to_json_rag import intent_config as intent_config_module
 from pdf_to_json_rag import retrieval as retrieval_module
-from pdf_to_json_rag.answering import answer_from_chunks
+from pdf_to_json_rag.answering import EvidenceSentence, _should_abstain, answer_from_chunks
 from pdf_to_json_rag.chunking import chunk_document, normalize_reading_order, process_saved_document_to_chunks
 from pdf_to_json_rag.content_metadata import classify_block_metadata, infer_layout_signals
 from pdf_to_json_rag.document_facets import derive_document_facets
@@ -80,6 +80,31 @@ class CliPublicSurfaceTests(unittest.TestCase):
         )
         doc.save(path)
         doc.close()
+
+    def test_monoclonal_cell_culture_evidence_does_not_answer_clinical_prevention(self) -> None:
+        cell_culture_evidence = EvidenceSentence(
+            chunk_id="review-chunk-1",
+            page_start=1,
+            page_end=1,
+            section_title="Experimental studies",
+            sentence=(
+                "When human cell cultures are pretreated with monoclonal antibodies, "
+                "viral infection appears blocked."
+            ),
+            score=5.0,
+        )
+        direct_clinical_evidence = EvidenceSentence(
+            chunk_id="review-chunk-2",
+            page_start=2,
+            page_end=2,
+            section_title="Clinical evidence",
+            sentence="A clinical trial found monoclonal antibodies did not prevent common colds.",
+            score=5.0,
+        )
+
+        query = "Do monoclonal antibodies prevent the common cold?"
+        self.assertTrue(_should_abstain(query, [cell_culture_evidence]))
+        self.assertFalse(_should_abstain(query, [direct_clinical_evidence]))
 
     def _create_text_pdf(
         self,
@@ -2180,6 +2205,9 @@ class CliPublicSurfaceTests(unittest.TestCase):
         mode_results = {item["mode"]: item for item in report["mode_results"]}
         self.assertEqual(mode_results["baseline"]["runtime_signals"]["llm_used_case_count"], 0)
         self.assertEqual(mode_results["llm-synthesis"]["runtime_signals"]["llm_used_case_count"], 1)
+        self.assertGreater(mode_results["baseline"]["runtime_signals"]["avg_query_latency_ms"], 0)
+        self.assertGreater(mode_results["llm-synthesis"]["runtime_signals"]["mode_wall_seconds"], 0)
+        self.assertGreater(mode_results["baseline"]["case_results"][0]["runtime"]["query_latency_ms"], 0)
         self.assertTrue(report["all_pass"])
 
     def test_runtime_mode_comparison_all_cases_and_promotion_gate(self) -> None:

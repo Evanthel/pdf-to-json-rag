@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import datetime, timezone
 import os
 from pathlib import Path
 import re
+import statistics
 import tempfile
+import time
 from typing import Any
 
 from .answering import GroundedAnswer, answer_query_with_retrieval
@@ -2208,12 +2211,15 @@ def _evaluate_runtime_mode(
 ) -> dict[str, Any]:
     previous_env = _with_runtime_env(env_updates)
     try:
+        mode_started = time.perf_counter()
         retrieval_results: list[dict[str, Any]] = []
         answer_results: list[dict[str, Any]] = []
         case_results: list[dict[str, Any]] = []
         grounded_answers: list[GroundedAnswer] = []
         failed_case_ids: list[str] = []
+        query_latencies_ms: list[float] = []
         for case in cases:
+            query_started = time.perf_counter()
             grounded_answer = answer_query_with_retrieval(
                 query=case["query"],
                 index_dir=index_dir,
@@ -2221,6 +2227,8 @@ def _evaluate_runtime_mode(
                 k=k,
                 use_lightweight_rerank=True,
             )
+            query_latency_ms = (time.perf_counter() - query_started) * 1000.0
+            query_latencies_ms.append(query_latency_ms)
             grounded_answers.append(grounded_answer)
             retrieval_result = _retrieval_result_from_grounded_answer(
                 case=case,
@@ -2253,6 +2261,7 @@ def _evaluate_runtime_mode(
                         "answer_preview": _preview_text(str(answer_result.get("answer", "")), limit=240),
                     },
                     "runtime": {
+                        "query_latency_ms": round(query_latency_ms, 3),
                         "synthesis_runtime": grounded_answer.answer_trace.get("synthesis_runtime", {}),
                         "claim_alignment": grounded_answer.answer_trace.get("claim_alignment", {}),
                     },
@@ -2261,6 +2270,24 @@ def _evaluate_runtime_mode(
 
         summary = _summarize_retrieval_results(retrieval_results, answer_results)
         runtime_signals = _runtime_signal_summary(grounded_answers)
+        sorted_latencies = sorted(query_latencies_ms)
+        p95_index = max(0, min(len(sorted_latencies) - 1, math.ceil(len(sorted_latencies) * 0.95) - 1))
+        runtime_signals.update(
+            {
+                "latency_scope": "answer_query_with_retrieval; includes first-use model load in this process",
+                "mode_wall_seconds": round(time.perf_counter() - mode_started, 3),
+                "total_query_latency_ms": round(sum(query_latencies_ms), 3),
+                "avg_query_latency_ms": round(statistics.fmean(query_latencies_ms), 3)
+                if query_latencies_ms
+                else None,
+                "median_query_latency_ms": round(statistics.median(query_latencies_ms), 3)
+                if query_latencies_ms
+                else None,
+                "p95_query_latency_ms": round(sorted_latencies[p95_index], 3)
+                if sorted_latencies
+                else None,
+            }
+        )
         return {
             "mode": mode,
             "case_count": len(cases),
@@ -2274,6 +2301,7 @@ def _evaluate_runtime_mode(
                 "embedding_model": index_manifest.get("embedding_model"),
                 "embedding_fallback_reason": index_manifest.get("embedding_fallback_reason"),
                 "chunk_count": index_manifest.get("chunk_count"),
+                "benchmark_index_build_seconds": index_manifest.get("benchmark_index_build_seconds"),
             },
             "runtime_signals": runtime_signals,
             "case_results": case_results,
@@ -2417,20 +2445,37 @@ def run_runtime_mode_comparison(
     missing_case_ids = [case_id for case_id in selected_case_ids if case_id not in case_map]
     selected_cases = [case_map[case_id] for case_id in selected_case_ids if case_id in case_map]
 
-    index_dir = index_dir.expanduser().resolve()
     chunk_root = chunk_root.expanduser().resolve()
     with tempfile.TemporaryDirectory(prefix="pdf-to-json-rag-runtime-compare-") as workspace:
         workspace_path = Path(workspace)
-        mode_index_dirs: dict[str, Path] = {"baseline": index_dir, "cross-encoder": index_dir, "llm-synthesis": index_dir}
+        chunks = _load_all_chunk_records(chunk_root)
+        baseline_index_dir = workspace_path / "hash_baseline_index"
+        baseline_build_started = time.perf_counter()
+        previous_env = _with_runtime_env({"PDF_TO_JSON_RAG_EMBEDDING_BACKEND": "hash"})
+        try:
+            baseline_manifest = build_local_index(
+                chunks=chunks,
+                index_dir=baseline_index_dir,
+            )
+        finally:
+            _restore_runtime_env(previous_env)
+        baseline_manifest["benchmark_index_build_seconds"] = round(
+            time.perf_counter() - baseline_build_started,
+            3,
+        )
+        mode_index_dirs: dict[str, Path] = {
+            "baseline": baseline_index_dir,
+            "cross-encoder": baseline_index_dir,
+            "llm-synthesis": baseline_index_dir,
+        }
         mode_manifests: dict[str, dict[str, Any]] = {}
-        baseline_manifest_path = index_dir / "index_manifest.json"
-        mode_manifests["baseline"] = json.loads(baseline_manifest_path.read_text(encoding="utf-8"))
+        mode_manifests["baseline"] = baseline_manifest
         mode_manifests["cross-encoder"] = mode_manifests["baseline"]
         mode_manifests["llm-synthesis"] = mode_manifests["baseline"]
 
         if "sentence-transformers" in selected_modes:
-            chunks = _load_all_chunk_records(chunk_root)
             sentence_index_dir = workspace_path / "sentence_transformers_index"
+            sentence_build_started = time.perf_counter()
             previous_env = _with_runtime_env({"PDF_TO_JSON_RAG_EMBEDDING_BACKEND": "sentence-transformers"})
             try:
                 mode_manifests["sentence-transformers"] = build_local_index(
@@ -2439,6 +2484,10 @@ def run_runtime_mode_comparison(
                 )
             finally:
                 _restore_runtime_env(previous_env)
+            mode_manifests["sentence-transformers"]["benchmark_index_build_seconds"] = round(
+                time.perf_counter() - sentence_build_started,
+                3,
+            )
             mode_index_dirs["sentence-transformers"] = sentence_index_dir
 
         mode_envs = {
@@ -2506,6 +2555,8 @@ def run_runtime_mode_comparison(
         "unknown_modes": unknown_modes,
         "available_modes": list(RUNTIME_COMPARISON_MODES),
         "case_count": len(selected_cases),
+        "comparison_index_policy": "fresh hash and sentence-transformer indexes built from the same chunks",
+        "comparison_chunk_count": len(chunks),
         "mode_results": mode_results,
         "baseline_deltas": deltas,
         "promotion_gates": promotion_gates,
