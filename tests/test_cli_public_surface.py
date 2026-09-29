@@ -60,7 +60,7 @@ class CliPublicSurfaceTests(CliPublicSurfaceTestBase):
         self.assertTrue(payload["ok"])
         embedding = payload["result"]["embedding"]
         decision = payload["result"]["runtime_decision"]
-        self.assertEqual(payload["result"]["install_context"]["version"], "0.2.0")
+        self.assertEqual(payload["result"]["install_context"]["version"], "0.3.0")
         self.assertTrue(
             payload["result"]["install_context"]["module_path"].endswith("cli.py")
         )

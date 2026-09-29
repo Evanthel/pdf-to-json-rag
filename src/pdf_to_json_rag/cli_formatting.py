@@ -42,7 +42,7 @@ def _release_channel_recommendation(
         )
         return {
             "release_ready": True,
-            "suggested_tag": "v0.2.0",
+            "suggested_tag": f"v{__version__}",
             "why": reasons,
         }
     reasons: list[str] = []

@@ -35,6 +35,7 @@ The web interface and CLI share the same extraction, chunking, indexing, retriev
 ## Requirements and configuration
 
 - Python 3.10–3.13 is required. `curl` is needed only to download the reproducible public benchmark corpus.
+- The base install keeps deterministic hash retrieval available offline. Install the optional semantic backend with `python -m pip install '.[semantic]'`.
 - The Tesseract executable is optional and enables OCR fallback for scanned pages. Native-text PDFs work without it.
 - No API key, cloud account, or `.env` file is required. Runtime options are documented in the [CLI reference](./docs/CLI_REFERENCE.md).
 - The web workspace has no authentication and should remain bound to its default loopback address.

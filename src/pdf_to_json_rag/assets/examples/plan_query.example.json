@@ -1,6 +1,6 @@
 {
   "command": "plan-query",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "ok": true,
   "result": {
     "query": "Which file is most relevant for drought triggers?",
