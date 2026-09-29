@@ -50,6 +50,7 @@ class DocumentProcessingTests(CliPublicSurfaceTestBase):
             reading_order_index=1,
         )
         client = mock.Mock()
+        client.list_collections.return_value = []
         client.get_or_create_collection.return_value.add.side_effect = RuntimeError(
             "add failed"
         )
@@ -77,6 +78,45 @@ class DocumentProcessingTests(CliPublicSurfaceTestBase):
             build_local_index([chunk], index_dir=self.workspace / "failing-index")
 
         client.close.assert_called_once_with()
+
+    def test_build_local_index_only_deletes_an_existing_collection(self) -> None:
+        chunk = ChunkRecord(
+            doc_id="doc",
+            chunk_id="chunk-1",
+            source_pdf="demo.pdf",
+            text="Grounded content.",
+            page_start=1,
+            page_end=1,
+            reading_order_index=1,
+        )
+        client = mock.Mock()
+        client.list_collections.return_value = [
+            "other-collection",
+            types.SimpleNamespace(name="pdf_to_json_rag_mvp"),
+        ]
+
+        def embedder(texts: list[str]) -> list[list[float]]:
+            return [[0.0] * 384 for _ in texts]
+
+        with (
+            mock.patch.object(
+                indexing_module, "local_chroma_client", return_value=client
+            ),
+            mock.patch.object(
+                indexing_module,
+                "_load_embedder",
+                return_value=(
+                    embedder,
+                    {
+                        "embedding_backend": "hash-fallback",
+                        "embedding_model": "hash-384",
+                    },
+                ),
+            ),
+        ):
+            build_local_index([chunk], index_dir=self.workspace / "reset-index")
+
+        client.delete_collection.assert_called_once_with("pdf_to_json_rag_mvp")
 
     def test_retrieval_query_closes_chroma_client_on_failure(self) -> None:
         client = mock.Mock()

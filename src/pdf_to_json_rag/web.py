@@ -8,6 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address
 from importlib import resources
 import json
+import logging
 import os
 from pathlib import PurePosixPath
 import re
@@ -31,6 +32,7 @@ STATIC_FILES = {
 QUERY_PATH_RE = re.compile(r"^/api/documents/([^/]+)/query$")
 DOCUMENT_PATH_RE = re.compile(r"^/api/documents/([^/]+)$")
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+LOGGER = logging.getLogger(__name__)
 
 
 class WebServer(ThreadingHTTPServer):
@@ -272,6 +274,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         except WebServiceError as error:
             self._send_service_error(error)
         except Exception:
+            LOGGER.exception("Unhandled GET request failure for %s", path)
             self._send_json(
                 {"ok": False, "error": {"code": "internal_error", "message": "An internal server error occurred.", "details": {}}},
                 status=500,
@@ -308,6 +311,7 @@ class WebRequestHandler(BaseHTTPRequestHandler):
         except WebServiceError as error:
             self._send_service_error(error)
         except Exception:
+            LOGGER.exception("Unhandled POST request failure for %s", path)
             self._send_json(
                 {"ok": False, "error": {"code": "internal_error", "message": "An internal server error occurred.", "details": {}}},
                 status=500,

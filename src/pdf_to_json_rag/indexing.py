@@ -74,6 +74,19 @@ def close_chroma_client(client) -> None:
         clear_system_cache()
 
 
+def local_collection_names(client) -> set[str]:
+    """Return collection names across pre-1.0 and newer Chroma APIs."""
+    names: set[str] = set()
+    for item in client.list_collections():
+        if isinstance(item, str):
+            names.add(item)
+            continue
+        name = getattr(item, "name", None)
+        if isinstance(name, str):
+            names.add(name)
+    return names
+
+
 def _hash_embedding(text: str, dim: int = FALLBACK_EMBEDDING_DIM) -> list[float]:
     """Deterministic local fallback embedding when no model is available."""
     vector = np.zeros(dim, dtype=np.float32)
@@ -397,11 +410,8 @@ def build_local_index(
     embed_texts, embedder_info = _load_embedder()
     client = local_chroma_client(index_dir)
     try:
-        if reset:
-            try:
-                client.delete_collection(collection_name)
-            except Exception:
-                pass
+        if reset and collection_name in local_collection_names(client):
+            client.delete_collection(collection_name)
 
         collection = client.get_or_create_collection(
             name=collection_name,

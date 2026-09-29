@@ -194,6 +194,21 @@ class WebHttpContractTests(unittest.TestCase):
         payload = json.loads(raised.exception.read())
         self.assertEqual(payload["error"]["details"], {})
 
+    def test_unexpected_errors_are_logged_but_not_exposed(self) -> None:
+        def fail_unexpectedly(_doc_id: str) -> dict[str, object]:
+            raise RuntimeError("private parser diagnostic")
+
+        self.service.get_document = fail_unexpectedly
+        with self.assertLogs("pdf_to_json_rag.web", level="ERROR") as logs:
+            with self.assertRaises(HTTPError) as raised:
+                urlopen(self.base_url + "/api/documents/demo-document", timeout=5)
+
+        payload = json.loads(raised.exception.read())
+        self.assertEqual(payload["error"]["code"], "internal_error")
+        self.assertEqual(payload["error"]["details"], {})
+        self.assertNotIn("private parser diagnostic", json.dumps(payload))
+        self.assertIn("Unhandled GET request failure", "\n".join(logs.output))
+
 
 class RagWebServiceTests(unittest.TestCase):
     def setUp(self) -> None:
