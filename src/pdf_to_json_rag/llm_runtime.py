@@ -20,6 +20,7 @@ class PromptCommandResult:
     status: str
     stdout: str = ""
     stderr_preview: str = ""
+    stderr_char_count: int = 0
     returncode: int | None = None
     command_preview: str | None = None
     timeout_seconds: float | None = None
@@ -144,24 +145,28 @@ def _run_local_command_prompt(
             provider_kind=provider_kind,
         )
     except subprocess.TimeoutExpired as exc:
+        stderr = _subprocess_text(exc.stderr)
         return PromptCommandResult(
             configured=True,
             invoked=True,
             status="timeout",
             stdout=_subprocess_text(exc.stdout),
-            stderr_preview=_preview_text(_subprocess_text(exc.stderr)),
+            stderr_preview=_preview_text(stderr),
+            stderr_char_count=len(stderr),
             command_preview=args[0],
             timeout_seconds=timeout_seconds,
             provider_id=provider_id,
             provider_kind=provider_kind,
         )
 
+    stderr = completed.stderr or ""
     return PromptCommandResult(
         configured=True,
         invoked=True,
         status="ok" if completed.returncode == 0 else "nonzero_exit",
         stdout=completed.stdout.strip(),
-        stderr_preview=_preview_text(completed.stderr),
+        stderr_preview=_preview_text(stderr),
+        stderr_char_count=len(stderr),
         returncode=completed.returncode,
         command_preview=args[0],
         timeout_seconds=timeout_seconds,
@@ -191,5 +196,5 @@ def prompt_command_payload(result: PromptCommandResult) -> dict[str, object]:
         "provider_id": result.provider_id,
         "provider_kind": result.provider_kind,
         "stdout_char_count": len(result.stdout),
-        "stderr_preview": result.stderr_preview,
+        "stderr_char_count": result.stderr_char_count,
     }

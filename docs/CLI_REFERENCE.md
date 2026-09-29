@@ -59,7 +59,7 @@ Retrieval payloads include `rerank_backend` plus numeric rank signals in `retrie
 
 Evidence planning also exposes treatment sub-intents such as `treatment_null_effect` and `treatment_subgroup_benefit` when the query provides enough cues.
 
-Answer traces include `synthesis_prompt_contract`, which documents the LLM-ready context-only prompt boundary without invoking an LLM by default. Set `PDF_TO_JSON_RAG_LLM_COMMAND` to run an opt-in local synthesis command over stdin/stdout; `synthesis_runtime` reports whether it was configured, invoked, used, and which provider boundary handled it.
+Answer traces include `synthesis_prompt_contract`, which documents the LLM-ready context-only prompt boundary without invoking an LLM by default. Set `PDF_TO_JSON_RAG_LLM_COMMAND` to run an opt-in local synthesis command over stdin/stdout; `synthesis_runtime` reports whether it was configured, invoked, used, and which provider boundary handled it. Runtime payloads expose only the stderr character count, not stderr content, so wrapper diagnostics cannot accidentally publish credentials in JSON reports.
 
 Evaluation reports include an `llm_judge_prompt_contract` inside sampled `faithfulness_audit` records. Set `PDF_TO_JSON_RAG_JUDGE_COMMAND` to run an opt-in strict-JSON judge command; judge execution stays disabled by default. Judge output is parsed by the built-in strict JSON/fence parser.
 

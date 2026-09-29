@@ -240,6 +240,36 @@ class EvaluationRuntimeTests(CliPublicSurfaceTestBase):
         self.assertEqual(result.status, "timeout")
         self.assertEqual(result.stdout, "partial response")
         self.assertEqual(result.stderr_preview, "deadline exceeded")
+        self.assertEqual(result.stderr_char_count, len("deadline exceeded"))
+        payload = prompt_command_payload(result)
+        self.assertEqual(payload["stderr_char_count"], len("deadline exceeded"))
+        self.assertNotIn("stderr_preview", payload)
+
+    def test_prompt_provider_does_not_publish_stderr_content(self) -> None:
+        provider = provider_for_env_command("PDF_TO_JSON_RAG_TEST_LLM_COMMAND")
+        completed = subprocess.CompletedProcess(
+            args=["fake-llm"],
+            returncode=1,
+            stdout="",
+            stderr="Authorization: Bearer private-token-value",
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"PDF_TO_JSON_RAG_TEST_LLM_COMMAND": "fake-llm"},
+            ),
+            mock.patch(
+                "pdf_to_json_rag.llm_runtime.subprocess.run",
+                return_value=completed,
+            ),
+        ):
+            result = provider.run("hello")
+
+        payload = prompt_command_payload(result)
+        self.assertEqual(payload["status"], "nonzero_exit")
+        self.assertEqual(payload["stderr_char_count"], len(completed.stderr))
+        self.assertNotIn("stderr_preview", payload)
+        self.assertNotIn("private-token-value", str(payload))
 
     def test_faithfulness_contract_validation_gate_passes_on_valid_records(
         self,
