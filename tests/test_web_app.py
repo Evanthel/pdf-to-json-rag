@@ -9,6 +9,11 @@ import unittest
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+try:
+    import pymupdf as fitz
+except ImportError:  # pragma: no cover - compatibility with older PyMuPDF releases
+    import fitz
+
 from pdf_to_json_rag.config import ProjectPaths
 from pdf_to_json_rag.web import create_server
 from pdf_to_json_rag.web_service import RagWebService, WebServiceError, answer_view
@@ -227,6 +232,41 @@ class RagWebServiceTests(unittest.TestCase):
             self.service.ingest_pdf("notes.txt", b"plain text")
         with self.assertRaisesRegex(WebServiceError, "limit"):
             self.service.ingest_pdf("large.pdf", b"%PDF-" + b"x" * 40)
+
+    def test_rejects_pdf_over_web_page_limit(self) -> None:
+        document = fitz.open()
+        document.new_page()
+        document.new_page()
+        content = document.tobytes()
+        document.close()
+        service = RagWebService(
+            paths=self.paths,
+            max_upload_bytes=len(content) + 1,
+            max_page_count=1,
+        )
+
+        with self.assertRaisesRegex(WebServiceError, "1-page web limit") as raised:
+            service._validate_pdf_resource_limits(content)
+
+        self.assertEqual(raised.exception.code, "pdf_page_limit")
+        self.assertEqual(raised.exception.status, 413)
+
+    def test_rejects_pdf_page_over_render_pixel_limit(self) -> None:
+        document = fitz.open()
+        document.new_page(width=2_000, height=2_000)
+        content = document.tobytes()
+        document.close()
+        service = RagWebService(
+            paths=self.paths,
+            max_upload_bytes=len(content) + 1,
+            max_page_render_pixels=1_000_000,
+        )
+
+        with self.assertRaisesRegex(WebServiceError, "too large to render") as raised:
+            service._validate_pdf_resource_limits(content)
+
+        self.assertEqual(raised.exception.code, "pdf_page_too_large")
+        self.assertEqual(raised.exception.details, {"page_num": 1})
 
     def test_lists_saved_documents_with_compact_diagnostics(self) -> None:
         payload = {

@@ -6,10 +6,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 from threading import RLock
 from typing import Any
+
+try:
+    import pymupdf as fitz
+except ImportError:  # pragma: no cover - compatibility with older PyMuPDF releases
+    import fitz
 
 from .answering import GroundedAnswer, answer_query_with_retrieval
 from .chunking import process_saved_document_to_chunks
@@ -19,6 +25,9 @@ from .indexing import build_local_index, load_chunk_records
 
 
 DEFAULT_MAX_UPLOAD_BYTES = 100 * 1024 * 1024
+DEFAULT_MAX_PAGE_COUNT = 500
+DEFAULT_MAX_PAGE_RENDER_PIXELS = 50_000_000
+OCR_PREFLIGHT_RENDER_SCALE = 2.0
 DOC_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,199}$")
 
 
@@ -81,6 +90,8 @@ class RagWebService:
 
     paths: ProjectPaths = PATHS
     max_upload_bytes: int = DEFAULT_MAX_UPLOAD_BYTES
+    max_page_count: int = DEFAULT_MAX_PAGE_COUNT
+    max_page_render_pixels: int = DEFAULT_MAX_PAGE_RENDER_PIXELS
     _pipeline_lock: RLock = field(default_factory=RLock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -122,6 +133,55 @@ class RagWebService:
         digest = hashlib.sha256(content).hexdigest()[:10]
         return candidate.with_name(f"{candidate.stem}-{digest}.pdf")
 
+    def _validate_pdf_resource_limits(self, content: bytes) -> None:
+        try:
+            pdf_document = fitz.open(stream=content, filetype="pdf")
+        except Exception as exc:
+            raise WebServiceError(
+                "invalid_pdf",
+                "The selected file is not a readable PDF.",
+                status=422,
+            ) from exc
+
+        with pdf_document:
+            if pdf_document.needs_pass:
+                raise WebServiceError(
+                    "password_protected_pdf",
+                    "Password-protected PDFs are not supported.",
+                    status=422,
+                )
+            page_count = pdf_document.page_count
+            if page_count <= 0:
+                raise WebServiceError(
+                    "empty_pdf",
+                    "The selected PDF has no pages.",
+                    status=422,
+                )
+            if page_count > self.max_page_count:
+                raise WebServiceError(
+                    "pdf_page_limit",
+                    f"The PDF exceeds the {self.max_page_count}-page web limit.",
+                    status=413,
+                )
+
+            for page_index in range(page_count):
+                page_rect = pdf_document.load_page(page_index).rect
+                rendered_width = float(page_rect.width) * OCR_PREFLIGHT_RENDER_SCALE
+                rendered_height = float(page_rect.height) * OCR_PREFLIGHT_RENDER_SCALE
+                rendered_pixels = rendered_width * rendered_height
+                if (
+                    not math.isfinite(rendered_pixels)
+                    or rendered_width <= 0
+                    or rendered_height <= 0
+                    or rendered_pixels > self.max_page_render_pixels
+                ):
+                    raise WebServiceError(
+                        "pdf_page_too_large",
+                        "A PDF page is too large to render safely in the web workspace.",
+                        status=413,
+                        details={"page_num": page_index + 1},
+                    )
+
     def ingest_pdf(self, filename: str, content: bytes) -> dict[str, object]:
         """Save and process a PDF through the canonical local pipeline."""
         if not content:
@@ -138,6 +198,7 @@ class RagWebService:
                 "The selected file does not appear to be a valid PDF.",
                 status=415,
             )
+        self._validate_pdf_resource_limits(content)
 
         with self._pipeline_lock:
             pdf_path = self._input_path(filename, content)

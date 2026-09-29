@@ -23,7 +23,7 @@ The interface uses the same `PDF_TO_JSON_RAG_DATA_DIR` as the CLI. Every documen
 
 ## User flow
 
-1. Drop or select a PDF up to 100 MB.
+1. Drop or select a PDF up to 100 MB and 500 pages. Pages that would exceed the OCR render-pixel safety limit are rejected before processing.
 2. The backend stores it under `data/input`, then runs the existing extraction, chunking, and indexing pipeline.
 3. Ask a question against the active document.
 4. Review the answer, page citations, retrieved fragments, and extraction diagnostics.
