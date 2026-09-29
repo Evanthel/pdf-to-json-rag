@@ -32,6 +32,14 @@ pdf-to-json-rag run-workflow --pdf /path/to/file.pdf --query "What does this fil
 
 The web interface and CLI share the same extraction, chunking, indexing, retrieval, and answering pipeline. The browser adds a focused document library and quality inspector; it is not a separate implementation.
 
+## Requirements and configuration
+
+- Python 3.10–3.13 is required. `curl` is needed only to download the reproducible public benchmark corpus.
+- The Tesseract executable is optional and enables OCR fallback for scanned pages. Native-text PDFs work without it.
+- No API key, cloud account, or `.env` file is required. Runtime options are documented in the [CLI reference](./docs/CLI_REFERENCE.md).
+- The web workspace has no authentication and should remain bound to its default loopback address.
+- `PDF_TO_JSON_RAG_LLM_COMMAND` and `PDF_TO_JSON_RAG_JUDGE_COMMAND` execute a local command configured by the user; use only trusted commands and wrappers.
+
 ## Architecture
 
 ![PDF to structured JSON to a grounded answer with a page and chunk citation](./docs/images/pdf-to-json-rag-flow.png)
@@ -153,6 +161,7 @@ Extraction, OCR routing, chunking, retrieval, and answer contracts are shared by
 - [Public benchmark corpus](./docs/PUBLIC_CORPUS.md) — reviewed, licensed PDFs and the required CI shard
 - [Project details](./docs/PROJECT_DETAILS.md) — complete capabilities, workflow, evaluation gates, and limitations
 - [Roadmap](./ROADMAP.md) — focused next steps and explicit non-goals
+- [Security policy](./SECURITY.md) — trust boundaries, reporting, and reviewed dependency exceptions
 - [Changelog](./CHANGELOG.md) — public release highlights and validation snapshots
 
 ## Lineage

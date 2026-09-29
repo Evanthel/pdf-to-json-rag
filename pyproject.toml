@@ -23,6 +23,10 @@ dependencies = [
   "numpy",
 ]
 
+[project.urls]
+Repository = "https://github.com/Evanthel/pdf-to-json-rag"
+Issues = "https://github.com/Evanthel/pdf-to-json-rag/issues"
+
 [project.optional-dependencies]
 semantic = [
   "sentence-transformers",
