@@ -34,6 +34,10 @@ test = [
 typecheck = [
   "mypy>=1.18,<2",
 ]
+quality = [
+  "pip-audit>=2.10,<3",
+  "ruff>=0.16,<1",
+]
 
 [project.scripts]
 pdf-to-json-rag = "pdf_to_json_rag.cli:main"
