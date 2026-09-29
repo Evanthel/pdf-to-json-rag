@@ -398,7 +398,7 @@ def _run_installed_readme_flow(
             "--pdf",
             str(demo_pdf),
             "--query",
-            "What does this file cover?",
+            "What kind of document is this?",
             "--json",
         ],
     )

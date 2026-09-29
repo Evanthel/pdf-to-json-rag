@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Streamlined the public documentation around the README, focused technical references, and a concise roadmap; removed the internal sprint log and long-form project plan.
 - Added a strict incremental mypy gate for eight small, stable core modules, with a declared `typecheck` dependency group for reproducible local and CI runs.
 - Added subprocess-aware branch coverage to Python 3.13 CI, with a measured 56.4% Ubuntu baseline, a 56% non-regression gate, and an uploaded XML report.
 - Added controlled hash vs sentence-transformer vs cross-encoder comparisons with fresh indexes, per-query latency statistics, model activation checks, and a compact tracked snapshot.

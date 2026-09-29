@@ -99,7 +99,7 @@ Use a fresh `PDF_TO_JSON_RAG_DATA_DIR` for isolated quickstart and release check
 
 ## Evaluation and release gates
 
-The checked-in broad benchmark currently records 77/77 retrieval cases and 77/77 answer-faithfulness cases, with Recall@5 1.000 and MRR 1.000. These are reproducible regression results on maintained fixtures, not evidence of universal PDF performance. The tracked report is [`data/eval/mvp_eval_report.json`](../data/eval/mvp_eval_report.json).
+The latest accepted broad benchmark records 77/77 retrieval cases and 77/77 answer-faithfulness cases, with Recall@5 1.000 and MRR 1.000. These are reproducible regression results on maintained fixtures, not evidence of universal PDF performance. The cases are tracked in [`data/eval/mvp_eval_cases.json`](../data/eval/mvp_eval_cases.json); `evaluate-mvp` regenerates the full local report under `data/eval/`.
 
 The evaluation surface includes:
 
@@ -135,14 +135,25 @@ PYTHONPATH=src python -m pdf_to_json_rag evaluate-mvp --top-k 5 --json
 
 The [CLI reference](./CLI_REFERENCE.md) documents focused shards, runtime comparisons, real-PDF checks, corpus sampling, saved snapshots, and compact output contracts.
 
+### Focused development evaluation
+
+Use the smaller regression surface while changing retrieval, planning, or answer assembly:
+
+```bash
+pdf-to-json-rag evaluate-regression --shard query_planning_core --json
+pdf-to-json-rag evaluate-regression --shard unknown_document_semantics_core --json
+```
+
+The maintained cases are tracked in `data/eval/mvp_eval_cases.json` and `data/eval/faithfulness_audit_cases.json`. Full and focused reports generated during local development remain under `data/eval/`; only reviewed, compact snapshots are committed. This evaluation layer is intended for regression and slice-level stability checks, not as the first-time onboarding path.
+
 ## Key files
 
 - `src/pdf_to_json_rag/` — extraction, chunking, retrieval, answering, web, and evaluation code.
 - `docs/CLI_QUICKSTART.md` — shortest packaged CLI path.
 - `docs/CLI_REFERENCE.md` — user-facing command and output reference.
 - `docs/WEB_INTERFACE.md` — local web workspace and HTTP surface.
-- `project-plan.md` — master plan and current roadmap.
-- `DEVELOPMENT_LOG.md` — implementation history and checked milestones.
+- `ROADMAP.md` — focused next steps and explicit non-goals.
+- `CHANGELOG.md` — public release history and validation highlights.
 - `examples/` — public-safe demo inputs and outputs.
 - `data/eval/` — benchmark cases and generated reports.
 
@@ -164,7 +175,7 @@ The [CLI reference](./CLI_REFERENCE.md) documents focused shards, runtime compar
 
 ## Reference material
 
-This repository was brainstormed with ideas from [DeepLearning.AI Skill Builder](https://skillbuilder.deeplearning.ai/), ChatGPT 5.4, and Google's LangExtract architecture. It does not vendor or copy LangExtract.
+The architecture draws on concepts from [DeepLearning.AI Skill Builder](https://skillbuilder.deeplearning.ai/) and Google's LangExtract project. It does not vendor or copy LangExtract.
 
 Earlier in development, a small set of notebooks from [Document AI: From OCR to Agentic Doc Extraction](https://learn.deeplearning.ai/courses/document-ai-from-ocr-to-agentic-doc-extraction/information) was copied into a temporary `references/` directory and used only as design input for OCR fallback planning, reading order and layout handling, schema design, and grounding-aware RAG flow. Those notebooks were removed from the final repository.
 

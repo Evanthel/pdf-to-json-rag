@@ -61,7 +61,7 @@ PyMuPDF remains the canonical source for reading order, coordinates, and citatio
 | Maintained evaluation suite | **77 / 77 retrieval · 77 / 77 answer faithfulness · Recall@5 1.000 · MRR 1.000** | Checked-in regression cases for retrieval and grounded answers |
 | Required public-PDF CI shard | **6 / 6 cases · Recall@5 1.000 · MRR 1.000 · evidence coverage 1.000** | Three downloaded and SHA-256-verified public PDFs processed through extraction, chunking, indexing, and retrieval |
 
-These are reproducible regression results, not a claim of universal PDF performance. The tracked sources are [data/eval/mvp_eval_report.json](./data/eval/mvp_eval_report.json) and the [public-PDF benchmark snapshot](./data/eval/public_pdf_benchmark_snapshot.json); methodology and additional gates are documented in [docs/PROJECT_DETAILS.md](./docs/PROJECT_DETAILS.md#evaluation-and-release-gates).
+These are reproducible regression results, not a claim of universal PDF performance. The maintained-suite cases live in [data/eval/mvp_eval_cases.json](./data/eval/mvp_eval_cases.json) and are rerun with `evaluate-mvp`; the required public shard has a tracked [benchmark snapshot](./data/eval/public_pdf_benchmark_snapshot.json). Methodology and additional gates are documented in [docs/PROJECT_DETAILS.md](./docs/PROJECT_DETAILS.md#evaluation-and-release-gates).
 
 ## Runtime trade-offs
 
@@ -85,7 +85,7 @@ This is not a hand-written example. The fields below were copied from the actual
 pdf-to-json-rag create-demo-pdf --path /tmp/demo-safety-guide.pdf --json
 pdf-to-json-rag run-workflow \
   --pdf /tmp/demo-safety-guide.pdf \
-  --query "What does this file cover?" \
+  --query "What kind of document is this?" \
   --json
 ```
 
@@ -102,8 +102,8 @@ pdf-to-json-rag run-workflow \
     }
   },
   "answer": {
-    "query": "What does this file cover?",
-    "answer": "Demo Safety Guide is a guidance note. Its main purpose is procedural guidance. It is aimed at practitioners. It covers demo, safety, purpose, provide."
+    "query": "What kind of document is this?",
+    "answer": "Demo Safety Guide is a guidance note. Its main purpose is procedural guidance."
   },
   "quality_profile_summary": {
     "overall_status": "pass"
@@ -131,7 +131,7 @@ PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py'
 pdf-to-json-rag package-check --json
 ```
 
-See [docs/WEB_INTERFACE.md](./docs/WEB_INTERFACE.md) for development startup, local storage behavior, and the HTTP API. The longer implementation history and maintainer notes live in [DEVELOPMENT_LOG.md](./DEVELOPMENT_LOG.md).
+See [docs/WEB_INTERFACE.md](./docs/WEB_INTERFACE.md) for development startup, local storage behavior, and the HTTP API.
 
 ## Three core capabilities
 
@@ -152,6 +152,7 @@ Extraction, OCR routing, chunking, retrieval, and answer contracts are shared by
 - [Web interface](./docs/WEB_INTERFACE.md) — local server, storage, user flow, and HTTP API
 - [Public benchmark corpus](./docs/PUBLIC_CORPUS.md) — reviewed, licensed PDFs and the required CI shard
 - [Project details](./docs/PROJECT_DETAILS.md) — complete capabilities, workflow, evaluation gates, and limitations
+- [Roadmap](./ROADMAP.md) — focused next steps and explicit non-goals
 - [Changelog](./CHANGELOG.md) — public release highlights and validation snapshots
 
 ## Lineage
