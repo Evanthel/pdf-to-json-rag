@@ -66,6 +66,7 @@ The server listens on `127.0.0.1:8765` by default and uses the same `PDF_TO_JSON
 The default `auto` backend uses a cached sentence-transformer model when available and otherwise falls back to deterministic hash embeddings without downloading model weights.
 
 ```bash
+python -m pip install '.[semantic]'
 export PDF_TO_JSON_RAG_EMBEDDING_BACKEND=sentence-transformers
 export PDF_TO_JSON_RAG_SENTENCE_TRANSFORMERS_MODEL=/path/to/local/all-MiniLM-L6-v2
 pdf-to-json-rag runtime-check --json

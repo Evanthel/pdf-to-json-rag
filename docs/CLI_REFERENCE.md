@@ -32,6 +32,7 @@ PYTHONPATH=src python -m pdf_to_json_rag help
 Optional stronger local embeddings:
 
 ```bash
+python -m pip install '.[semantic]'
 export PDF_TO_JSON_RAG_EMBEDDING_BACKEND=sentence-transformers
 export PDF_TO_JSON_RAG_SENTENCE_TRANSFORMERS_MODEL=/path/to/local/all-MiniLM-L6-v2
 pdf-to-json-rag runtime-check --json
@@ -44,6 +45,7 @@ The default is `auto`: use sentence-transformers only when the local model is re
 Optional cross-encoder reranking:
 
 ```bash
+python -m pip install '.[semantic]'
 export PDF_TO_JSON_RAG_USE_CROSS_ENCODER=1
 export PDF_TO_JSON_RAG_CROSS_ENCODER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 ```

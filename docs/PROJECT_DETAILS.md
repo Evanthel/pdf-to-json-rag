@@ -56,6 +56,7 @@ The baseline remains heuristic-first. It carries block structure and layout sign
 The default embedding backend is `auto`: it uses a cached local sentence-transformer model when available and otherwise falls back to deterministic hash embeddings without downloading a model. To request a specific local model:
 
 ```bash
+python -m pip install '.[semantic]'
 export PDF_TO_JSON_RAG_EMBEDDING_BACKEND=sentence-transformers
 export PDF_TO_JSON_RAG_SENTENCE_TRANSFORMERS_MODEL=/path/to/local/all-MiniLM-L6-v2
 pdf-to-json-rag runtime-check --json

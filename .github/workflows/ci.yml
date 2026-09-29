@@ -103,13 +103,13 @@ jobs:
           key: uv-${{ runner.os }}-py3.13-${{ hashFiles('uv.lock') }}
 
       - name: Install locked quality environment
-        run: uv sync --frozen --extra typecheck --extra quality
+        run: uv sync --frozen --extra semantic --extra typecheck --extra quality
 
       - name: Run Ruff
-        run: uv run --frozen --extra typecheck --extra quality ruff check .
+        run: uv run --frozen --extra semantic --extra typecheck --extra quality ruff check .
 
       - name: Run mypy on the incremental strict scope
-        run: uv run --frozen --extra typecheck --extra quality python -m mypy
+        run: uv run --frozen --extra semantic --extra typecheck --extra quality python -m mypy
 
       - name: Run pip-audit
         # ChromaDB has no patched release for these server-side authorization/RCE
@@ -117,7 +117,7 @@ jobs:
         # it does not expose Chroma's authenticated server or collection-update API.
         # Keep the exceptions narrow so every other advisory still fails CI.
         run: >-
-          uv run --frozen --extra typecheck --extra quality python -m pip_audit --local --skip-editable
+          uv run --frozen --extra semantic --extra typecheck --extra quality python -m pip_audit --local --skip-editable
           --ignore-vuln CVE-2026-45830
           --ignore-vuln CVE-2026-45831
           --ignore-vuln CVE-2026-45833
