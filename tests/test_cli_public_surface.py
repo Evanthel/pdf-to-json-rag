@@ -2091,6 +2091,30 @@ class CliPublicSurfaceTests(unittest.TestCase):
         self.assertEqual(payload["provider_id"], "local_command")
         self.assertEqual(payload["provider_kind"], "subprocess")
 
+    def test_prompt_provider_normalizes_timeout_byte_streams(self) -> None:
+        provider = provider_for_env_command("PDF_TO_JSON_RAG_TEST_LLM_COMMAND")
+        timeout = subprocess.TimeoutExpired(
+            cmd=["fake-llm"],
+            timeout=1.0,
+            output=b"partial response",
+            stderr=b"deadline exceeded",
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {
+                    "PDF_TO_JSON_RAG_TEST_LLM_COMMAND": "fake-llm",
+                    "PDF_TO_JSON_RAG_LLM_TIMEOUT_SECONDS": "1",
+                },
+            ),
+            mock.patch("pdf_to_json_rag.llm_runtime.subprocess.run", side_effect=timeout),
+        ):
+            result = provider.run("hello")
+
+        self.assertEqual(result.status, "timeout")
+        self.assertEqual(result.stdout, "partial response")
+        self.assertEqual(result.stderr_preview, "deadline exceeded")
+
     def test_answer_trace_includes_claim_alignment_status(self) -> None:
         chunks = [
             ChunkRecord(

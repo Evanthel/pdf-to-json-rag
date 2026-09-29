@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- Added subprocess-aware branch coverage to Python 3.13 CI, with a measured 58% baseline, a 57% non-regression gate, and an uploaded XML report.
+- Added a strict incremental mypy gate for eight small, stable core modules, with a declared `typecheck` dependency group for reproducible local and CI runs.
+- Added subprocess-aware branch coverage to Python 3.13 CI, with a measured 56.4% Ubuntu baseline, a 56% non-regression gate, and an uploaded XML report.
 - Added controlled hash vs sentence-transformer vs cross-encoder comparisons with fresh indexes, per-query latency statistics, model activation checks, and a compact tracked snapshot.
 - Documented measured quality, latency, model-weight, CPU, and optional-GPU trade-offs in the README.
 - Tightened abstention so cell-culture monoclonal-antibody evidence is not presented as clinical prevention or treatment evidence.

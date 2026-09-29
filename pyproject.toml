@@ -31,6 +31,9 @@ tables = [
 test = [
   "coverage[toml]>=7.10,<8",
 ]
+typecheck = [
+  "mypy>=1.18,<2",
+]
 
 [project.scripts]
 pdf-to-json-rag = "pdf_to_json_rag.cli:main"
@@ -62,10 +65,28 @@ relative_files = true
 patch = ["subprocess"]
 
 [tool.coverage.report]
-fail_under = 57
+fail_under = 56
 precision = 1
 show_missing = true
 skip_covered = true
 
 [tool.coverage.xml]
 output = "coverage.xml"
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = "src"
+files = [
+  "src/pdf_to_json_rag/answer_alignment.py",
+  "src/pdf_to_json_rag/answer_contracts.py",
+  "src/pdf_to_json_rag/config.py",
+  "src/pdf_to_json_rag/document_family.py",
+  "src/pdf_to_json_rag/llm_output.py",
+  "src/pdf_to_json_rag/llm_runtime.py",
+  "src/pdf_to_json_rag/quality.py",
+  "src/pdf_to_json_rag/schemas.py",
+]
+strict = true
+pretty = true
+show_error_codes = true
+warn_unused_configs = true

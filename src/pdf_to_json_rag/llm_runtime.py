@@ -28,8 +28,11 @@ class PromptCommandResult:
 
 
 class PromptRuntimeProvider(Protocol):
-    provider_id: str
-    provider_kind: str
+    @property
+    def provider_id(self) -> str: ...
+
+    @property
+    def provider_kind(self) -> str: ...
 
     def run(self, prompt: str) -> PromptCommandResult:
         """Run one prompt and return public-safe runtime details."""
@@ -55,6 +58,12 @@ def _preview_text(text: str, limit: int = 500) -> str:
     if len(normalized) <= limit:
         return normalized
     return normalized[: limit - 3] + "..."
+
+
+def _subprocess_text(value: str | bytes | None) -> str:
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+    return value or ""
 
 
 def _runtime_timeout_seconds() -> float:
@@ -139,8 +148,8 @@ def _run_local_command_prompt(
             configured=True,
             invoked=True,
             status="timeout",
-            stdout=exc.stdout or "",
-            stderr_preview=_preview_text(exc.stderr or ""),
+            stdout=_subprocess_text(exc.stdout),
+            stderr_preview=_preview_text(_subprocess_text(exc.stderr)),
             command_preview=args[0],
             timeout_seconds=timeout_seconds,
             provider_id=provider_id,
