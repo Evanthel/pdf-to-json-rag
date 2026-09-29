@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -34,12 +35,47 @@ def load_manifest(path: Path) -> dict[str, object]:
     return payload
 
 
-def download_document(document: dict[str, object], output_dir: Path, overwrite: bool) -> dict[str, object]:
-    document_id = str(document["id"])
+def _validated_download_target(
+    document: dict[str, object],
+    output_dir: Path,
+) -> tuple[str, str, Path]:
+    document_id = str(document["id"]).strip()
     filename = str(document["filename"])
+    if not document_id:
+        raise ValueError("Manifest document ID must not be empty")
+    if (
+        not filename
+        or filename != filename.strip()
+        or len(filename) > 255
+        or filename in {".", ".."}
+        or "/" in filename
+        or "\\" in filename
+        or Path(filename).name != filename
+        or Path(filename).suffix.lower() != ".pdf"
+    ):
+        raise ValueError(f"Invalid manifest filename for {document_id}")
+
+    download_url = str(document["download_url"]).strip()
+    parsed_url = urlparse(download_url)
+    if (
+        parsed_url.scheme.lower() != "https"
+        or not parsed_url.hostname
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+    ):
+        raise ValueError(f"Invalid HTTPS download URL for {document_id}")
+
+    output_root = output_dir.expanduser().resolve()
+    target = (output_root / filename).resolve()
+    if target.parent != output_root or not target.is_relative_to(output_root):
+        raise ValueError(f"Download target escapes output directory: {filename}")
+    return document_id, download_url, target
+
+
+def download_document(document: dict[str, object], output_dir: Path, overwrite: bool) -> dict[str, object]:
+    document_id, download_url, target = _validated_download_target(document, output_dir)
     expected_sha256 = str(document["sha256"])
     expected_bytes = int(document["bytes"])
-    target = output_dir / filename
 
     if target.exists() and not overwrite:
         actual_sha256 = sha256_file(target)
@@ -66,6 +102,10 @@ def download_document(document: dict[str, object], output_dir: Path, overwrite: 
                 curl,
                 "--fail",
                 "--location",
+                "--proto",
+                "=https",
+                "--proto-redir",
+                "=https",
                 "--silent",
                 "--show-error",
                 "--retry",
@@ -77,7 +117,8 @@ def download_document(document: dict[str, object], output_dir: Path, overwrite: 
                 USER_AGENT,
                 "--output",
                 str(temporary),
-                str(document["download_url"]),
+                "--url",
+                download_url,
             ],
             check=True,
         )
