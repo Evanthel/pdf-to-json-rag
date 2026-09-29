@@ -19,7 +19,7 @@ dependencies = [
   "pytesseract",
   "Pillow",
   "pydantic",
-  "chromadb<1.0.0",
+  "chromadb<2.0.0",
   "numpy",
 ]
 
