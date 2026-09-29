@@ -38,7 +38,7 @@ test = [
   "coverage[toml]>=7.10,<8",
 ]
 typecheck = [
-  "mypy>=1.18,<2",
+  "mypy>=1.18,<3",
 ]
 quality = [
   "pip-audit>=2.10,<3",
