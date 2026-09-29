@@ -20,6 +20,8 @@ dependencies = [
   "Pillow",
   "pydantic",
   "chromadb<1.0.0",
+  # ONNX Runtime 1.21+ can SIGILL on part of the hosted x86 runner fleet.
+  "onnxruntime>=1.20.1,<1.21",
   "numpy",
 ]
 
