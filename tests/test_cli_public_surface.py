@@ -46,7 +46,7 @@ class CliPublicSurfaceTests(CliPublicSurfaceTestBase):
             if item["name"] == "pdf_inspector_available"
         )
         self.assertTrue(inspector_check["passed"])
-        self.assertEqual(inspector_check["details"]["version"], "0.2.6")
+        self.assertEqual(inspector_check["details"]["version"], "0.2.7")
         self.assertEqual(inspector_check["details"]["requested_mode"], "assist")
         self.assertEqual(inspector_check["details"]["effective_mode"], "assist")
         self.assertEqual(result["runtime"]["embedding"]["requested_backend"], "auto")
@@ -349,7 +349,7 @@ class CliPublicSurfaceTests(CliPublicSurfaceTestBase):
         self.assertIn("pdf_inspector", inspect_payload["result"]["extraction_summary"])
         self.assertEqual(
             inspect_payload["result"]["extraction_summary"]["pdf_inspector"]["version"],
-            "0.2.6",
+            "0.2.7",
         )
         self.assertIn("processing_diagnostics", inspect_payload["result"])
         self.assertFalse(

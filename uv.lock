@@ -3018,15 +3018,15 @@ wheels = [
 
 [[package]]
 name = "pdf-inspector"
-version = "0.2.6"
+version = "0.2.7"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/8d/7a/525ee06cad5c46d8aa7357c15b8f72c60e803246f3b7e24523e602f01f6d/pdf_inspector-0.2.6.tar.gz", hash = "sha256:5bb387f39bf7a93b02b49188b670b9798f8ccc7e58f68eee5883a512aa05ceb2", size = 1481660, upload-time = "2026-07-31T23:16:55.116Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/29/96/8c3f0ec2e6cfece773851c921d9711e9f782de479776db0ab6ab36869dca/pdf_inspector-0.2.7.tar.gz", hash = "sha256:a8f489c6510809788ca57a510e440f7be7a6743e8845ab2aa9a32a918db8a6cb", size = 1554211, upload-time = "2026-08-10T21:38:02.162Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8c/dc/9963c292151dd82678dddb63e1c640ec420e37d400f304dca2780c6d11a3/pdf_inspector-0.2.6-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:c935a354facbfb935e88cb4f3f60fd158402f2af661c1a25a3da328eb21f19fb", size = 2719559, upload-time = "2026-07-31T23:16:46.721Z" },
-    { url = "https://files.pythonhosted.org/packages/72/70/2049766fec20c2ee6c01776cc2b7b8599fc9cf2d48e8940419600f65d4a0/pdf_inspector-0.2.6-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:d2b2aaa95b242da38630bbd0644ffe9a929466f9c4e6406d6f1957b59b413d08", size = 2630319, upload-time = "2026-07-31T23:16:48.871Z" },
-    { url = "https://files.pythonhosted.org/packages/45/f3/be670e07df2eb57a1adaeb63b1011d17061fd3036370d9f903984eda94e4/pdf_inspector-0.2.6-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:79ba33b224029b68edbd30e7f6dc034f730663749ba0bea12e5873b31435ca28", size = 2808903, upload-time = "2026-07-31T23:16:50.368Z" },
-    { url = "https://files.pythonhosted.org/packages/59/af/be72ab2bd310b6532e4311cf06175eb722802ccea29dbd9281f66c645bd8/pdf_inspector-0.2.6-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:df76dd100504b705ce92ef2c668f152f05277d942abd94a7d3f252cb5448d56d", size = 2903593, upload-time = "2026-07-31T23:16:51.906Z" },
-    { url = "https://files.pythonhosted.org/packages/84/8a/22e2bf7413444036138f55a0c9f2b6420f7ef54b6a044755f4dbb3a7395b/pdf_inspector-0.2.6-cp38-abi3-win_amd64.whl", hash = "sha256:89814af887c5ff90f013702ba285ec8a4c5ae4e2ccbdb948f3e421f7c4b4f89d", size = 2550798, upload-time = "2026-07-31T23:16:53.64Z" },
+    { url = "https://files.pythonhosted.org/packages/89/48/f0c647da22ff722801b7cc0a22c860216a36d11123df8893ef451f3f9e26/pdf_inspector-0.2.7-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:10d0f376516079e28d4ec0019cb05bd3cc44ef3ca26d6930e533b34568a01824", size = 2842614, upload-time = "2026-08-10T21:37:54.623Z" },
+    { url = "https://files.pythonhosted.org/packages/88/9f/a285b3df8671bffa0786c18561582e57f6739516d244e53dc21d6120217a/pdf_inspector-0.2.7-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:403b06d9c0f79d9726d79a5e2fd4040e4b94d40c6934b29011970ae74f8aef7d", size = 2748553, upload-time = "2026-08-10T21:37:56.19Z" },
+    { url = "https://files.pythonhosted.org/packages/57/a3/f48d011edb877ec9efd6dbc6735657e79851a8880692ae3e9c76f93b4030/pdf_inspector-0.2.7-cp38-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:698da59a485046738a6d4e4f2b66d6d8fd1d4e5d7c0080b2f62aa9d9aa33d020", size = 2926727, upload-time = "2026-08-10T21:37:57.72Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/f2/1ac674e0867ed43d0f6e77507967f745af1d2f38fbced715dfbf51601a61/pdf_inspector-0.2.7-cp38-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:d78158f687a44c692779dbfa6dd93fdb7e6f6b51a9f00b5fb354d4b586378ee7", size = 3030065, upload-time = "2026-08-10T21:37:59.029Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/77/a8540401c9817d7364a3f0eb066927eb0a49f979e4e46a5a002ebf8b7706/pdf_inspector-0.2.7-cp38-abi3-win_amd64.whl", hash = "sha256:189adb697198778723874deb04fe6d0c1915aa00484d91fe77ad327e4d14cddb", size = 2674260, upload-time = "2026-08-10T21:38:00.704Z" },
 ]
 
 [[package]]
@@ -3071,7 +3071,7 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'typecheck'", specifier = ">=1.18,<2" },
     { name = "numpy" },
     { name = "onnxruntime", specifier = ">=1.20.1,<1.21" },
-    { name = "pdf-inspector", specifier = "==0.2.6" },
+    { name = "pdf-inspector", specifier = "==0.2.7" },
     { name = "pdfplumber", marker = "extra == 'tables'" },
     { name = "pillow" },
     { name = "pip-audit", marker = "extra == 'quality'", specifier = ">=2.10,<3" },

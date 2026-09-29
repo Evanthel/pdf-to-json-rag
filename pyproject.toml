@@ -15,7 +15,7 @@ authors = [
 ]
 dependencies = [
   "PyMuPDF",
-  "pdf-inspector==0.2.6",
+  "pdf-inspector==0.2.7",
   "pytesseract",
   "Pillow",
   "pydantic",
