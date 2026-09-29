@@ -16,11 +16,16 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
+.hypothesis/
+pip-wheel-metadata/
 .coverage
 .coverage.*
 coverage.xml
 htmlcov/
 .ipynb_checkpoints/
+*.whl
 
 # Virtual environments
 .venv/
@@ -31,6 +36,39 @@ env/
 .env
 .env.*
 !.env.example
+.envrc
+.direnv/
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+*.keystore
+id_rsa
+id_ed25519
+
+# Local databases, dumps, and backups
+*.db
+*.sqlite
+*.sqlite3
+*.sql
+*.dump
+*.bak
+*.backup
+
+# Archives and temporary patch files
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.tmp
+*.temp
+*.orig
+*.rej
+*.pid
 
 # Model / runtime caches
 .cache/
