@@ -104,7 +104,14 @@ class CliPublicSurfaceTests(CliPublicSurfaceTestBase):
         embedding = payload["result"]["embedding"]
         self.assertEqual(embedding["requested_backend"], "sentence-transformers")
         self.assertEqual(embedding["effective_backend"], "hash-fallback")
-        self.assertIn("not cached locally", embedding["fallback_reason"])
+        if embedding["sentence_transformers_package_available"]:
+            self.assertFalse(embedding["sentence_transformers_model_cached"])
+            self.assertIn("not cached locally", embedding["fallback_reason"])
+        else:
+            self.assertEqual(
+                embedding["fallback_reason"],
+                "sentence-transformers package is not installed",
+            )
 
     def test_runtime_promotion_report_summarizes_saved_gate(self) -> None:
         eval_dir = Path(self.base_env["PDF_TO_JSON_RAG_DATA_DIR"]) / "eval"
