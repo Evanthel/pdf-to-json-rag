@@ -5,6 +5,18 @@ updates:
     schedule:
       interval: monthly
     open-pull-requests-limit: 5
+    ignore:
+      # These major versions require explicit compatibility migrations. Keep
+      # receiving patch/minor updates within the supported release lines.
+      - dependency-name: pdf-inspector
+        update-types:
+          - version-update:semver-major
+      - dependency-name: chromadb
+        update-types:
+          - version-update:semver-major
+      - dependency-name: mypy
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: /
