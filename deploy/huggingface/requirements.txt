@@ -1,0 +1,2 @@
+gradio==6.29.1
+pdf-to-json-rag @ https://github.com/Evanthel/pdf-to-json-rag/archive/refs/tags/v0.3.0.tar.gz
