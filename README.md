@@ -1,9 +1,10 @@
 <div align="center">
   <h1>PDF-to-JSON RAG</h1>
   <p><strong>Local-first document intelligence with inspectable extraction, retrieval, and citations.</strong></p>
-  <p>Turn unfamiliar PDFs into structured JSON, ask grounded questions, and see exactly which pages and chunks support each answer — without requiring a hosted model or sending documents to a cloud service.</p>
+  <p>Turn unfamiliar PDFs into structured JSON, ask grounded questions, and see exactly which pages and chunks support each answer. The local workflow needs no hosted model and keeps documents on your machine.</p>
   <p>
-    <a href="#two-minute-demo">Try it</a> ·
+    <a href="https://huggingface.co/spaces/Evanthel/pdf-to-json-rag-demo"><strong>Live demo</strong></a> ·
+    <a href="#two-minute-demo">Run locally</a> ·
     <a href="#architecture">Architecture</a> ·
     <a href="#quality-snapshot">Evaluation</a> ·
     <a href="./docs/WEB_INTERFACE.md">Web API</a>
@@ -14,6 +15,10 @@
 ![Local PDF RAG web workspace showing a processed document, grounded answer, and extraction diagnostics](./docs/images/web-workspace.png)
 
 The local workspace keeps the document library, grounded answer, retrieved chunks, and extraction-quality signals in one inspectable view.
+
+## Live demo
+
+[Open the interactive Hugging Face Space](https://huggingface.co/spaces/Evanthel/pdf-to-json-rag-demo) to try PDF → JSON → grounded question answering with page-level citations, without installing the project. Use non-confidential PDFs only: the hosted demo stores session files temporarily and removes them after one hour. The local workspace keeps documents on your machine.
 
 ## Two-minute demo
 
