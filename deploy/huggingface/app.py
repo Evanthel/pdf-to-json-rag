@@ -10,8 +10,9 @@ import tempfile
 from typing import Any
 
 import gradio as gr
+import spaces
 
-# Keep the public CPU demo deterministic and prevent implicit model downloads.
+# Keep the public demo deterministic and prevent implicit model downloads.
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("PDF_TO_JSON_RAG_ALLOW_MODEL_DOWNLOAD", "0")
@@ -104,6 +105,7 @@ def _document_status(summary: dict[str, Any]) -> str:
     )
 
 
+@spaces.GPU(duration=120)
 def process_pdf(
     pdf_path: str | None,
     previous_state: SessionState | None,
