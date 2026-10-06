@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "snapshot_kind": "required_public_pdf_ci",
+  "generated_at_utc": "2026-09-28T15:04:20Z",
+  "source": {
+    "workflow": "Retrieval Benchmarks",
+    "event": "push",
+    "run_id": 36440432050,
+    "run_url": "https://github.com/Evanthel/pdf-to-json-rag/actions/runs/36440432050",
+    "commit": "f80bfcb5dd8804c47171a6e1ad4195e8c2b507eb",
+    "conclusion": "success",
+    "full_report_artifact": "public-pdf-retrieval-benchmark"
+  },
+  "inputs": {
+    "manifest_path": "data/eval/public_pdf_corpus_manifest.json",
+    "manifest_sha256": "3f2013d623f438845068fce73451c3091d1791bfd3c01f20f727057d374191d9",
+    "ground_truth_path": "data/eval/public_pdf_ground_truth_cases.json",
+    "ground_truth_sha256": "28ce23fce78c78eb75f3d0335df73add4826e050ee417b6fb10f8054f95a8e0b",
+    "pdf_ids": [
+      "psmi-checklist-2025",
+      "open-data-canvas-questionnaire-2023",
+      "irs-form-w9-2024"
+    ],
+    "k": 5,
+    "modes": [
+      "default-auto"
+    ]
+  },
+  "corpus": {
+    "pdf_count": 3,
+    "case_count": 6,
+    "chunk_count": 257
+  },
+  "runtime": {
+    "embedding_requested_backend": "auto",
+    "embedding_backend": "hash-fallback",
+    "embedding_model": "hash-384",
+    "embedding_fallback_reason": "auto selected hash fallback because no local sentence-transformer model is ready",
+    "cross_encoder_fallback_case_count": 0,
+    "llm_used_case_count": 0
+  },
+  "results": {
+    "all_pass": true,
+    "processing_all_pass": true,
+    "quality_gate_passed": true,
+    "pass_count": 6,
+    "fail_count": 0,
+    "avg_recall_at_k": 1.0,
+    "mrr": 1.0,
+    "avg_answer_keyword_coverage": 0.695,
+    "avg_evidence_keyword_coverage": 1.0
+  },
+  "quality_gate": {
+    "min_pass_rate": 0.75,
+    "min_mrr": 0.75,
+    "min_evidence_keyword_coverage": 0.75
+  }
+}

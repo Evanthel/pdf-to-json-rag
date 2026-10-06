@@ -1,0 +1,16 @@
+{
+  "id": "piotrobiegly/pdf-to-json-rag-retrieval-benchmark",
+  "title": "PDF-to-JSON RAG Retrieval Benchmark",
+  "code_file": "pdf_to_json_rag_retrieval_benchmark.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": false,
+  "enable_gpu": false,
+  "enable_internet": false,
+  "dataset_sources": [
+    "piotrobiegly/pdf-to-json-rag-benchmark-results"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

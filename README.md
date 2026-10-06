@@ -4,6 +4,7 @@
   <p>Turn unfamiliar PDFs into structured JSON, ask grounded questions, and see exactly which pages and chunks support each answer. The local workflow needs no hosted model and keeps documents on your machine.</p>
   <p>
     <a href="https://huggingface.co/spaces/Evanthel/pdf-to-json-rag-demo"><strong>Live demo</strong></a> ·
+    <a href="https://www.kaggle.com/code/piotrobiegly/pdf-to-json-rag-retrieval-benchmark"><strong>Kaggle case study</strong></a> ·
     <a href="#two-minute-demo">Run locally</a> ·
     <a href="#architecture">Architecture</a> ·
     <a href="#quality-snapshot">Evaluation</a> ·
@@ -19,6 +20,8 @@ The local workspace keeps the document library, grounded answer, retrieved chunk
 ## Live demo
 
 [Open the interactive Hugging Face Space](https://huggingface.co/spaces/Evanthel/pdf-to-json-rag-demo) to try PDF → JSON → grounded question answering with page-level citations, without installing the project. Use non-confidential PDFs only: the hosted demo stores session files temporarily and removes them after one hour. The local workspace keeps documents on your machine.
+
+For the evaluation side, the executable [Kaggle case study](https://www.kaggle.com/code/piotrobiegly/pdf-to-json-rag-retrieval-benchmark) compares retrieval quality, latency, index-build time, and model size across the hash baseline, sentence-transformer, and cross-encoder paths. Its compact [benchmark dataset](https://www.kaggle.com/datasets/piotrobiegly/pdf-to-json-rag-benchmark-results) contains release snapshots and analysis-ready CSV tables, not source PDFs or user documents.
 
 ## Two-minute demo
 
@@ -165,6 +168,7 @@ Extraction, OCR routing, chunking, retrieval, and answer contracts are shared by
 - [CLI reference](./docs/CLI_REFERENCE.md) — commands, output contracts, runtime options, and maintainer checks
 - [Web interface](./docs/WEB_INTERFACE.md) — local server, storage, user flow, and HTTP API
 - [Hugging Face Space adapter](./deploy/huggingface/README.md) — isolated Gradio demo, local verification, and publishing steps
+- [Kaggle case study](https://www.kaggle.com/code/piotrobiegly/pdf-to-json-rag-retrieval-benchmark) and [publishing bundle](./deploy/kaggle/README.md) — executable benchmark analysis and reproducible source package
 - [Public benchmark corpus](./docs/PUBLIC_CORPUS.md) — reviewed, licensed PDFs and the required CI shard
 - [Project details](./docs/PROJECT_DETAILS.md) — complete capabilities, workflow, evaluation gates, and limitations
 - [Roadmap](./ROADMAP.md) — focused next steps and explicit non-goals

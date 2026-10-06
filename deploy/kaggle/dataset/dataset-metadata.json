@@ -1,0 +1,32 @@
+{
+  "title": "PDF-to-JSON RAG Benchmark Results",
+  "subtitle": "Retrieval quality and runtime snapshots for a local-first Document AI pipeline",
+  "description": "Compact release snapshots comparing three retrieval/reranking modes and a required public-PDF quality gate. Includes JSON provenance and analysis-ready CSV tables; excludes source PDFs, extracted text, model weights, and user data.",
+  "id": "piotrobiegly/pdf-to-json-rag-benchmark-results",
+  "licenses": [
+    {
+      "name": "other"
+    }
+  ],
+  "keywords": [
+    "artificial intelligence"
+  ],
+  "resources": [
+    {
+      "path": "backend_comparison.csv",
+      "description": "Flat comparison of quality, latency, model size, and hardware requirements."
+    },
+    {
+      "path": "runtime_backend_comparison.json",
+      "description": "Full backend comparison snapshot with environment and decision metadata."
+    },
+    {
+      "path": "public_pdf_summary.csv",
+      "description": "Analysis-ready summary of the required public-PDF CI quality gate."
+    },
+    {
+      "path": "public_pdf_benchmark.json",
+      "description": "Full public-PDF benchmark snapshot with input hashes and gate thresholds."
+    }
+  ]
+}

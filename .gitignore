@@ -38,6 +38,8 @@ env/
 !.env.example
 .envrc
 .direnv/
+.kaggle/
+kaggle.json
 *.pem
 *.key
 *.p12
